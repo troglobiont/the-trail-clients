@@ -1,0 +1,22 @@
+{
+  "appId": "io.github.troglobiont.trailclients",
+  "appName": "THE.TRAIL Clients",
+  "webDir": "www",
+  "backgroundColor": "#f5f5f0",
+  "loggingBehavior": "none",
+  "android": {"allowMixedContent": false, "webContentsDebuggingEnabled": false},
+  "plugins": {
+    "CapacitorUpdater": {
+      "autoUpdate": "off",
+      "statsUrl": "",
+      "updateUrl": "",
+      "channelUrl": "",
+      "appReadyTimeout": 15000,
+      "responseTimeout": 25,
+      "autoDeleteFailed": true,
+      "autoDeletePrevious": true,
+      "keepUrlPathAfterReload": true,
+      "disableJSLogging": true
+    }
+  }
+}

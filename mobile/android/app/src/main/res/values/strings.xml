@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">THE.TRAIL Clients</string>
+    <string name="title_activity_main">THE.TRAIL Clients</string>
+    <string name="package_name">io.github.troglobiont.trailclients</string>
+    <string name="custom_url_scheme">io.github.troglobiont.trailclients</string>
+</resources>

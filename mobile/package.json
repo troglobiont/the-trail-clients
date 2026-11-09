@@ -1,0 +1,18 @@
+{
+  "name": "the-trail-clients-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@capacitor/android": "8.6.0",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.6.0",
+    "@capacitor/filesystem": "8.1.5",
+    "@capacitor/share": "8.0.3",
+    "@capgo/capacitor-updater": "8.54.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.0"
+  },
+  "packageManager": "pnpm@11.25.0"
+}

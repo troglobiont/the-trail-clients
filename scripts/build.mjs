@@ -1,0 +1,16 @@
+import {build} from 'esbuild';
+import {cp,mkdir,readFile,writeFile,rm} from 'node:fs/promises';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+const root=fileURLToPath(new URL('../',import.meta.url));
+const version=JSON.parse(await readFile(path.join(root,'package.json'),'utf8')).version;
+if(!/^\d+\.\d+\.\d+$/.test(version))throw Error('Invalid application version');
+const dist=path.join(root,'dist');await rm(dist,{recursive:true,force:true});await mkdir(dist,{recursive:true});
+await cp(path.join(root,'index.html'),path.join(dist,'index.html'));
+await cp(path.join(root,'icon.svg'),path.join(dist,'icon.svg'));
+await cp(path.join(root,'src/style.css'),path.join(dist,'style.css'));
+await build({entryPoints:[path.join(root,'src/main.js')],outfile:path.join(dist,'app.js'),bundle:true,format:'iife',target:['chrome90'],minify:true,define:{__APP_VERSION__:JSON.stringify(version)}});
+await build({entryPoints:[path.join(root,'mobile/native-entry.js')],outfile:path.join(dist,'native.js'),bundle:true,format:'iife',target:['chrome90'],minify:true});
+await writeFile(path.join(dist,'build-info.json'),JSON.stringify({appId:'io.github.troglobiont.trailclients',version,nativeRuntime:1})+'\n');
+await rm(path.join(root,'mobile/www'),{recursive:true,force:true});await cp(dist,path.join(root,'mobile/www'),{recursive:true});
+console.log('THE.TRAIL Clients '+version+' built (offline native bundle, no client data).');
