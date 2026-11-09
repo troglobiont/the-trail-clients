@@ -12,6 +12,9 @@ window.TrailNative={
   async info(){const info=await App.getInfo();return {nativeVersion:info.version,runtime:1};},
   async setSecret(key,value){return Device.setSecret({key,value});},
   async getSecret(key){return (await Device.getSecret({key})).value||'';},
+  async saveVoice(value){return Device.saveVoice({text:JSON.stringify(value)});},
+  async loadVoice(){const {text}=await Device.loadVoice();return text?JSON.parse(text):null;},
+  async clearVoice(){return Device.clearVoice();},
   async readRelease(){return Device.readRelease();},
   async downloadUpdate(manifest,onProgress){
     const resolved=await Device.resolveAsset({assetId:manifest.assetId});
