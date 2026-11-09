@@ -53,10 +53,101 @@ function editRules(c){modal('Регулярные правила плана',for
 function getDraft(clientId){return ui.drafts[clientId]||(ui.drafts[clientId]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'});}
 function saveDraftSoon(){clearTimeout(draftTimer);draftTimer=setTimeout(()=>run(()=>saveDrafts()),500);}
 async function saveDrafts(){clearTimeout(draftTimer);if(!store)return;await commit(s=>{s.settings.drafts=C.clone(ui.drafts);},false);}
-function compose(c){const d=getDraft(c.id),form=el('form',null,'compose');form.id='compose';append(form,el('h2','Запись по клиенту'));const modes=el('div',null,'segmented');const note=el('textarea');note.id='client-note';note.rows=4;note.maxLength=16000;note.value=d.text;note.placeholder='Что произошло, чего хочет клиент или что нужно сделать?';const taskFields=el('div',null,'stack');taskFields.id='task-fields';taskFields.hidden=d.kind!=='task';const due=input('date',d.due||''),reply=input('checkbox');reply.checked=!!d.needsReply;due.addEventListener('change',()=>{d.due=due.value;saveDraftSoon();});reply.addEventListener('change',()=>{d.needsReply=reply.checked;saveDraftSoon();});append(taskFields,field('Когда сделать · можно оставить пустым',due),append(el('label',null,'checkbox'),reply,el('span','Нужен ответ клиента · проверять через '+state().settings.waitDays+' дн. после сообщения')));const status=select(C.GOAL_STATUSES,d.goalStatus||'Желание клиента');status.addEventListener('change',()=>{d.goalStatus=status.value;saveDraftSoon();});const goalField=field('Плашка цели',status);goalField.id='goal-status-field';goalField.hidden=d.kind!=='goal';for(const [kind,label] of [['record','Без пометки'],['task','Задача'],['goal','Цель']]){const b=button(label,()=>{d.kind=kind;modes.querySelectorAll('button').forEach(item=>item.setAttribute('aria-pressed',String(item===b)));taskFields.hidden=kind!=='task';goalField.hidden=kind!=='goal';saveDraftSoon();});b.dataset.kind=kind;b.setAttribute('aria-pressed',String(d.kind===kind));modes.append(b);}const send=el('button','Передать запись в чат','primary');send.type='submit';send.disabled=!d.text.trim();note.addEventListener('input',()=>{d.text=note.value;d.pendingRecordId=null;send.disabled=!d.text.trim();saveDraftSoon();});const voice=button('Надиктовать',()=>recordVoice(c.id,note,voice));append(form,modes,row(voice),note,taskFields,goalField);if(ui.pendingVoice?.clientId===c.id){voice.disabled=true;if(ui.busy.has('voice-'+c.id))form.append(text('Расшифровываю голос на Mac…','record-result'));else form.append(text('Аудио сохранено. Можно повторить расшифровку.'),button('Повторить расшифровку сохранённой записи',()=>transcribeVoice(ui.pendingVoice)));}if(!state().settings.serviceURL||!state().settings.agentEnabled)form.append(text('AI-разбор выключен. «Задача» и «Цель» сохраняются напрямую; запись без пометки остаётся в истории.'));append(form,send);if(ui.recordResults[c.id])form.append(text(ui.recordResults[c.id],'record-result'));form.addEventListener('submit',e=>{e.preventDefault();run(async()=>{if(!d.text.trim())return;send.disabled=true;try{send.textContent='Обрабатываю запись…';await submitRecord(c,d);}finally{if(send.isConnected){send.disabled=!d.text.trim();send.textContent='Передать запись в чат';}}});});return form;}
-async function submitRecord(c,d){const data={...d};const pending=state().records[d.pendingRecordId];const record=pending&&pending.text===data.text.trim()&&pending.kind===data.kind?pending:await commit(s=>C.saveRecord(s,c.id,data.text,data.kind),false);d.pendingRecordId=record.id;await saveDrafts();let result;if(state().settings.serviceURL&&state().settings.agentEnabled){try{const response=await service('/records/parse',{client:{...state().clients[c.id]},goals:Object.values(state().goals).filter(g=>g.clientId===c.id&&!g.deletedAt),openTasks:C.openTasks(state(),{clientId:c.id}),record,timezone:C.TIMEZONE,waitDays:state().settings.waitDays,needsReply:data.needsReply});if(response.question){ui.recordResults[c.id]='Нужно уточнить: '+response.question;render();return;}result=await commit(s=>C.applyAgentResult(s,record.id,response),false);}catch(e){ui.recordResults[c.id]='Запись сохранена. Обработка не завершена: '+e.message;render();return;}}else result=await commit(s=>C.processManualRecord(s,record.id,{due:data.due||null,needsReply:data.needsReply,goalStatus:data.goalStatus}),false);ui.recordResults[c.id]=result.changes.length?result.changes.map(x=>(x.type==='task'?'Задача: ':x.type==='goal'?'Цель: ':'Особенность: ')+x.title).join('\n'):'Запись сохранена в истории';ui.drafts[c.id]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'};await saveDrafts();render();}
+function compose(c){
+  const d=getDraft(c.id),form=el('form',null,'compose');form.id='compose';
+  append(form,el('h2','Запись по клиенту'));
+  const modes=el('div',null,'segmented'),note=el('textarea');
+  note.id='client-note';note.rows=4;note.maxLength=16000;note.value=d.text;
+  note.placeholder='Можно надиктовать без ввода текста или написать здесь';
+  const taskFields=el('div',null,'stack');taskFields.id='task-fields';taskFields.hidden=d.kind!=='task';
+  const due=input('date',d.due||''),reply=input('checkbox');reply.checked=!!d.needsReply;
+  due.addEventListener('change',()=>{d.due=due.value;saveDraftSoon();});
+  reply.addEventListener('change',()=>{d.needsReply=reply.checked;saveDraftSoon();});
+  append(taskFields,field('Когда сделать · можно оставить пустым',due),append(el('label',null,'checkbox'),reply,el('span','Нужен ответ клиента · проверять через '+state().settings.waitDays+' дн. после сообщения')));
+  const status=select(C.GOAL_STATUSES,d.goalStatus||'Желание клиента');
+  status.addEventListener('change',()=>{d.goalStatus=status.value;saveDraftSoon();});
+  const goalField=field('Плашка цели',status);goalField.id='goal-status-field';goalField.hidden=d.kind!=='goal';
+  for(const [kind,label] of [['record','Без пометки'],['task','Задача'],['goal','Цель']]){
+    const b=button(label,()=>{d.kind=kind;modes.querySelectorAll('button').forEach(item=>item.setAttribute('aria-pressed',String(item===b)));taskFields.hidden=kind!=='task';goalField.hidden=kind!=='goal';updateAction();saveDraftSoon();});
+    b.dataset.kind=kind;b.setAttribute('aria-pressed',String(d.kind===kind));modes.append(b);
+  }
+  const send=el('button','','primary'),hint=text(''),extra=button('Надиктовать ещё',()=>recordVoice(c.id));send.type='submit';
+  const localSave=button('Сохранить без агента',async()=>{submitting=true;updateAction();try{await submitRecord(c,d);}finally{if(send.isConnected){submitting=false;updateAction();}}},'subtle');
+  let submitting=false;
+  function updateAction(){
+    const recording=ui.recorder&&ui.recordingClientId===c.id;
+    const pending=ui.pendingVoice?.clientId===c.id;
+    const recognizing=ui.busy.has('voice-'+c.id);
+    const starting=ui.voiceStartingClientId===c.id,saving=ui.voiceSavingClientId===c.id;
+    const otherRecording=!!ui.recorder&&!recording;
+    send.disabled=submitting||recognizing||starting||saving||otherRecording;
+    send.textContent=submitting?'Обрабатываю запись…':starting?'Подключаю микрофон…':saving?'Сохраняю аудио…':recognizing?'Распознаю голос…':recording?'Остановить и распознать':pending?'Распознать сохранённую запись':d.text.trim()?(state().settings.serviceURL&&!state().settings.agentEnabled?'Включить агента и обработать':state().settings.serviceURL?'Передать запись в чат':d.kind==='task'?'Создать задачу':d.kind==='goal'?'Добавить цель':'Сохранить запись'):(state().settings.serviceURL&&!state().settings.agentEnabled?'Включить агента и надиктовать':'Надиктовать запись');
+    hint.textContent=recognizing?'Расшифровываю голос на Mac…':recording?'Идёт запись. Говори, затем нажми «Остановить и распознать».':pending?'Аудио сохранено на устройстве. Нажми кнопку для повторной расшифровки.':otherRecording?'Сначала останови запись в карточке другого клиента.':d.text.trim()?'Проверь текст. Кнопка передаст его на обработку.':'Текст вводить не нужно: нажми кнопку ниже и говори.';
+    extra.hidden=!d.text.trim()||!!recording||pending||recognizing||starting||saving;extra.disabled=submitting;
+    localSave.hidden=!d.text.trim()||state().settings.agentEnabled||!state().settings.serviceURL||!!recording||pending||recognizing||starting||saving;localSave.disabled=submitting;
+    localSave.textContent=d.kind==='task'?'Создать задачу без агента':d.kind==='goal'?'Добавить цель без агента':'Сохранить без агента';
+  }
+  note.addEventListener('input',()=>{d.text=note.value;d.pendingRecordId=null;updateAction();saveDraftSoon();});
+  append(form,modes,note,taskFields,goalField,hint,send,extra,localSave);
+  if(!state().settings.serviceURL)form.append(text('Для диктовки подключи Mac в настройках. Текст можно сохранить на устройстве.'));
+  else if(!state().settings.agentEnabled)form.append(text('AI-разбор включится при нажатии кнопки после проверки подключения.'));
+  if(ui.recordResults[c.id])form.append(text(ui.recordResults[c.id],'record-result'));
+  form.addEventListener('submit',e=>{e.preventDefault();run(async()=>{
+    if(send.disabled)return;
+    if(ui.pendingVoice?.clientId===c.id){await transcribeVoice(ui.pendingVoice);return;}
+    if(ui.recorder||!d.text.trim()){await recordVoice(c.id);return;}
+    submitting=true;updateAction();
+    try{if(state().settings.serviceURL&&!state().settings.agentEnabled)await ensureAgent(false);await submitRecord(c,d);}
+    finally{if(send.isConnected){submitting=false;updateAction();}}
+  });});
+  updateAction();return form;
+}
+async function ensureAgent(voice=false){
+  if(!state().settings.serviceURL)throw Error('Сначала подключи Mac в настройках «Агент и Telegram»');
+  if(state().settings.agentEnabled)return;
+  const status=await service('/agent/status',{});
+  if(!status.ready)throw Error('Агент на Mac не готов. Проверь подключение в настройках');
+  if(voice&&!status.voiceReady)throw Error('Расшифровка голоса на Mac не готова. Проверь подключение');
+  await commit(s=>{s.settings.agentEnabled=true;},false);
+}
+async function submitRecord(c,d){const data={...d};const pending=state().records[d.pendingRecordId];const record=pending&&pending.text===data.text.trim()&&pending.kind===data.kind?pending:await commit(s=>C.saveRecord(s,c.id,data.text,data.kind),false);d.pendingRecordId=record.id;await saveDrafts();let result;if(state().settings.serviceURL&&state().settings.agentEnabled){try{const response=await service('/records/parse',{client:{...state().clients[c.id]},goals:Object.values(state().goals).filter(g=>g.clientId===c.id&&!g.deletedAt),openTasks:C.openTasks(state(),{clientId:c.id}),record,timezone:C.TIMEZONE,waitDays:state().settings.waitDays,needsReply:data.needsReply});if(response.question){ui.recordResults[c.id]='Нужно уточнить: '+response.question;render();return;}result=await commit(s=>C.applyAgentResult(s,record.id,response),false);}catch(e){ui.recordResults[c.id]='Запись сохранена. Обработка не завершена: '+e.message;render();return;}}else result=await commit(s=>C.processManualRecord(s,record.id,{due:data.due||null,needsReply:data.needsReply,goalStatus:data.goalStatus}),false);ui.recordResults[c.id]=result.changes.length?result.changes.map(x=>(x.type==='task'?'Задача: ':x.type==='goal'?'Цель: ':'Особенность: ')+x.title).join('\n'):result.mode==='agent'?'Запись сохранена. Агент не выделил задач, целей или особенностей.':'Запись сохранена в истории';ui.drafts[c.id]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'};await saveDrafts();render();}
 async function service(path,body){const base=state().settings.serviceURL;if(!base)throw Error('Подключи сервис в настройках');const address=new URL(path,base);if(address.protocol!=='https:')throw Error('Нужен HTTPS-адрес сервиса');if(window.TrailNative?.native){const res=await window.TrailNative.request(address.href,'POST',body);return JSON.parse(res.body);}throw Error('Подключение сервиса доступно в установленном Android-приложении');}
-async function recordVoice(clientId,note,voice){if(!state().settings.serviceURL||!state().settings.agentEnabled){message('Для расшифровки голоса включи AI-разбор и настрой его на личном сервисе.');return;}if(ui.pendingVoice)throw Error('Сначала обработай сохранённую голосовую запись в карточке её клиента');if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined')throw Error('Запись голоса недоступна на этом устройстве');if(ui.recorder){ui.recorder.stop();return;}const stream=await navigator.mediaDevices.getUserMedia({audio:true});const chunks=[],recorder=new MediaRecorder(stream);ui.recorder=recorder;voice.textContent='Остановить запись';recorder.addEventListener('dataavailable',e=>{if(e.data.size)chunks.push(e.data);});recorder.addEventListener('stop',()=>run(async()=>{stream.getTracks().forEach(t=>t.stop());ui.recorder=null;voice.textContent='Надиктовать';const blob=new Blob(chunks,{type:recorder.mimeType});if(blob.size>6*1024*1024)throw Error('Запись слишком длинная. Попробуй короче.');const base64=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result.split(',')[1]);r.onerror=reject;r.readAsDataURL(blob);});const pending={id:C.id('audio'),clientId,audio:base64,mime:blob.type};ui.pendingVoice=pending;if(window.TrailNative?.native)await window.TrailNative.saveVoice(pending);render();await transcribeVoice(pending);}));recorder.start();setTimeout(()=>{if(recorder.state==='recording')recorder.stop();},90000);}
+async function recordVoice(clientId){
+  if(ui.recorder){
+    if(ui.recordingClientId!==clientId)throw Error('Сначала останови запись в карточке другого клиента');
+    if(ui.recorder.state!=='recording'&&ui.recorder.state!=='paused')return;
+    ui.voiceSavingClientId=clientId;render();ui.recorder.stop();return;
+  }
+  if(ui.voiceStartingClientId||ui.voiceSavingClientId)return;
+  if(ui.pendingVoice)throw Error('Сначала обработай сохранённую голосовую запись в карточке её клиента');
+  if(!navigator.mediaDevices?.getUserMedia||typeof MediaRecorder==='undefined')throw Error('Запись голоса недоступна на этом устройстве');
+  let stream;ui.voiceStartingClientId=clientId;render();
+  try{
+    await ensureAgent(true);
+    stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    const chunks=[],recorder=new MediaRecorder(stream);ui.recorder=recorder;ui.recordingClientId=clientId;
+    let stopTimer;
+    recorder.addEventListener('dataavailable',e=>{if(e.data.size)chunks.push(e.data);});
+    recorder.addEventListener('stop',()=>run(async()=>{
+      clearTimeout(stopTimer);stream.getTracks().forEach(t=>t.stop());ui.recorder=null;ui.recordingClientId=null;
+      ui.voiceSavingClientId=clientId;render();
+      try{
+        const blob=new Blob(chunks,{type:recorder.mimeType});
+        if(!blob.size)throw Error('Аудио не записалось. Попробуй ещё раз');
+        if(blob.size>6*1024*1024)throw Error('Запись слишком длинная. Попробуй короче.');
+        const base64=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result.split(',')[1]);r.onerror=reject;r.readAsDataURL(blob);});
+        const pending={id:C.id('audio'),clientId,audio:base64,mime:blob.type};ui.pendingVoice=pending;
+        if(window.TrailNative?.native)await window.TrailNative.saveVoice(pending);
+        ui.voiceSavingClientId=null;await transcribeVoice(pending);
+      }finally{ui.voiceSavingClientId=null;render();}
+    }));
+    recorder.start();stopTimer=setTimeout(()=>{if(recorder.state==='recording')recorder.stop();},90000);
+  }catch(error){
+    stream?.getTracks().forEach(t=>t.stop());ui.recorder=null;ui.recordingClientId=null;
+    if(error.name==='NotAllowedError')throw Error('Разреши приложению доступ к микрофону, чтобы надиктовать запись');
+    throw error;
+  }finally{ui.voiceStartingClientId=null;render();}
+}
 async function transcribeVoice(pending){
   const key='voice-'+pending.clientId;if(ui.busy.has(key))return;ui.busy.add(key);render();
   try{
