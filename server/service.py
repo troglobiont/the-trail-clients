@@ -128,6 +128,12 @@ def parse_record(payload):
     if not isinstance(record.get("text"), str) or not record["text"].strip() or len(record["text"]) > 16000 or not client.get("id") or record.get("clientId") != client["id"]:
         raise ValueError("Некорректная запись клиента")
     def perform():
+        backend = os.environ.get("TRAIL_AGENT_BACKEND", "openai")
+        if backend == "codex":
+            from server.local_backends import codex_parse
+            return validate_result(codex_parse(payload, PROMPT, response_schema()), payload)
+        if backend != "openai":
+            raise RuntimeError("Неизвестный способ подключения агента")
         request = {"model": required("OPENAI_MODEL"), "store": False, "instructions": PROMPT,
             "input": json.dumps(payload, ensure_ascii=False),
             "text": {"format": {"type": "json_schema", "name": "client_record_changes", "strict": True, "schema": response_schema()}}}
@@ -155,11 +161,26 @@ def transcribe(payload):
     model = os.environ.get("OPENAI_TRANSCRIBE_MODEL", "gpt-transcribe")
     body = ("--" + boundary + '\r\nContent-Disposition: form-data; name="model"\r\n\r\n' + model + "\r\n--" + boundary + '\r\nContent-Disposition: form-data; name="file"; filename="voice.' + extensions[mime] + '"\r\nContent-Type: ' + mime + "\r\n\r\n").encode() + audio + ("\r\n--" + boundary + "--\r\n").encode()
     def perform():
+        backend = os.environ.get("TRAIL_VOICE_BACKEND", "openai")
+        if backend == "local":
+            from server.local_backends import local_transcribe
+            return local_transcribe(audio, mime)
+        if backend != "openai":
+            raise RuntimeError("Неизвестный способ расшифровки")
         response = openai_request("audio/transcriptions", body, "multipart/form-data; boundary=" + boundary)
         if not isinstance(response.get("text"), str):
             raise RuntimeError("Расшифровка не получена")
         return {"text": response["text"]}
     return cached_operation("audio-" + str(payload.get("idempotencyKey", "")), {"sha256": hashlib.sha256(audio).hexdigest(), "mime": mime}, perform)
+
+def agent_status(_payload):
+    from server.local_backends import codex_ready, local_voice_ready
+    backend, voice = os.environ.get("TRAIL_AGENT_BACKEND", "openai"), os.environ.get("TRAIL_VOICE_BACKEND", "openai")
+    ready = codex_ready() if backend == "codex" else backend == "openai" and bool(os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_MODEL"))
+    voice_ready = local_voice_ready() if voice == "local" else voice == "openai" and bool(os.environ.get("OPENAI_API_KEY"))
+    return {"ready": ready, "backend": backend, "voiceReady": voice_ready, "voiceBackend": voice,
+            "label": "Codex на Mac · вход через ChatGPT" if backend == "codex" else "OpenAI API",
+            "voiceLabel": "Whisper на Mac" if voice == "local" else "OpenAI API"}
 
 def telegram_send(payload):
     peer_id = str(payload.get("peerId", ""))
@@ -310,7 +331,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             payload = json.loads(self.rfile.read(size))
             handlers = {"/records/parse": parse_record, "/audio/transcribe": transcribe, "/telegram/send": telegram_send,
-                        "/telegram/status": telegram_status, "/telegram/search": telegram_search}
+                        "/telegram/status": telegram_status, "/telegram/search": telegram_search, "/agent/status": agent_status}
             if self.path not in handlers:
                 self.reply(404, {"error": "Not found"})
                 return

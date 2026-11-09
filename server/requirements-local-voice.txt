@@ -1,0 +1,3 @@
+# Optional separate Python 3.12 environment on the coach's Mac.
+faster-whisper==1.2.1
+av==16.1.0
