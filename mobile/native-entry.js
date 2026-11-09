@@ -7,7 +7,7 @@ const Device=registerPlugin('TrailDevice');
 const native=Capacitor.isNativePlatform();
 window.TrailNative={
   native,
-  adapter:{async load(){return (await Device.load()).text||null;},async save(text){await Device.save({text});}},
+  adapter:{async load(){return (await Device.load()).text||null;},async save(text){await Device.save({text});},async loadInitialData(){const info=await App.getInfo();if(Number(info.build)<4)return null;return (await Device.loadInitialData()).text||null;}},
   async ready(){if(native)await CapacitorUpdater.notifyAppReady();},
   async info(){const info=await App.getInfo();return {nativeVersion:info.version,runtime:1};},
   async setSecret(key,value){return Device.setSecret({key,value});},
