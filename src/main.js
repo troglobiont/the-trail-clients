@@ -2,6 +2,7 @@ import * as C from './core.js';
 import {createStore,browserAdapter} from './store.js';
 import {createUpdater} from './updates.js';
 import {parseConnection} from './connection.js';
+import {createRecipientSearch} from './telegram-picker.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,noticeTimer,draftTimer;
@@ -23,7 +24,17 @@ function formatDate(iso,withTime=false){if(!iso)return '';return new Intl.DateTi
 function section(title,key,children){const d=el('details',null,'fold'),summary=el('summary',title);d.open=ui.open.has(key);d.addEventListener('toggle',()=>{if(d.open)ui.open.add(key);else ui.open.delete(key);});append(d,summary,append(el('div',null,'fold-body stack'),...children));return d;}
 function navigate(hash){location.hash=hash;}
 function openClient(clientId){ui.returnTo=location.hash.startsWith('#client/')?ui.returnTo:location.hash||'#todo';navigate('#client/'+clientId);}
-function modal(title,build){dialog.textContent='';const form=el('form'),heading=el('h2',title);heading.id='editor-title';const error=text('','form-error');error.setAttribute('role','alert');form.append(heading);const save=build(form);const controls=row(button('Отмена',()=>dialog.close()),button('Сохранить',async()=>{try{await save();dialog.close();}catch(e){error.textContent=e.message;}},'primary'));form.addEventListener('submit',e=>{e.preventDefault();run(async()=>{await save();dialog.close();});});append(form,error,controls);dialog.append(form);dialog.showModal();}
+function modal(title,build){
+  dialog.textContent='';
+  const form=el('form'),heading=el('h2',title),error=text('','form-error');
+  heading.id='editor-title';error.setAttribute('role','alert');form.append(heading);
+  let save;
+  const saveControl=button('Сохранить',async()=>{try{await save();dialog.close();}catch(e){error.textContent=e.message;}},'primary');
+  save=build(form,enabled=>{saveControl.disabled=!enabled;error.textContent='';});
+  const controls=row(button('Отмена',()=>dialog.close()),saveControl);
+  form.addEventListener('submit',e=>{e.preventDefault();if(!saveControl.disabled)saveControl.click();});
+  append(form,error,controls);dialog.append(form);dialog.showModal();
+}
 function editClient(clientId=null){const c=clientId?state().clients[clientId]:null;modal(c?'Данные клиента':'Новый клиент',form=>{const name=input('text',c?.name||'');name.maxLength=180;form.append(field('Имя',name));const controls={role:select(['Клиент','Тренер'],c?.role||'Клиент'),status:select(C.STATUSES,c?.status||'Активный'),format:select(['Очно','Дистанционно','Уточнить'],c?.format||'Уточнить'),basis:select(C.BASES,c?.basis||'Сейчас плана нет'),level:select(['Обычное','Премиум'],c?.level||'Обычное'),group:select(['Да','Нет','Уточнить'],c?.group||'Уточнить'),personal:select([['none','Нет'],['gym','В зале'],['outside','На улице'],['unknown','Нужно уточнить']],c?.personal||'unknown'),currentFormat:select([['','Нет временного изменения'],['Очно','Временно очно'],['Дистанционно','Временно онлайн']],c?.currentFormat||'')};const labels={role:'Роль',status:'Статус сотрудничества',format:'Обычный формат',basis:'Основа плана',level:'Ведение',group:'Групповые с Сергеем',personal:'Персональные с Сергеем',currentFormat:'Формат сейчас'};for(const [key,control] of Object.entries(controls))form.append(field(labels[key],control));return async()=>{const values={name:name.value.trim(),...Object.fromEntries(Object.entries(controls).map(([k,v])=>[k,v.value]))};values.currentFormat=values.currentFormat||null;if(!values.name)throw Error('Введи имя');await commit(s=>c?C.editClient(s,c.id,values):C.createClient(s,values));};});}
 function renderCatalog(){const page=el('div',null,'stack');page.append(append(el('div',null,'page-title'),el('h1','Клиенты'),button('Добавить клиента',()=>editClient())));if(!Object.keys(state().clients).length){page.append(emptyDatabase());return page;}const search=input('search',ui.filters.query,'Имя или фамилия');search.setAttribute('aria-label','Поиск по имени');search.maxLength=80;search.addEventListener('input',()=>{ui.filters.query=search.value;ui.limit=12;renderCatalogResults();});page.append(field('Поиск',search));const filters=el('div',null,'filters');for(const [key,label,values] of [['status','Статус',[['all','Все статусы'],...C.STATUSES]],['format','Формат сейчас',[['all','Любой'],['Очно','Очно'],['Дистанционно','Онлайн'],['Уточнить','Нужно уточнить']]]])filters.append(filterControl(key,label,values));page.append(filters);const extra=el('div',null,'filters');for(const [key,label,values] of [['basis','Основа плана',[['all','Любая'],...C.BASES]],['level','Ведение',[['all','Любое'],'Обычное','Премиум']],['personal','Персональные с Сергеем',[['all','Любые'],['gym','В зале'],['outside','На улице'],['none','Нет'],['unknown','Нужно уточнить']]],['role','Роль',[['Клиент','Клиенты'],['Тренер','Тренеры'],['all','Все люди']]]])extra.append(filterControl(key,label,values));page.append(section('Ещё фильтры','catalog-filters',[extra]));const count=text('');count.id='catalog-count';page.append(append(el('div',null,'row between'),count,button('Сбросить',()=>{ui.filters={query:'',status:'Активный',format:'all',basis:'all',level:'all',personal:'all',role:'Клиент'};ui.limit=12;render();})));const tiles=el('div',null,'tiles');tiles.id='client-tiles';page.append(tiles);const more=button('Ещё 12',()=>{ui.limit+=12;renderCatalogResults();});more.id='more-clients';page.append(more);return page;}
 function filterControl(key,label,values){const control=select(values,ui.filters[key]);control.addEventListener('change',()=>{ui.filters[key]=control.value;if(key==='role'&&control.value==='Тренер'){ui.filters.status='all';render();}else{ui.limit=12;renderCatalogResults();}});return field(label,control);}
@@ -53,27 +64,40 @@ async function bindTelegram(c){
   if(state().settings.pendingTelegram?.[c.id])throw Error('Сначала проверь предыдущую неподтверждённую отправку');
   const status=await service('/telegram/status',{});
   if(!status.connected)throw Error('Сервис доступен, но личный аккаунт Telegram ещё не авторизован');
-  modal('Переписка в Telegram',form=>{
-    let selected=null;
-    const query=input('search',c.telegram?.username?'@'+c.telegram.username:c.name,'Имя в контактах или @username');query.maxLength=120;
-    const results=el('div',null,'stack'),selection=text('Найди и выбери получателя. Сообщение при привязке не отправляется.');
-    query.addEventListener('input',()=>{selected=null;results.textContent='';selection.textContent='Найди и выбери получателя.';});
-    append(form,text('Твой аккаунт: '+status.account.displayName+(status.account.username?' · @'+status.account.username:'')),field('Получатель',query),button('Найти в Telegram',async()=>{
-      selected=null;results.textContent='';selection.textContent='Ищу…';
-      try{
-        const result=await service('/telegram/search',{query:query.value.trim()});
-        if(!Array.isArray(result.contacts)||result.contacts.length>10)throw Error('Не удалось проверить список контактов');
-        selection.textContent=result.contacts.length?'Выбери нужного человека:':'Не найдено. Попробуй имя из Telegram или точный @username.';
-        for(const contact of result.contacts){
-          if(!/^[1-9][0-9]{0,18}$/.test(contact.peerId)||typeof contact.displayName!=='string')throw Error('Некорректный получатель');
-          const label=contact.displayName+(contact.username?' · @'+contact.username:'')+' · ID '+contact.peerId;
-          results.append(button(label,()=>{selected=contact;selection.textContent='Выбран: '+label;}));
+  modal('Переписка в Telegram',(form,setSaveEnabled)=>{
+    const query=input('search',c.telegram?.username?'@'+c.telegram.username:c.name,'Имя в Telegram или @username');
+    query.maxLength=120;query.enterKeyHint='search';query.autocomplete='off';
+    const results=el('fieldset',null,'recipient-results'),legend=el('legend','Результаты поиска');
+    const selection=text('Найди и выбери получателя. Сообщение при привязке не отправляется.');
+    selection.setAttribute('role','status');selection.setAttribute('aria-live','polite');
+    let renderedContacts=null;
+    const find=button('Найти в Telegram',()=>picker.find());
+    const picker=createRecipientSearch({search:value=>service('/telegram/search',{query:value}),onChange:({contacts,selected,busy,error,searched})=>{
+      setSaveEnabled(!!selected&&!busy);
+      find.disabled=busy;find.textContent=busy?'Ищу…':'Найти в Telegram';
+      selection.textContent=error||(busy?'Ищу…':selected?'Выбран: '+selected.displayName+(selected.username?' · @'+selected.username:''):contacts.length?'Нажми на нужного человека:':!searched?'Найди и выбери получателя. Сообщение при привязке не отправляется.':'Не найдено. Имя в карточке может отличаться от имени в Telegram. Попробуй имя из контактов или @username.');
+      selection.className=error?'danger-text small':selected?'recipient-confirmation':'muted small';
+      if(renderedContacts!==contacts){
+        renderedContacts=contacts;results.replaceChildren(legend);results.hidden=!contacts.length;
+        for(const contact of contacts){
+          const option=input('radio');option.name='telegram-recipient';option.value=contact.peerId;
+          option.addEventListener('change',()=>{if(option.checked)picker.select(contact.peerId);});
+          const label=append(el('label',null,'recipient-option'),option,append(el('span'),el('strong',contact.displayName),text((contact.username?'@'+contact.username+' · ':'')+'ID '+contact.peerId)));
+          results.append(label);
         }
-      }catch(error){selection.textContent=error.message;throw error;}
-    }),selection,results);
+      }
+      for(const option of results.querySelectorAll('input[type=radio]')){option.checked=option.value===selected?.peerId;option.closest('label').classList.toggle('selected',option.checked);}
+    }});
+    setSaveEnabled(false);results.hidden=true;picker.setQuery(query.value);
+    // Use input only for real edits. Mobile IMEs may emit the same value on blur.
+    query.addEventListener('input',()=>picker.setQuery(query.value));
+    query.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();find.click();}});
+    dialog.addEventListener('close',()=>picker.dispose(),{once:true});
+    append(form,text('Твой аккаунт: '+status.account.displayName+(status.account.username?' · @'+status.account.username:'')),field('Получатель',query),find,selection,results);
     if(c.telegram)append(form,text('Текущая привязка: '+(c.telegram.displayName||'ID '+c.telegram.peerId)),button('Убрать привязку',async()=>{await commit(s=>{s.clients[c.id].telegram=null;});dialog.close();}));
     return async()=>{
-      if(!selected)throw Error('Сначала выбери получателя из результатов поиска');
+      const selected=picker.selected();
+      if(!selected)throw Error('Выбери получателя из результатов поиска');
       await commit(s=>{s.clients[c.id].telegram={...selected,accountPeerId:status.account.peerId,verifiedAt:new Date().toISOString()};});
       message('Переписка привязана. Сообщений не отправлено.');
     };

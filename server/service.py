@@ -247,6 +247,14 @@ def telegram_search(payload):
     query = query.strip()
     if query.startswith("@") and not re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", query):
         raise ValueError("Проверьте @username")
+    # Explicit, coach-confirmed name aliases only; never infer a nickname match.
+    aliases = json.loads(os.environ.get("TELEGRAM_CONTACT_ALIASES", "{}"))
+    if not isinstance(aliases, dict):
+        raise ValueError("Некорректный справочник имён")
+    name_key = lambda value: " ".join(sorted(value.casefold().replace("ё", "е").split()))
+    alias_id = next((str(peer) for name, peer in aliases.items() if name_key(name) == name_key(query)), None)
+    if alias_id and not re.fullmatch(r"[1-9][0-9]{0,18}", alias_id):
+        raise ValueError("Некорректный получатель в справочнике")
     async def search(client, functions, types):
         if query.startswith("@"):
             try:
@@ -258,6 +266,13 @@ def telegram_search(payload):
             result = await client(functions.contacts.GetContactsRequest(hash=0))
             words = query.casefold().split()
             users = [u for u in result.users if all(w in " ".join(filter(None, [getattr(u, "first_name", ""), getattr(u, "last_name", ""), getattr(u, "username", "")])).casefold() for w in words)]
+            if alias_id:
+                account = await client.get_me()
+                if str(account.id) != required("TELEGRAM_OWNER_ID"):
+                    raise RuntimeError("Telegram account does not match the name directory owner")
+                entity = await client.get_entity(int(alias_id))
+                if isinstance(entity, types.User):
+                    users.insert(0, entity)
         contacts = []
         for user in users:
             contact = telegram_user(user)

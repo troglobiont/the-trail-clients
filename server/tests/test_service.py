@@ -87,5 +87,28 @@ class ServiceTests(unittest.TestCase):
                     telegram_search({'query':query})
             op.assert_not_called()
 
+    def test_confirmed_name_alias_is_scoped_to_owner_and_returns_verified_user(self):
+        class User(SimpleNamespace):
+            pass
+        class Client:
+            async def __call__(self, _request):
+                return SimpleNamespace(users=[])
+            async def get_me(self):
+                return SimpleNamespace(id=9001)
+            async def get_entity(self, peer_id):
+                self.asserted_peer = peer_id
+                return User(id=102, first_name='Короткое имя', username='test_contact')
+        client = Client()
+        functions = SimpleNamespace(contacts=SimpleNamespace(GetContactsRequest=lambda **kw: kw))
+        def operation(fn):
+            return asyncio.run(fn(client, functions, SimpleNamespace(User=User)))
+        with patch('server.service.telegram_operation', operation), patch.dict(os.environ, {
+            'TELEGRAM_OWNER_ID':'9001', 'TELEGRAM_CONTACT_ALIASES':'{"Тестовый Тренёр":"102"}'
+        }):
+            self.assertEqual(telegram_search({'query':'тренер тестовый'}), {'contacts':[{'peerId':'102','displayName':'Короткое имя','username':'test_contact'}]})
+            self.assertEqual(client.asserted_peer, 102)
+            with patch.dict(os.environ, {'TELEGRAM_OWNER_ID':'9002'}), self.assertRaises(RuntimeError):
+                telegram_search({'query':'Тестовый Тренёр'})
+
 if __name__ == "__main__":
     unittest.main()
