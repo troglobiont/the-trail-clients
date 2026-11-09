@@ -2,8 +2,10 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import patch
-from server.service import authorized, cached_operation, validate_result, telegram_send, transcribe
+from server.service import authorized, cached_operation, validate_result, telegram_send, transcribe, telegram_search, telegram_status
 
 class ServiceTests(unittest.TestCase):
     def test_auth_never_accepts_unconfigured_service(self):
@@ -41,10 +43,49 @@ class ServiceTests(unittest.TestCase):
             telegram_send({"peerId": "-100123", "text": "Привет! Как дела?"})
         with self.assertRaises(ValueError):
             telegram_send({"peerId": "123", "text": "Unrequested generated message"})
+        with self.assertRaises(ValueError):
+            telegram_send({"peerId": "123", "accountPeerId": "wrong", "text": "Привет! Как дела?"})
 
     def test_invalid_voice_never_calls_upstream(self):
         with self.assertRaises(ValueError):
             transcribe({"mime": "text/html", "audio": "invalid"})
+
+    def test_telegram_status_without_credentials_does_not_attempt_login(self):
+        with patch.dict(os.environ, {}, clear=True), patch('server.service.telegram_operation') as operation:
+            self.assertEqual(telegram_status({}), {"connected": False, "reason": "not-configured"})
+            operation.assert_not_called()
+
+    def test_contact_search_filters_and_never_returns_phone_or_other_private_fields(self):
+        class User(SimpleNamespace):
+            pass
+        users = [User(id=101, first_name='Тренер', last_name='Тестовый', username='test_coach', phone='private', is_self=False),
+                 User(id=102, first_name='Другой', last_name='Контакт', username='other'),
+                 User(id=103, first_name='Тренер', bot=True), User(id=104, first_name='Тренер', is_self=True)]
+        class Client:
+            async def __call__(self, _request):
+                return SimpleNamespace(users=users)
+        functions = SimpleNamespace(contacts=SimpleNamespace(GetContactsRequest=lambda **kw: kw))
+        def operation(fn):
+            return asyncio.run(fn(Client(), functions, SimpleNamespace(User=User)))
+        with patch('server.service.telegram_operation', operation):
+            result = telegram_search({'query': 'тренер тестовый'})
+            self.assertEqual(result, {'contacts': [{'peerId':'101','displayName':'Тренер Тестовый','username':'test_coach'}]})
+
+    def test_username_resolution_excludes_groups_and_invalid_queries_never_connect(self):
+        class User(SimpleNamespace):
+            pass
+        class Client:
+            async def get_entity(self, query):
+                return SimpleNamespace(id=123, title='Group')
+        def operation(fn):
+            return asyncio.run(fn(Client(), None, SimpleNamespace(User=User)))
+        with patch('server.service.telegram_operation', operation):
+            self.assertEqual(telegram_search({'query':'@test_group'}), {'contacts':[]})
+        with patch('server.service.telegram_operation') as op:
+            for query in ['', 'a', '@', '@invalid/path', ['name']]:
+                with self.assertRaises(ValueError):
+                    telegram_search({'query':query})
+            op.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

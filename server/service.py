@@ -1,5 +1,6 @@
 """Single-coach private API. Run behind HTTPS; secrets stay on the server."""
 import asyncio
+from contextlib import closing
 import base64
 import datetime as dt
 import hashlib
@@ -60,7 +61,7 @@ def cached_operation(key, identity, operation):
         raise ValueError("Некорректный идентификатор операции")
     digest = fingerprint(identity)
     with LOCK:
-        with database() as conn:
+        with closing(database()) as conn:
             row = conn.execute("SELECT fingerprint,result FROM operations WHERE key=?", (key,)).fetchone()
             if row:
                 if row[0] != digest:
@@ -162,10 +163,13 @@ def transcribe(payload):
 
 def telegram_send(payload):
     peer_id = str(payload.get("peerId", ""))
+    expected_account = payload.get("accountPeerId")
     text = payload.get("text")
     key = str(payload.get("idempotencyKey", ""))
     if not re.fullmatch(r"[1-9][0-9]{0,18}", peer_id) or text not in TEMPLATES:
         raise ValueError("Проверь получателя и заготовку")
+    if expected_account is not None and not re.fullmatch(r"[1-9][0-9]{0,18}", str(expected_account)):
+        raise ValueError("Проверь аккаунт отправителя")
     async def send():
         try:
             from telethon import TelegramClient, functions, types
@@ -177,6 +181,8 @@ def telegram_send(payload):
         try:
             if not await client.is_user_authorized():
                 raise RuntimeError("Сначала авторизуй личный аккаунт Telegram на сервере")
+            if expected_account is not None and str((await client.get_me()).id) != str(expected_account):
+                raise ValueError("Аккаунт Telegram изменился; перепривяжи получателя")
             recipient = await client.get_input_entity(int(peer_id))
             if not isinstance(recipient, types.InputPeerUser):
                 raise ValueError("Нужна личная переписка с клиентом")
@@ -195,7 +201,72 @@ def telegram_send(payload):
             return {"messageId": str(message_id), "sentAt": sent_at.isoformat()}
         finally:
             await client.disconnect()
-    return cached_operation("telegram-" + key, {"peerId": peer_id, "text": text}, lambda: asyncio.run(send()))
+    identity = {"peerId": peer_id, "text": text}
+    if expected_account is not None:
+        identity["accountPeerId"] = str(expected_account)
+    return cached_operation("telegram-" + key, identity, lambda: asyncio.run(send()))
+
+def telegram_operation(operation):
+    """Read-only account lookup. Never starts login or sends a message."""
+    async def perform():
+        from telethon import TelegramClient, functions, types
+        client = TelegramClient(os.environ.get("TELEGRAM_SESSION", "./server/data/telegram"),
+                                int(required("TELEGRAM_API_ID")), required("TELEGRAM_API_HASH"))
+        await client.connect()
+        try:
+            if not await client.is_user_authorized():
+                raise RuntimeError("Telegram account is not authorized")
+            return await operation(client, functions, types)
+        finally:
+            await client.disconnect()
+    return asyncio.run(perform())
+
+def telegram_user(user, allow_self=False):
+    if not user or getattr(user, "deleted", False) or getattr(user, "bot", False) or (getattr(user, "is_self", False) and not allow_self):
+        return None
+    peer_id = str(getattr(user, "id", ""))
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", peer_id):
+        return None
+    return {"peerId": peer_id, "displayName": " ".join(filter(None, [getattr(user, "first_name", ""), getattr(user, "last_name", "")])) or "Пользователь Telegram",
+            "username": getattr(user, "username", None) or None}
+
+def telegram_status(_payload):
+    if not os.environ.get("TELEGRAM_API_ID") or not os.environ.get("TELEGRAM_API_HASH"):
+        return {"connected": False, "reason": "not-configured"}
+    async def inspect(client, _functions, _types):
+        account = telegram_user(await client.get_me(), allow_self=True)
+        if not account:
+            raise RuntimeError("A personal Telegram account is required")
+        return {"connected": True, "account": account}
+    return telegram_operation(inspect)
+
+def telegram_search(payload):
+    query = payload.get("query")
+    if not isinstance(query, str) or not 2 <= len(query.strip()) <= 120:
+        raise ValueError("Введите имя или @username")
+    query = query.strip()
+    if query.startswith("@") and not re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", query):
+        raise ValueError("Проверьте @username")
+    async def search(client, functions, types):
+        if query.startswith("@"):
+            try:
+                entity = await client.get_entity(query)
+            except ValueError:
+                return {"contacts": []}
+            users = [entity] if isinstance(entity, types.User) else []
+        else:
+            result = await client(functions.contacts.GetContactsRequest(hash=0))
+            words = query.casefold().split()
+            users = [u for u in result.users if all(w in " ".join(filter(None, [getattr(u, "first_name", ""), getattr(u, "last_name", ""), getattr(u, "username", "")])).casefold() for w in words)]
+        contacts = []
+        for user in users:
+            contact = telegram_user(user)
+            if contact and not any(c["peerId"] == contact["peerId"] for c in contacts):
+                contacts.append(contact)
+            if len(contacts) == 10:
+                break
+        return {"contacts": contacts}
+    return telegram_operation(search)
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
@@ -223,7 +294,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(413, {"error": "Request too large"})
                 return
             payload = json.loads(self.rfile.read(size))
-            handlers = {"/records/parse": parse_record, "/audio/transcribe": transcribe, "/telegram/send": telegram_send}
+            handlers = {"/records/parse": parse_record, "/audio/transcribe": transcribe, "/telegram/send": telegram_send,
+                        "/telegram/status": telegram_status, "/telegram/search": telegram_search}
             if self.path not in handlers:
                 self.reply(404, {"error": "Not found"})
                 return
