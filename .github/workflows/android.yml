@@ -30,6 +30,9 @@ jobs:
         run: |
           pnpm test
           python3 -m unittest discover -s server/tests -v
+          mkdir -p /tmp/trail-native-tests
+          javac -d /tmp/trail-native-tests mobile/android/app/src/main/java/io/github/troglobiont/trailclients/UpdateAssetId.java tests/UpdateAssetIdTest.java
+          java -cp /tmp/trail-native-tests UpdateAssetIdTest
       - name: Build offline app and update
         run: pnpm build && pnpm check && pnpm package:update
       - name: Synchronize Android project
