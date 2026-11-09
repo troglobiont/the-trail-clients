@@ -15,6 +15,9 @@ window.TrailNative={
   async saveVoice(value){return Device.saveVoice({text:JSON.stringify(value)});},
   async loadVoice(){const {text}=await Device.loadVoice();return text?JSON.parse(text):null;},
   async clearVoice(){return Device.clearVoice();},
+  async microphonePermission(){if(Number((await App.getInfo()).build)<6)return {state:'native-update-required'};return Device.microphonePermission();},
+  async requestMicrophonePermission(){if(Number((await App.getInfo()).build)<6)return {state:'native-update-required'};return Device.requestMicrophonePermission();},
+  async openMicrophoneSettings(){return Device.openMicrophoneSettings();},
   async readRelease(){return Device.readRelease();},
   async downloadUpdate(manifest,onProgress){
     const resolved=await Device.resolveAsset({assetId:manifest.assetId});
@@ -31,4 +34,5 @@ if(native){
   if(saved&&/^#(?:todo|clients|settings|client\/[a-zA-Z0-9_-]+)$/.test(saved))location.hash=saved;
   sessionStorage.removeItem('trail-update-route');
   App.addListener('backButton',()=>{if(document.querySelector('dialog[open]'))document.querySelector('dialog[open]').close();else if(location.hash.startsWith('#client/'))history.back();else if(location.hash!=='#todo')location.hash='#todo';else App.minimizeApp();});
+  App.addListener('appStateChange',state=>{if(state.isActive)window.dispatchEvent(new Event('trail-app-active'));});
 }

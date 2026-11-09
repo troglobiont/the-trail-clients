@@ -1,5 +1,9 @@
 package io.github.troglobiont.trailclients;
 
+import android.Manifest;
+import android.content.Intent;
+import android.net.Uri;
+import android.provider.Settings;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.AtomicFile;
@@ -8,7 +12,10 @@ import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
@@ -19,7 +26,7 @@ import javax.crypto.*;
 import javax.crypto.spec.GCMParameterSpec;
 import org.json.*;
 
-@CapacitorPlugin(name="TrailDevice")
+@CapacitorPlugin(name="TrailDevice", permissions={@Permission(alias="microphone", strings={Manifest.permission.RECORD_AUDIO})})
 public class TrailDevicePlugin extends Plugin {
   private static final String REPO="https://api.github.com/repos/troglobiont/the-trail-clients";
   private static final int MAX_STORE=8*1024*1024;
@@ -36,6 +43,23 @@ public class TrailDevicePlugin extends Plugin {
   @PluginMethod public void loadVoice(PluginCall call){work(call,()->{String text="";try(FileInputStream in=voice().openRead()){text=new String(read(in,9*1024*1024),StandardCharsets.UTF_8);}catch(FileNotFoundException ignored){}return new JSObject().put("text",text);});}
   @PluginMethod public void saveVoice(PluginCall call){work(call,()->{String text=call.getString("text","");byte[] bytes=text.getBytes(StandardCharsets.UTF_8);if(bytes.length>9*1024*1024)throw new IOException("Запись слишком большая");new JSONObject(text);AtomicFile file=voice();FileOutputStream out=null;try{out=file.startWrite();out.write(bytes);file.finishWrite(out);}catch(Exception e){if(out!=null)file.failWrite(out);throw e;}return new JSObject().put("saved",true);});}
   @PluginMethod public void clearVoice(PluginCall call){work(call,()->{voice().delete();return new JSObject().put("cleared",true);});}
+  private JSObject microphoneResult(){
+    PermissionState state=getPermissionState("microphone");
+    if(state==PermissionState.DENIED && getActivity().shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO))state=PermissionState.PROMPT_WITH_RATIONALE;
+    return new JSObject().put("state",state.toString()).put("settingsRequired",state==PermissionState.DENIED);
+  }
+  @PluginMethod public void microphonePermission(PluginCall call){call.resolve(microphoneResult());}
+  @PluginMethod public void requestMicrophonePermission(PluginCall call){
+    if(getPermissionState("microphone")==PermissionState.GRANTED){call.resolve(microphoneResult());return;}
+    requestPermissionForAlias("microphone",call,"microphonePermissionResult");
+  }
+  @PermissionCallback private void microphonePermissionResult(PluginCall call){if(call!=null)call.resolve(microphoneResult());}
+  @PluginMethod public void openMicrophoneSettings(PluginCall call){
+    getActivity().runOnUiThread(()->{try{
+      Intent intent=new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:"+getContext().getPackageName()));
+      getActivity().startActivity(intent);call.resolve(new JSObject().put("opened",true));
+    }catch(Exception e){call.reject("Не удалось открыть настройки приложения");}});
+  }
   private synchronized SecretKey key() throws Exception {KeyStore ks=KeyStore.getInstance("AndroidKeyStore");ks.load(null);String alias="trail-clients-secrets-v1";if(ks.containsAlias(alias))return ((KeyStore.SecretKeyEntry)ks.getEntry(alias,null)).getSecretKey();KeyGenerator gen=KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore");gen.init(new KeyGenParameterSpec.Builder(alias,KeyProperties.PURPOSE_ENCRYPT|KeyProperties.PURPOSE_DECRYPT).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());return gen.generateKey();}
   private boolean validSecret(String name){return name.equals("githubToken")||name.equals("serviceToken");}
   private String secret(String name) throws Exception {String stored=getContext().getSharedPreferences("trail-vault",0).getString(name,"");if(stored.isEmpty())return "";String[] pieces=stored.split(":",2);Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Base64.decode(pieces[0],Base64.NO_WRAP)));return new String(c.doFinal(Base64.decode(pieces[1],Base64.NO_WRAP)),StandardCharsets.UTF_8);}
