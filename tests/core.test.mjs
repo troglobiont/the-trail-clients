@@ -5,6 +5,30 @@ import {createStore} from '../src/store.js';
 function fixture(){const s=C.emptyState();const a=C.createClient(s,{name:'Клиент А',format:'Дистанционно',level:'Премиум',personal:'none',basis:'С нуля'});const b=C.createClient(s,{name:'Клиент Б',format:'Очно',level:'Обычное',personal:'gym',basis:'Hard'});return {s,a,b};}
 test('classification fields are independent and Cyrillic aliases searchable',()=>{const {s,a,b}=fixture();s.clients[a.id].aliases=['Shalaev'];assert.equal(C.filterClients(s,{format:'Дистанционно',level:'Премиум'})[0].id,a.id);assert.equal(C.filterClients(s,{personal:'gym'})[0].id,b.id);assert.equal(C.filterClients(s,{query:'Шалаев'})[0].id,a.id);assert.equal(C.filterClients(s,{status:'На паузе'}).length,0);C.validateState(s);});
 test('one record can produce two independent tasks; completing one retains the other',()=>{const {s,a}=fixture();const one=C.createTask(s,a.id,'Добавить домашний блок'),two=C.createTask(s,a.id,'Спросить о самочувствии',{due:'2026-11-11'});C.completeTask(s,one.id);assert.deepEqual(C.openTasks(s).map(x=>x.id),[two.id]);assert.equal(s.tasks[one.id].phase,'done');C.completeTask(s,one.id,false);assert.equal(C.openTasks(s).length,2);});
+test('editing an existing action retains identity, source and reply lifecycle through persistence',async()=>{
+  const {s,a}=fixture(),r=C.saveRecord(s,a.id,'Попросить сходить в кино в среду, в среду попросить');
+  C.applyAgentResult(s,r.id,{changes:[{type:'task',title:'Попросить сходить в кино',due:'2026-11-11',needsReply:true}]});
+  const t=C.openTasks(s)[0];C.markSent(s,t.id,'2026-11-11T09:00:00Z');
+  const before=C.clone(t);let saved;
+  const store=await createStore({async load(){return JSON.stringify(s);},async save(value){saved=value;}});
+  await store.mutate(next=>C.editTask(next,t.id,'  Предложить кино на выходных  ','2026-11-13'));
+  const restored=JSON.parse(saved),edited=restored.tasks[t.id];C.validateState(restored);
+  assert.equal(edited.title,'Предложить кино на выходных');assert.equal(edited.due,'2026-11-13');
+  for(const key of ['id','clientId','sourceRecordId','needsReply','phase','checkOn','lastSentAt','outboundCount','lane','waitDays','closedAt'])assert.deepEqual(edited[key],before[key],key);
+  assert.equal(Object.keys(restored.tasks).length,1);assert.equal(restored.records[r.id].text,r.text);
+  const e=restored.events.find(e=>e.type==='task-edited');assert.deepEqual(e.before,{title:before.title,due:before.due});assert.deepEqual(e.after,{title:edited.title,due:edited.due});
+  C.applyAgentResult(restored,r.id,{changes:[{type:'task',title:'Попросить сходить в кино',due:'2026-11-11'}]});
+  assert.equal(restored.tasks[t.id].title,'Предложить кино на выходных');assert.equal(Object.keys(restored.tasks).length,1);
+});
+test('editing completed actions does not reopen them; invalid edits leave the action unchanged',()=>{
+  const {s,a}=fixture(),t=C.createTask(s,a.id,'Спросить завтра',{due:'2026-11-10'});C.completeTask(s,t.id);
+  const closedAt=t.closedAt;C.editTask(s,t.id,'Спросить о самочувствии',null);
+  assert.equal(t.phase,'done');assert.equal(t.closedAt,closedAt);assert.equal(t.due,null);assert.equal(C.openTasks(s).length,0);
+  const before=JSON.stringify(s);
+  for(const [title,due] of [['  ',null],['x'.repeat(1001),null],['Правка','2026-02-30'],['Правка','среда']])assert.throws(()=>C.editTask(s,t.id,title,due));
+  assert.equal(JSON.stringify(s),before);assert.throws(()=>C.editTask(s,'missing','Правка'));
+  C.editTask(s,t.id,t.title,t.due);assert.equal(JSON.stringify(s),before);
+});
 test('reply task moves check from actual send date without completing; duplicate mark guarded',()=>{const {s,a}=fixture();const t=C.createTask(s,a.id,'Спросить о тренировке',{needsReply:true,due:'2026-11-11'});C.markSent(s,t.id,'2026-11-11T08:00:00.000Z');assert.equal(t.checkOn,'2026-11-13');assert.equal(t.phase,'waiting');C.markSent(s,t.id,'2026-11-11T08:00:01.000Z');assert.equal(t.outboundCount,1);C.markSent(s,t.id,'2026-11-13T09:00:00.000Z');assert.equal(t.checkOn,'2026-11-15');assert.equal(t.outboundCount,2);assert.equal(C.taskWarning(t,'2026-11-14'),null);assert.equal(C.taskWarning(t,'2026-11-15').level,'warning');C.markSent(s,t.id,'2026-11-15T09:00:00.000Z');assert.equal(C.taskWarning(t,'2026-11-17').level,'danger');C.completeTask(s,t.id);assert.equal(s.events.filter(e=>e.type==='incoming').length,0);});
 test('confirmed message idempotency is stable beyond double-click window',()=>{const {s,a}=fixture();const t=C.createTask(s,a.id,'Вопрос',{needsReply:true});C.markSent(s,t.id,'2026-11-11T08:00:00Z','peer-1:msg-1');C.markSent(s,t.id,'2026-11-12T08:00:00Z','peer-1:msg-1');assert.equal(t.outboundCount,1);});
 test('wait setting only affects one task and explicit default for future tasks',()=>{const {s,a}=fixture();const one=C.createTask(s,a.id,'Один',{needsReply:true}),two=C.createTask(s,a.id,'Два',{needsReply:true});C.markSent(s,one.id,'2026-11-11T09:00:00Z');C.setWait(s,one.id,3,true);assert.equal(one.checkOn,'2026-11-14');assert.equal(two.waitDays,2);assert.equal(C.createTask(s,a.id,'Новый').waitDays,3);});
