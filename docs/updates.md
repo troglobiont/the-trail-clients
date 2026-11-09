@@ -1,6 +1,6 @@
 # Установщик и дальнейшие обновления
 
-Нативная оболочка: `io.github.troglobiont.trailclients`, runtime 1, минимальная совместимая нативная версия 0.1.1. Используется тот же способ ручного обновления интерфейса, что в операторе 38: [CapacitorUpdater manual download/set](https://capgo.app/docs/plugins/updater/api/), подтверждение `notifyAppReady` и откат при неудаче.
+Нативная оболочка: `io.github.troglobiont.trailclients`, runtime 1, минимальная совместимая нативная версия 0.1.2. Используется тот же способ ручного обновления интерфейса, что в операторе 38: [CapacitorUpdater manual download/set](https://capgo.app/docs/plugins/updater/api/), подтверждение `notifyAppReady` и откат при неудаче.
 
 ## Один раз на телефоне
 

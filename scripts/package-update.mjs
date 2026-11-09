@@ -19,7 +19,7 @@ with zipfile.ZipFile(sys.argv[2],'w',compression=zipfile.ZIP_DEFLATED,compressle
   out.writestr(info,file.read_bytes(),compress_type=zipfile.ZIP_DEFLATED,compresslevel=9)
 `,path.join(root,'dist'),zip]);
 const bytes=await readFile(zip),sha256=createHash('sha256').update(bytes).digest('hex');
-const manifest={schemaVersion:1,appId:'io.github.troglobiont.trailclients',version,nativeRuntime:1,minNativeVersion:'0.1.1',bundle:{url:`https://github.com/troglobiont/the-trail-clients/releases/download/v${version}/THE-TRAIL-Clients-update.zip`,sha256}};
+const manifest={schemaVersion:1,appId:'io.github.troglobiont.trailclients',version,nativeRuntime:1,minNativeVersion:'0.1.2',bundle:{url:`https://github.com/troglobiont/the-trail-clients/releases/download/v${version}/THE-TRAIL-Clients-update.zip`,sha256}};
 await writeFile(path.join(out,'version.json'),JSON.stringify(manifest,null,2)+'\n');
 await writeFile(path.join(out,'SHA256SUMS'),sha256+'  THE-TRAIL-Clients-update.zip\n');
 console.log(JSON.stringify({version,bytes:bytes.length,sha256}));
