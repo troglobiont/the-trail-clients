@@ -4,6 +4,24 @@ import * as C from '../src/core.js';
 import {createStore} from '../src/store.js';
 function fixture(){const s=C.emptyState();const a=C.createClient(s,{name:'Клиент А',format:'Дистанционно',level:'Премиум',personal:'none',basis:'С нуля'});const b=C.createClient(s,{name:'Клиент Б',format:'Очно',level:'Обычное',personal:'gym',basis:'Hard'});return {s,a,b};}
 test('classification fields are independent and Cyrillic aliases searchable',()=>{const {s,a,b}=fixture();s.clients[a.id].aliases=['Shalaev'];assert.equal(C.filterClients(s,{format:'Дистанционно',level:'Премиум'})[0].id,a.id);assert.equal(C.filterClients(s,{personal:'gym'})[0].id,b.id);assert.equal(C.filterClients(s,{query:'Шалаев'})[0].id,a.id);assert.equal(C.filterClients(s,{status:'На паузе'}).length,0);C.validateState(s);});
+test('unlinking and restoring a Telegram recipient preserves client history and tasks across persistence',async()=>{
+  const {s,a,b}=fixture(),binding={peerId:'123456',displayName:'Тестовый получатель',accountPeerId:'654321'};
+  const t=C.createTask(s,a.id,'Спросить о тренировке',{needsReply:true}),r=C.saveRecord(s,a.id,'Тестовая запись');
+  C.setTelegramBinding(s,a.id,binding);C.markSent(s,t.id,'2026-11-10T07:00:00Z');
+  const before=C.clone(s),previous=C.clone(s.clients[a.id].telegram);
+  C.setTelegramBinding(s,a.id,null);assert.equal(s.clients[a.id].telegram,null);
+  const saved=C.parseImport(C.exportState(s));assert.deepEqual(saved.tasks[t.id],before.tasks[t.id]);assert.deepEqual(saved.records[r.id],before.records[r.id]);assert.deepEqual(saved.clients[b.id],before.clients[b.id]);
+  C.setTelegramBinding(saved,a.id,previous);previous.displayName='Changed outside store';
+  assert.deepEqual(saved.clients[a.id].telegram,binding);assert.equal(saved.events.filter(e=>e.type==='outbound').length,1);
+  assert.equal(saved.events.filter(e=>e.type==='telegram-unlinked').length,1);assert.equal(saved.events.filter(e=>e.type==='telegram-linked').length,2);
+});
+test('a pending Telegram send prevents changing or unlinking its recipient atomically',()=>{
+  const {s,a}=fixture(),binding={peerId:'123456',displayName:'Тестовый получатель'};
+  C.setTelegramBinding(s,a.id,binding);s.settings.pendingTelegram={[a.id]:{key:'message-1',text:'Привет'}};
+  const before=JSON.stringify(s);
+  for(const value of [null,{peerId:'789012',displayName:'Другой'}])assert.throws(()=>C.setTelegramBinding(s,a.id,value),/неподтверждённую отправку/);
+  assert.equal(JSON.stringify(s),before);
+});
 test('one record can produce two independent tasks; completing one retains the other',()=>{const {s,a}=fixture();const one=C.createTask(s,a.id,'Добавить домашний блок'),two=C.createTask(s,a.id,'Спросить о самочувствии',{due:'2026-11-11'});C.completeTask(s,one.id);assert.deepEqual(C.openTasks(s).map(x=>x.id),[two.id]);assert.equal(s.tasks[one.id].phase,'done');C.completeTask(s,one.id,false);assert.equal(C.openTasks(s).length,2);});
 test('editing an existing action retains identity, source and reply lifecycle through persistence',async()=>{
   const {s,a}=fixture(),r=C.saveRecord(s,a.id,'Попросить сходить в кино в среду, в среду попросить');
