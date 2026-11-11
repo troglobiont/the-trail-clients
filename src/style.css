@@ -123,6 +123,7 @@ details[open]>summary{margin-bottom:4px;color:var(--text)}
 .client-header .page-title .subtle{margin-top:-8px;margin-right:-8px}
 .client-header{gap:10px}
 .settings-section{border-top:1px solid var(--line);padding-top:20px}
+.cloud-version{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 12px;font-size:12px;max-height:160px;overflow:auto}
 .notice{position:fixed;left:16px;right:16px;bottom:calc(82px + env(safe-area-inset-bottom));max-width:880px;margin:0 auto;padding:13px 16px;background:var(--ink);color:var(--on-ink);border-radius:12px;box-shadow:0 8px 30px #0002;z-index:30;display:flex;align-items:center;justify-content:space-between;gap:12px}
 .notice.error{background:var(--error-bg);color:var(--error-text)}
 .notice .notice-action{color:inherit;flex-shrink:0;text-decoration:underline;padding:6px 8px;margin:-6px -8px -6px 0}

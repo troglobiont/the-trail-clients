@@ -6,9 +6,12 @@ import {createRecipientSearch} from './telegram-picker.js';
 import {microphoneAccess,microphoneState} from './microphone.js';
 import {createAccountingUI} from './accounting-ui.js';
 import {applyLedger, LEDGER_FORMAT, parseLedgerImport} from './ledger-import.js';
+import {createCloudAPI} from './cloud-api.js';
+import {createCloudSync} from './cloud-sync.js';
+import {cloudConfig} from './cloud-config.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
-let store,updater,noticeTimer,draftTimer;
+let store,updater,cloud,noticeTimer,draftTimer;
 const defaultFilters=()=>({query:'',status:'all',format:'all',quick:'all',basis:'all',level:'all',personal:'all',role:'Клиент'});
 const ui={filters:defaultFilters(),taskFilter:'all',returnTo:'#clients',open:new Set(),drafts:{},sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
 const state=()=>store.state();
@@ -21,7 +24,7 @@ function message(value,error=false,action=null){
   notice.hidden=false;noticeTimer=setTimeout(()=>{notice.hidden=true;},action||error?9000:4500);
 }
 async function run(fn){try{await fn();}catch(e){message(e.message||'Операция не выполнена',true);}}
-async function commit(fn,redraw=true){document.getElementById('save-status').textContent='Сохраняю…';try{const value=await store.mutate(fn);document.getElementById('save-status').textContent='На устройстве';if(redraw)render();return value;}catch(e){document.getElementById('save-status').textContent='Не сохранено';throw e;}}
+async function commit(fn,redraw=true){document.getElementById('save-status').textContent='Сохраняю…';try{const value=await store.mutate(fn);renderCloudStatus();if(redraw)render();return value;}catch(e){document.getElementById('save-status').textContent='Не сохранено';throw e;}}
 function row(...items){return append(el('div',null,'row'),...items);}
 function text(text,className='muted small'){return el('div',text,className);}
 function field(label,input){return append(el('label',label),input);}
@@ -45,6 +48,74 @@ function modal(title,build){
   const controls=row(button('Отмена',()=>dialog.close()),saveControl);
   form.addEventListener('submit',e=>{e.preventDefault();if(!saveControl.disabled)saveControl.click();});
   append(form,error,controls);dialog.append(form);dialog.showModal();
+}
+
+const cloudLabels={working:'Синхронизация…',synced:'Синхронизировано',pending:'Ждёт синхронизации',conflict:'Нужно выбрать версию',error:'Ждёт синхронизации'};
+function renderCloudStatus(){
+  const view=cloud?.state();
+  const pending=state().cloudSync&&Object.keys(state().cloudSync.pending).length;
+  document.getElementById('save-status').textContent=pending&&view?.status==='synced'?'Ждёт синхронизации':cloudLabels[view?.status]||'На устройстве';
+  renderCloudPanel();
+}
+function cloudLogin(){
+  modal('Подключить синхронизацию',form=>{
+    const email=input('email');email.autocomplete='username';email.maxLength=254;
+    const password=input('password');password.autocomplete='current-password';
+    append(form,text('Карточки, задачи, занятия, оплаты и история учёта будут синхронизироваться с личным проектом The.Trail Clients в Supabase.'),
+      field('Почта аккаунта приложения',email),field('Пароль аккаунта приложения',password));
+    return async()=>{
+      if(!email.value.trim()||!password.value)throw Error('Введи почту и пароль для приложения');
+      await cloud.connect(email.value.trim(),password.value);
+      password.value='';
+    };
+  });
+}
+function cloudConflict(){
+  const snapshot=cloud.state();
+  modal('Выбрать версию записей',form=>{
+    const selections={};
+    for(const conflict of snapshot.conflicts){
+      const title=conflict.local?.name||conflict.remote?.name||conflict.local?.title||conflict.remote?.title||conflict.key;
+      const versions=el('details');
+      append(versions,el('summary','Посмотреть обе версии'),el('h3','Телефон'),el('pre',JSON.stringify(conflict.local,null,2)?.slice(0,1500)||'Запись удалена','cloud-version'),
+        el('h3','Облако'),el('pre',JSON.stringify(conflict.remote,null,2)?.slice(0,1500)||'Запись удалена','cloud-version'));
+      const pick=select([['','Выбрать версию'],['phone','Оставить с телефона'],['cloud','Взять из облака']],'');
+      selections[conflict.key]=pick;
+      append(form,field(title,pick),versions);
+    }
+    return ()=>{
+      if(Object.values(selections).some(x=>!x.value))throw Error('Выбери версию для каждой записи');
+      return cloud.sync({revision:snapshot.revision,choices:Object.fromEntries(Object.entries(selections).map(([k,x])=>[k,x.value]))});
+    };
+  });
+}
+function renderCloudPanel(){
+  const panel=document.getElementById('cloud-panel');
+  if(!panel)return;
+  panel.replaceChildren(el('h2','Синхронизация'));
+  if(!cloud){panel.append(text('Доступна в Android-приложении.'));return;}
+  const view=cloud.state();
+  if(view.status==='disconnected'){
+    append(panel,text(view.error||'Подключи личный аккаунт The.Trail Clients.'),row(button('Подключить синхронизацию',cloudLogin,'primary')));
+    return;
+  }
+  append(panel,text(view.email),el('p',cloudLabels[view.status]),view.error&&text(view.error,'warning-text small'));
+  const syncNow=view.status==='conflict'?button('Выбрать версию',cloudConflict):button('Синхронизировать сейчас',()=>cloud.sync());
+  syncNow.disabled=view.status==='working';
+  append(panel,row(syncNow,button('Выйти из облака',()=>cloud.disconnect(),'subtle')));
+}
+function startCloud(){
+  const bridge=window.TrailNative;
+  if(!bridge?.native||!bridge.cloudRequest)return;
+  cloud=createCloudSync({store,api:createCloudAPI({...cloudConfig,request:options=>bridge.cloudRequest(options)}),
+    vault:{load:()=>bridge.getSecret('cloudSession'),save:value=>bridge.setSecret('cloudSession',value)},
+    onChange:renderCloudStatus,onReceive:render});
+  const retry=()=>cloud.sync();
+  window.addEventListener('online',retry);
+  window.addEventListener('trail-app-active',retry);
+  setInterval(()=>{if(!document.hidden)retry();},45000);
+  renderCloudStatus();
+  run(()=>cloud.restore());
 }
 function editClient(clientId=null){const c=clientId?state().clients[clientId]:null;modal(c?'Данные клиента':'Новый клиент',form=>{const name=input('text',c?.name||'');name.maxLength=180;form.append(field('Фамилия Имя',name));const controls={role:select(['Клиент','Тренер'],c?.role||'Клиент'),status:select(C.STATUSES,c?.status||'Активный'),format:select(['Очно','Дистанционно','Уточнить'],c?.format||'Уточнить'),basis:select(C.BASES,c?.basis||'Сейчас плана нет'),level:select(['Обычное','Премиум'],c?.level||'Обычное'),group:select(['Да','Нет','Уточнить'],c?.group||'Уточнить'),personal:select([['none','Нет'],['gym','В зале'],['outside','На улице'],['unknown','Нужно уточнить']],c?.personal||'unknown'),currentFormat:select([['','Нет временного изменения'],['Очно','Временно очно'],['Дистанционно','Временно онлайн']],c?.currentFormat||'')};const labels={role:'Роль',status:'Статус сотрудничества',format:'Обычный формат',basis:'Основа плана',level:'Ведение',group:'Групповые с Сергеем',personal:'Персональные с Сергеем',currentFormat:'Формат сейчас'};for(const [key,control] of Object.entries(controls))form.append(field(labels[key],control));const date=input('date',C.localDate());date.max=C.localDate();const effective=field('Дата изменения статуса',date);const updateDate=()=>{effective.hidden=controls.role.value!=='Клиент'||!!c&&c.role==='Клиент'&&controls.status.value===c.status;};controls.role.addEventListener('change',updateDate);controls.status.addEventListener('change',updateDate);updateDate();form.append(effective);return async()=>{const values={name:name.value.trim(),...Object.fromEntries(Object.entries(controls).map(([k,v])=>[k,v.value]))};values.currentFormat=values.currentFormat||null;if(!values.name)throw Error('Введи имя');await commit(s=>c?C.editClient(s,c.id,values,date.value):C.createClient(s,values,date.value));};});}
 function renderCatalog(){
@@ -416,8 +487,8 @@ if(parsed?.format===LEDGER_FORMAT||ledgerOnly){const ledger=parseLedgerImport(pa
 }
 const incoming=C.parseImport(raw);modal('Импорт базы',form=>{const mode=select([['merge','Добавить отсутствующие, сохранить мои правки'],['replace','Заменить базу из резервной копии']],'merge');append(form,text('В файле: '+Object.keys(incoming.clients).length+' человек, '+Object.keys(incoming.tasks).length+' задач.'),field('Как перенести',mode));return async()=>{if(mode.value==='replace'){await backup();incoming.settings.serviceURL=state().settings.serviceURL||'';await store.replace(incoming);}else await commit(s=>Object.assign(s,C.mergeState(s,incoming)));ui.drafts=C.clone(state().settings.drafts||{});message('База импортирована');render();};});}));picker.click();}
 async function backup(){await saveDrafts();const content=C.exportState(state());if(window.TrailNative?.native)await window.TrailNative.exportJSON(content);else{const blob=new Blob([content],{type:'application/json'}),url=URL.createObjectURL(blob),a=el('a');a.href=url;a.download='THE-TRAIL-Clients-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}}
-function renderSettings(){const page=el('div',null,'stack-lg');append(page,el('h1','Настройки'));const data=el('section',null,'stack settings-section');append(data,el('h2','Данные на устройстве'),text(Object.keys(state().clients).length+' человек · '+Object.keys(state().records).length+' записей · версия базы '+state().schemaVersion),row(button('Импортировать базу',()=>importDatabase()),button('Экспортировать резервную копию',()=>backup())),text('Резервная копия содержит клиентские сведения. Ключи подключений в неё не входят. При обновлении интерфейса база сохраняется.'));page.append(data);const update=el('section',null,'stack settings-section');update.id='update-panel';page.append(update);const wait=input('number',state().settings.waitDays);wait.min=1;wait.max=30;const taskDefaults=el('section',null,'stack settings-section');append(taskDefaults,el('h2','Задачи'),field('Дней до проверки ответа в новых задачах',wait),button('Сохранить',()=>commit(s=>{const n=Number(wait.value);if(!Number.isInteger(n)||n<1||n>30)throw Error('Укажи от 1 до 30 дней');s.settings.waitDays=n;})),text('Интервалы уже созданных задач сохраняются.'));page.append(taskDefaults,accountingUI.settingsPanel());const services=el('section',null,'stack settings-section'),url=input('url',state().settings.serviceURL||'','https://…'),token=input('password','','Новый ключ сервиса');token.autocomplete='off';const agentEnabled=input('checkbox');agentEnabled.checked=!!state().settings.agentEnabled;append(services,el('h2','Агент и Telegram'),field('Адрес твоего сервиса',url),field('Ключ доступа · оставить пустым, чтобы сохранить прежний',token),append(el('label',null,'checkbox'),agentEnabled,el('span','Использовать AI-разбор записей')),button('Сохранить подключение',async()=>{if(!window.TrailNative?.native)throw Error('Подключения доступны в установленном приложении');let base='';if(url.value.trim()){const parsed=new URL(url.value.trim());if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.search||parsed.hash)throw Error('Укажи HTTPS-адрес без ключей в ссылке');base=parsed.origin;}if(base!==(state().settings.serviceURL||''))await window.TrailNative.setSecret('serviceToken','');await commit(s=>{s.settings.serviceURL=base;s.settings.agentEnabled=agentEnabled.checked;});if(token.value)await window.TrailNative.setSecret('serviceToken',token.value.trim());message('Настройки подключения сохранены');}),text('Агент и голос работают через твой Mac. Способ обработки указан в проверке ниже. При выключенном AI записи, цели и задачи сохраняются локально.'));services.append(agentConnectionCheck(),connectionCodePanel(),telegramConnectionCheck());if(ui.pendingVoice)services.append(text('Есть сохранённая голосовая запись для '+(state().clients[ui.pendingVoice.clientId]?.name||'клиента')),row(button('Открыть запись',()=>openClient(ui.pendingVoice.clientId)),button('Удалить аудиочерновик',async()=>{if(window.TrailNative?.native)await window.TrailNative.clearVoice();ui.pendingVoice=null;render();})) );page.append(services);return page;}
+function renderSettings(){const page=el('div',null,'stack-lg');append(page,el('h1','Настройки'));const data=el('section',null,'stack settings-section');append(data,el('h2','Данные на устройстве'),text(Object.keys(state().clients).length+' человек · '+Object.keys(state().records).length+' записей · версия базы '+state().schemaVersion),row(button('Импортировать базу',()=>importDatabase()),button('Экспортировать резервную копию',()=>backup())),text('Резервная копия содержит клиентские сведения. Ключи подключений в неё не входят. При обновлении интерфейса база сохраняется.'));page.append(data);const cloudPanel=el('section',null,'stack settings-section');cloudPanel.id='cloud-panel';page.append(cloudPanel);const update=el('section',null,'stack settings-section');update.id='update-panel';page.append(update);const wait=input('number',state().settings.waitDays);wait.min=1;wait.max=30;const taskDefaults=el('section',null,'stack settings-section');append(taskDefaults,el('h2','Задачи'),field('Дней до проверки ответа в новых задачах',wait),button('Сохранить',()=>commit(s=>{const n=Number(wait.value);if(!Number.isInteger(n)||n<1||n>30)throw Error('Укажи от 1 до 30 дней');s.settings.waitDays=n;})),text('Интервалы уже созданных задач сохраняются.'));page.append(taskDefaults,accountingUI.settingsPanel());const services=el('section',null,'stack settings-section'),url=input('url',state().settings.serviceURL||'','https://…'),token=input('password','','Новый ключ сервиса');token.autocomplete='off';const agentEnabled=input('checkbox');agentEnabled.checked=!!state().settings.agentEnabled;append(services,el('h2','Агент и Telegram'),field('Адрес твоего сервиса',url),field('Ключ доступа · оставить пустым, чтобы сохранить прежний',token),append(el('label',null,'checkbox'),agentEnabled,el('span','Использовать AI-разбор записей')),button('Сохранить подключение',async()=>{if(!window.TrailNative?.native)throw Error('Подключения доступны в установленном приложении');let base='';if(url.value.trim()){const parsed=new URL(url.value.trim());if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.search||parsed.hash)throw Error('Укажи HTTPS-адрес без ключей в ссылке');base=parsed.origin;}if(base!==(state().settings.serviceURL||''))await window.TrailNative.setSecret('serviceToken','');await commit(s=>{s.settings.serviceURL=base;s.settings.agentEnabled=agentEnabled.checked;});if(token.value)await window.TrailNative.setSecret('serviceToken',token.value.trim());message('Настройки подключения сохранены');}),text('Агент и голос работают через твой Mac. Способ обработки указан в проверке ниже. При выключенном AI записи, цели и задачи сохраняются локально.'));services.append(agentConnectionCheck(),connectionCodePanel(),telegramConnectionCheck());if(ui.pendingVoice)services.append(text('Есть сохранённая голосовая запись для '+(state().clients[ui.pendingVoice.clientId]?.name||'клиента')),row(button('Открыть запись',()=>openClient(ui.pendingVoice.clientId)),button('Удалить аудиочерновик',async()=>{if(window.TrailNative?.native)await window.TrailNative.clearVoice();ui.pendingVoice=null;render();})) );page.append(services);return page;}
 function renderUpdate(){const panel=document.getElementById('update-panel');if(!panel)return;panel.textContent='';const u=updater.state(),errors={save:'Не удалось сохранить базу перед обновлением. Повтори после освобождения места.', 'asset-id':'Не удалось прочитать ID архива обновления. Нужен исправленный APK.', 'rate-limit':'GitHub временно ограничил загрузку. Попробуй другую сеть или повтори позже.', forbidden:'GitHub отклонил загрузку. Проверь, открывается ли выпуск в браузере.',storage:'Недостаточно места для обновления. Освободи место и повтори.',timeout:'Сервер обновлений не ответил вовремя. Повтори загрузку.',tls:'Не удалось установить защищённое соединение с сервером обновлений.',native:'Обновление интерфейса доступно в установленном Android-приложении.',manifest:'Не удалось проверить сведения об обновлении. Текущая версия сохранена.','native-required':'Для этой версии нужен новый APK. Установи его поверх приложения.','github-auth':'GitHub отклонил запрос обновления. Проверь доступ к выпуску.','release-missing':'Готовый выпуск не найден или к нему временно нет доступа.',checksum:'Архив не прошёл проверку целостности. Текущая версия сохранена.',network:'Не удалось загрузить обновление. Проверь интернет и повтори.'},labels={idle:'Проверка по нажатию',checking:'Проверяю обновление…',current:'Установлена актуальная версия',available:'Доступна версия '+u.latest,downloading:'Загружаю · '+Math.round(u.progress)+'%',applying:'Открываю новую версию…',error:errors[u.error]||'Обновление не выполнено'};append(panel,el('h2','Данные и обновления'),text('THE.TRAIL Clients · '+VERSION),text(labels[u.status],u.status==='error'?'danger-text small':'muted small'));if(u.status==='error')panel.append(text('Этап: '+({save:'сохранение базы',release:'проверка выпуска',compatibility:'совместимость APK',download:'получение архива',apply:'запуск обновления'}[u.step]||'проверка')+' · код '+u.error));const progress=el('progress');progress.max=100;progress.value=u.progress;progress.hidden=u.status!=='downloading';panel.append(progress);const update=button('Обновить сейчас',()=>updater.update(),'primary');update.disabled=['checking','downloading','applying'].includes(u.status);panel.append(update);panel.append(text('Обновление сохраняет базу и черновики. При неудачном запуске возвращается предыдущая рабочая версия. Новые системные возможности могут потребовать нового APK.'));}
-function render(){if(!store)return;const hash=location.hash||'#todo';root.textContent='';document.querySelectorAll('.app-nav a').forEach(a=>a.setAttribute('aria-current',a.hash===(hash.startsWith('#client/')?(ui.returnTo||'#clients'):hash)?'page':'false'));if(hash.startsWith('#client/'))root.append(renderClient(hash.slice(8)));else if(hash==='#clients'){root.append(renderCatalog());renderCatalogResults();}else if(hash==='#account'){root.append(accountingUI.page());}else if(hash==='#settings'){root.append(renderSettings());renderUpdate();}else root.append(renderTodo());}
-async function start(){try{store=await createStore(window.TrailNative?.native?window.TrailNative.adapter:browserAdapter());ui.drafts=C.clone(state().settings.drafts||{});if(window.TrailNative?.native){try{ui.pendingVoice=await window.TrailNative.loadVoice();}catch{message('Голосовой черновик не удалось прочитать. База клиентов доступна.',true);}}updater=createUpdater({version:VERSION,bridge:window.TrailNative,flush:async()=>{await saveDrafts();await store.flush();},onChange:u=>{renderUpdate();const link=document.querySelector('.app-nav a[href="#settings"]');if(link)link.textContent=u.status==='available'?'Настройки · обновление':'Настройки';}});if(!location.hash)history.replaceState(null,'','#todo');window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});await refreshMicrophonePermission();render();document.getElementById('save-status').textContent='На устройстве';await window.TrailNative?.ready();if(window.TrailNative?.native)setTimeout(()=>updater.check(),1500);}catch(e){root.textContent='';append(root,el('h1','Не удалось открыть базу'),text(e.message,'danger-text'),text('Не удаляй приложение: данные могут оставаться на устройстве.'),button('Повторить',()=>location.reload()));}}
+function render(){if(!store)return;const hash=location.hash||'#todo';root.textContent='';document.querySelectorAll('.app-nav a').forEach(a=>a.setAttribute('aria-current',a.hash===(hash.startsWith('#client/')?(ui.returnTo||'#clients'):hash)?'page':'false'));if(hash.startsWith('#client/'))root.append(renderClient(hash.slice(8)));else if(hash==='#clients'){root.append(renderCatalog());renderCatalogResults();}else if(hash==='#account'){root.append(accountingUI.page());}else if(hash==='#settings'){root.append(renderSettings());renderUpdate();renderCloudPanel();}else root.append(renderTodo());}
+async function start(){try{store=await createStore(window.TrailNative?.native?window.TrailNative.adapter:browserAdapter());ui.drafts=C.clone(state().settings.drafts||{});if(window.TrailNative?.native){try{ui.pendingVoice=await window.TrailNative.loadVoice();}catch{message('Голосовой черновик не удалось прочитать. База клиентов доступна.',true);}}updater=createUpdater({version:VERSION,bridge:window.TrailNative,flush:async()=>{await saveDrafts();await store.flush();},onChange:u=>{renderUpdate();const link=document.querySelector('.app-nav a[href="#settings"]');if(link)link.textContent=u.status==='available'?'Настройки · обновление':'Настройки';}});if(!location.hash)history.replaceState(null,'','#todo');window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});await refreshMicrophonePermission();render();document.getElementById('save-status').textContent='На устройстве';await window.TrailNative?.ready();startCloud();if(window.TrailNative?.native)setTimeout(()=>updater.check(),1500);}catch(e){root.textContent='';append(root,el('h1','Не удалось открыть базу'),text(e.message,'danger-text'),text('Не удаляй приложение: данные могут оставаться на устройстве.'),button('Повторить',()=>location.reload()));}}
 start();
