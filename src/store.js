@@ -25,7 +25,7 @@ export async function createStore(adapter){
     subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},
     mutate(fn){const operation=tail.then(async()=>{const next=clone(current),result=fn(next);if(result&&typeof result.then==='function')throw Error('Изменение базы должно быть синхронным');next.revision=current.revision+1;next.updatedAt=new Date().toISOString();validateState(next);await adapter.save(JSON.stringify(next));current=next;listeners.forEach(fn=>fn(current));return result;});tail=operation.catch(()=>{});return operation;},
     flush:()=>tail,
-    async replace(incoming){validateState(incoming);return this.mutate(next=>{const revision=next.revision;Object.assign(next,clone(incoming),{revision});});}
+    async replace(incoming){validateState(incoming);return this.mutate(next=>{const revision=next.revision;for(const key of Object.keys(next))delete next[key];Object.assign(next,clone(incoming),{revision});});}
   };
 }
 export function browserAdapter(){return {async load(){return localStorage.getItem(KEY);},async save(text){localStorage.setItem(KEY,text);}};}

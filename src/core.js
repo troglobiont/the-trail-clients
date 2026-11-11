@@ -1,17 +1,13 @@
+import { addDays, id, localDate, validDate } from './model-utils.js';
+import { mergeAccounting, validateAccounting } from './accounting.js';
+export { TIMEZONE, id, localDate, validDate, addDays } from './model-utils.js';
+
 export const SCHEMA=1;
-export const TIMEZONE='Europe/Belgrade';
 export const STATUSES=['Активный','На паузе','Завершил','Ожидает старта','Нужно уточнить'];
 export const BASES=['Beginners','Middle','Hard','Simple','Online','Gym','С нуля','Сейчас плана нет'];
 export const GOAL_STATUSES=['Желание клиента','Согласовано','Предложение тренера','Рабочая цель тренера'];
 export const TEMPLATES=['Привет! Как дела?','Привет! Как самочувствие?','Привет! Как прошла тренировка?'];
 const stamp=()=>new Date().toISOString();
-export const id=prefix=>prefix+'-'+crypto.randomUUID();
-export function localDate(at=new Date()){
-  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:TIMEZONE,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(at);
-  const value=k=>parts.find(x=>x.type===k).value;return value('year')+'-'+value('month')+'-'+value('day');
-}
-export function validDate(s){return typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s+'T12:00:00Z'))&&new Date(s+'T12:00:00Z').toISOString().slice(0,10)===s;}
-export function addDays(day,n){if(!validDate(day)||!Number.isInteger(n))throw Error('Некорректная дата');const d=new Date(day+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
 export function emptyState(){return {schemaVersion:SCHEMA,revision:0,clients:{},goals:{},tasks:{},records:{},events:[],settings:{waitDays:2},createdAt:stamp(),updatedAt:stamp()};}
 export function clone(value){return JSON.parse(JSON.stringify(value));}
 export function normalizeSearch(text){const map={а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'i',к:'k',л:'l',м:'m',н:'n',о:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ф:'f',х:'h',ц:'ts',ч:'ch',ш:'sh',щ:'shch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya'};return String(text||'').toLowerCase().replace(/[а-яё]/g,c=>map[c]).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/kh/g,'h').replace(/ya|ia/g,'a').replace(/iy|ii|yi|y|j/g,'i').replace(/[^a-z0-9]/g,'');}
@@ -23,12 +19,35 @@ export function validateState(s){
   for(const [key,g] of Object.entries(s.goals))if(!g||g.id!==key||!s.clients[g.clientId]||typeof g.title!=='string'||!g.title.trim()||g.title.length>500||!GOAL_STATUSES.includes(g.status))throw Error('Некорректная цель');
   for(const [key,t] of Object.entries(s.tasks))if(!t||t.id!==key||!s.clients[t.clientId]||typeof t.title!=='string'||!t.title.trim()||!['todo','waiting','done'].includes(t.phase)||!['current','discussion'].includes(t.lane)||!Number.isInteger(t.waitDays)||t.waitDays<1||t.waitDays>30||!Number.isInteger(t.outboundCount)||t.outboundCount<0||t.due!==null&&!validDate(t.due)||t.checkOn!==null&&!validDate(t.checkOn))throw Error('Некорректная задача');
   for(const [key,r] of Object.entries(s.records))if(!r||r.id!==key||!s.clients[r.clientId]||typeof r.text!=='string'||r.text.length>16000)throw Error('Некорректная запись');
+  for(const e of s.events)if(e?.type==='client-movement'&&(!Object.prototype.hasOwnProperty.call(s.clients,e.clientId)||!validDate(e.day)||typeof e.at!=='string'||!STATUSES.includes(e.status)||![null,'new','returned','paused','ended'].includes(e.movement)))throw Error('Некорректная запись движения клиентов');
+  validateAccounting(s);
   return s;
 }
 export function event(s,type,clientId,entityId,details={}){s.events.push({id:id('event'),type,clientId,entityId,at:stamp(),...details});}
 export function filterClients(s,f={}){const query=normalizeSearch(f.query);return Object.values(s.clients).filter(c=>(!query||normalizeSearch(c.name+' '+(c.aliases||[]).join(' ')).includes(query))&&(!f.role||f.role==='all'||c.role===f.role)&&(!f.status||f.status==='all'||c.status===f.status)&&(!f.format||f.format==='all'||(c.currentFormat||c.format)===f.format)&&(!f.basis||f.basis==='all'||c.basis===f.basis)&&(!f.level||f.level==='all'||c.level===f.level)&&(!f.personal||f.personal==='all'||c.personal===f.personal)).sort((a,b)=>(a.sourceNumber||9999)-(b.sourceNumber||9999)||a.name.localeCompare(b.name,'ru'));}
-export function createClient(s,values){const name=String(values.name||'').trim();if(!name||name.length>180)throw Error('Введи имя клиента');const client={id:id('client'),aliases:[],role:'Клиент',status:'Активный',format:'Уточнить',currentFormat:null,group:'Уточнить',personal:'unknown',basis:'Сейчас плана нет',level:'Обычное',features:[],rules:[],camps:[],zones:null,telegram:null,lastContact:null,context:'',...values,name};s.clients[client.id]=client;event(s,'client-created',client.id,client.id);return client;}
-export function editClient(s,clientId,values){const c=s.clients[clientId];if(!c)throw Error('Клиент не найден');const allowed=['name','role','status','format','currentFormat','group','personal','basis','level','context','telegram'];for(const k of allowed)if(k in values)c[k]=values[k];event(s,'client-edited',clientId,clientId);}
+function recordMovement(s, client, previous, day) {
+  if (client.role !== 'Клиент' || client.status === previous) return;
+  if (!validDate(day) || day > localDate()) throw Error('Проверь дату изменения статуса');
+  const history = s.events.filter(e => e.type === 'client-movement' && e.clientId === client.id);
+  if (history.some(e => e.day > day)) throw Error('Дата раньше предыдущего изменения статуса');
+  const previouslyActive = history.some(e => e.status === 'Активный');
+  const movement = client.status === 'Активный'
+    ? (!previouslyActive && [null, 'Ожидает старта'].includes(previous) ? 'new' : 'returned')
+    : ({ 'На паузе': 'paused', 'Завершил': 'ended' })[client.status] ?? null;
+  event(s, 'client-movement', client.id, client.id, { day, status: client.status, previous, movement });
+}
+export function createClient(s,values,day=localDate()){
+  const name=String(values.name||'').trim();if(!name||name.length>180)throw Error('Введи имя клиента');
+  const client={id:id('client'),aliases:[],role:'Клиент',status:'Активный',format:'Уточнить',currentFormat:null,group:'Уточнить',personal:'unknown',basis:'Сейчас плана нет',level:'Обычное',features:[],rules:[],camps:[],zones:null,telegram:null,lastContact:null,context:'',...values,name};
+  s.clients[client.id]=client;event(s,'client-created',client.id,client.id);recordMovement(s,client,null,day);return client;
+}
+export function editClient(s,clientId,values,day=localDate()){
+  const c=s.clients[clientId];if(!c)throw Error('Клиент не найден');
+  const previous=c.role==='Клиент'?c.status:null;
+  const allowed=['name','role','status','format','currentFormat','group','personal','basis','level','context','telegram'];
+  for(const k of allowed)if(k in values)c[k]=values[k];
+  event(s,'client-edited',clientId,clientId);recordMovement(s,c,previous,day);
+}
 export function setTelegramBinding(s,clientId,binding){
   const c=s.clients[clientId];if(!c)throw Error('Клиент не найден');
   if(s.settings.pendingTelegram?.[clientId])throw Error('Сначала проверь предыдущую неподтверждённую отправку');
@@ -75,4 +94,4 @@ export function applyAgentResult(s,recordId,result){
 }
 export function parseImport(text){if(typeof text!=='string'||text.length>8*1024*1024)throw Error('Файл слишком большой');const raw=JSON.parse(text);if(raw?.format!=='the-trail-clients-backup'||raw.schemaVersion!==SCHEMA||!raw.state)throw Error('Это не файл базы THE.TRAIL Clients');return validateState(raw.state);}
 export function exportState(s){validateState(s);return JSON.stringify({format:'the-trail-clients-backup',schemaVersion:SCHEMA,exportedAt:stamp(),state:s},null,2);}
-export function mergeState(current,incoming){validateState(incoming);const next=clone(current);for(const name of ['clients','goals','tasks','records'])for(const [key,value] of Object.entries(incoming[name]))if(!next[name][key])next[name][key]=clone(value);const events=new Set(next.events.map(e=>e.id));for(const e of incoming.events)if(!events.has(e.id)){next.events.push(clone(e));events.add(e.id);}next.events.sort((a,b)=>a.at.localeCompare(b.at));return validateState(next);}
+export function mergeState(current,incoming){validateState(incoming);const next=clone(current);for(const name of ['clients','goals','tasks','records'])for(const [key,value] of Object.entries(incoming[name]))if(!next[name][key])next[name][key]=clone(value);const events=new Set(next.events.map(e=>e.id));for(const e of incoming.events)if(!events.has(e.id)){next.events.push(clone(e));events.add(e.id);}next.events.sort((a,b)=>a.at.localeCompare(b.at));mergeAccounting(next,incoming);return validateState(next);}

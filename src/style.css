@@ -140,15 +140,34 @@ button.primary.recording{background:#b52f3e;color:#fff;border-color:#b52f3e;box-
 button.primary.recording::before{content:'';display:inline-block;width:12px;height:12px;background:currentColor;border-radius:2px;margin-right:10px}
 button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opacity:1}
 .recording-status{color:var(--danger);font-weight:600}
+.account-section{display:grid;gap:4px}
+.account-section h2{margin-bottom:4px}
+.account-line,button.account-line{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,max-content);align-items:center;gap:8px 16px;width:100%;min-height:44px;padding:8px 0;text-align:left}
+.account-line+.account-line,.account-reminder+.account-reminder,.account-service+.account-service{border-top:1px solid var(--line)}
+.account-label{min-width:0;overflow-wrap:anywhere}
+.account-label small{display:block;color:var(--muted);font-weight:400}
+.account-value{text-align:right;font-weight:650;font-variant-numeric:tabular-nums;max-width:15ch;overflow-wrap:anywhere}
+.account-total{font-size:25px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.account-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.account-fields label{min-width:0}
+.account-allocation{border-top:1px solid var(--line);padding-top:10px}
+.account-allocation button{justify-self:start}
+input.account-month{width:auto;max-width:100%}
 @media(hover:hover){button:not(:disabled):not(.primary):not(.sent):hover,.client-tile:hover,.task-tile:hover{background:var(--soft)}}
 @media(max-width:560px){
   .tiles,.filters,.system{grid-template-columns:minmax(0,1fr)}
   main{padding:20px 16px calc(110px + env(safe-area-inset-bottom))}
   .app-header{padding-right:16px;padding-left:16px}
-  .app-nav a{padding:10px 18px}
+  .app-nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;padding-inline:6px}
+  .app-nav a{padding:10px 2px;text-align:center;font-size:13px;overflow-wrap:anywhere}
   .brand-sub{display:block;margin:0;font-size:12px}
   .zones{grid-template-columns:repeat(2,minmax(0,1fr))}
   .task-heading{gap:6px}
+}
+@media(max-width:360px){
+  .account-fields{grid-template-columns:minmax(0,1fr)}
+  .account-line,button.account-line{gap:6px 10px}
+  .account-value{max-width:12ch}
 }
 @media(prefers-reduced-motion:no-preference){button,a{transition:background-color .12s ease}}
 @media(prefers-color-scheme:dark){:root{
