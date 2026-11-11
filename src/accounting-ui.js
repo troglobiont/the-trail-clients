@@ -1,5 +1,6 @@
 import * as A from './accounting.js';
 import { localDate } from './model-utils.js';
+import { ledgerRows } from './ledger-import.js';
 
 const today = () => localDate();
 const currencyOptions = A.CURRENCIES.map(c => [c, ({ RSD: 'RSD · динары', RUB: 'RUB · рубли', EUR: 'EUR · евро', USD: 'USD · доллары' })[c]]);
@@ -8,7 +9,7 @@ const monthLabel = month => new Intl.DateTimeFormat('ru-RU', { month: 'long', ye
   .format(new Date(month + '-15T12:00:00Z')).replace(/\s*г\.$/, '');
 const isMonthly = service => service.kind !== 'personal';
 
-export function createAccountingUI({ state, el, append, button, row, field, input, select, text, section, modal, commit, render, formatDate, openClient, navigate, message }) {
+export function createAccountingUI({ state, el, append, button, row, field, input, select, text, section, modal, commit, render, formatDate, openClient, navigate, message, importLedger }) {
   let month = today().slice(0, 7);
   let tab = 'summary';
   const book = () => A.accounting(state());
@@ -299,15 +300,50 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return group('По оплатам', ...list);
   }
 
+  function sourceSummary() {
+    const source = state().ledger?.months.find(item => item.month === month);
+    if (!source) return null;
+    const labels = { ...A.BLOCKS, personal: 'Стоимость персональных занятий', expenses: 'Расходы', balance: 'Остаток по Белграду и персональным' };
+    return group('По бухгалтерии за ' + monthLabel(month),
+      ...Object.entries(labels).map(([block, label]) => line(label, '', totals(source.blocks[block] || {}))));
+  }
+
+  function sourceLine(entry, clientId) {
+    const labels = { payment: 'Оплата по таблице', shared: 'Общий платёж семьи', review: 'Нужно сверить', repeat: 'Повтор строки', session: 'Персональные занятия', expense: 'Расход' };
+    const information = [entry.date ? formatDate(entry.date) : '', labels[entry.kind], entry.detail].filter(Boolean).join(' · ');
+    const title = clientId ? monthLabel(entry.month) : entry.name;
+    const owner = !clientId && entry.owners.length === 1 ? entry.owners[0] : null;
+    return line(title, information, totals(entry.values), owner ? () => openClient(owner) : null);
+  }
+
+  function sourceOperations() {
+    const entries = ledgerRows(state(), { period: month });
+    if (!entries.length) return null;
+    return group('Строки из бухгалтерии', ...Object.entries({ ...A.BLOCKS, expenses: 'Расходы' }).map(([block, label]) => {
+      const group = entries.filter(entry => entry.block === block);
+      return group.length && section(`${label} · ${group.length}`, `ledger-${month}-${block}`, group.map(entry => sourceLine(entry)));
+    }));
+  }
+
+  function lastPayment(clientId, imported, history) {
+    const archive = imported.filter(entry => entry.kind === 'payment' && entry.date).sort((a,b) => b.date.localeCompare(a.date))[0];
+    const manual = history.find(entry => entry.kind === 'payment' && !entry.voided);
+    if (manual && (!archive || manual.date >= archive.date)) {
+      const part = manual.allocations.filter(item => findService(item.serviceId).clientId === clientId).reduce((sum, item) => sum + item.part, 0);
+      return line('Последняя оплата', formatDate(manual.date), A.money(part, manual.currency));
+    }
+    return archive && line('Последняя оплата по таблице', formatDate(archive.date) + ' · ' + archive.date.slice(0,4), totals(archive.values));
+  }
+
   function summary() {
     const summary = A.summarize(state(), month);
-    const metrics = append(el('div', null, 'panel stack'), text('Получено за месяц'), el('h2', totals(summary.receipts), 'account-total'));
+    const metrics = append(el('div', null, 'panel stack'), text(state().ledger ? 'Оплаты, записанные в приложении' : 'Получено за месяц'), el('h2', totals(summary.receipts), 'account-total'));
     const byService = group('По услугам', ...Object.entries(A.SERVICES).map(([key, label]) => line(label, '', totals(summary.services[key] || {}))));
     const byBlock = section('Итоги по блокам', 'account-totals', [
       ...Object.entries(A.BLOCKS).map(([key, label]) => line(label, 'Поступления', totals(summary.blocks[key] || {}))),
       line('Расходы', '', totals(summary.expenses)), line('Остаток по Белграду и персональным', '', totals(summary.localBalance))
     ]);
-    return [metrics, byService, group('Персональные занятия', line(`Проведено · ${summary.count}`, 'Стоимость проведённых занятий', totals(summary.sessions))), remindersPanel(3, month), byBlock];
+    return [sourceSummary(), metrics, byService, group('Персональные занятия', line(`Проведено · ${summary.count}`, 'Стоимость проведённых занятий', totals(summary.sessions))), remindersPanel(3, month), byBlock];
   }
 
   function movement() {
@@ -340,8 +376,12 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       append(page, ...summary());
     } else if (tab === 'operations') {
       const entries = A.operations(state(), { month, includeVoided: true });
-      append(page, row(button('+ Расход', () => editExpense())), group('Операции за месяц', ...(entries.length ? entries.map(o => operationLine(o)) : [text('Операций пока нет')])));
+      append(page, sourceOperations(), row(button('+ Расход', () => editExpense())), group(state().ledger ? 'Записано в приложении' : 'Операции за месяц', ...(entries.length ? entries.map(o => operationLine(o)) : [text('Операций пока нет')])));
     } else append(page, ...movement());
+    page.append(section('Импорт учёта', 'account-import', [
+      state().ledger && text('Бухгалтерия загружена по ' + formatDate(state().ledger.asOf)),
+      button('Импортировать файл учёта 2026', importLedger)
+    ]));
     return page;
   }
 
@@ -349,6 +389,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const services = A.clientServices(state(), client.id);
     const active = services.filter(s => A.activeService(s, today()));
     const history = A.operations(state(), { clientId: client.id, includeVoided: true });
+    const imported = ledgerRows(state(), { clientId: client.id });
     const serviceLine = s => {
       const detail = `${A.BLOCKS[s.block]} · ${isMonthly(s) ? 'оплата ' + s.day + '-го' : s.place}`;
       const serviceRow = line(serviceTitle(s), detail, A.money(s.rate, s.currency), () => editService(client.id, s));
@@ -369,9 +410,10 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       services.some(s => !isMonthly(s)) && button('+ Занятие', () => editSession({ clientId: client.id })), button('Добавить услугу', () => editService(client.id), 'subtle'));
     const previous = services.filter(s => !active.includes(s));
     return section('Оплаты и занятия', `${client.id}-account`, [
-      ...active.map(serviceLine), !services.length && text('Услуги и тарифы пока не заданы.'), controls,
+      lastPayment(client.id, imported, history), ...active.map(serviceLine), !services.length && text('Услуги и тарифы пока не заданы.'), controls,
       previous.length && section('Другие периоды услуг', `${client.id}-past-services`, previous.map(serviceLine)),
-      history.length && section('История учёта · ' + history.length, `${client.id}-account-history`, history.map(o => operationLine(o, client.id)))
+      imported.length && section('Из бухгалтерии 2026 · ' + imported.length, `${client.id}-source-history`, imported.map(entry => sourceLine(entry, client.id))),
+      history.length && section('Записано в приложении · ' + history.length, `${client.id}-account-history`, history.map(o => operationLine(o, client.id)))
     ]);
   }
 

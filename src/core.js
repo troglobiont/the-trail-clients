@@ -1,5 +1,6 @@
 import { addDays, id, localDate, validDate } from './model-utils.js';
 import { mergeAccounting, validateAccounting } from './accounting.js';
+import { validateStoredLedger } from './ledger-import.js';
 export { TIMEZONE, id, localDate, validDate, addDays } from './model-utils.js';
 
 export const SCHEMA=1;
@@ -21,10 +22,26 @@ export function validateState(s){
   for(const [key,r] of Object.entries(s.records))if(!r||r.id!==key||!s.clients[r.clientId]||typeof r.text!=='string'||r.text.length>16000)throw Error('Некорректная запись');
   for(const e of s.events)if(e?.type==='client-movement'&&(!Object.prototype.hasOwnProperty.call(s.clients,e.clientId)||!validDate(e.day)||typeof e.at!=='string'||!STATUSES.includes(e.status)||![null,'new','returned','paused','ended'].includes(e.movement)))throw Error('Некорректная запись движения клиентов');
   validateAccounting(s);
+  validateStoredLedger(s);
   return s;
 }
 export function event(s,type,clientId,entityId,details={}){s.events.push({id:id('event'),type,clientId,entityId,at:stamp(),...details});}
-export function filterClients(s,f={}){const query=normalizeSearch(f.query);return Object.values(s.clients).filter(c=>(!query||normalizeSearch(c.name+' '+(c.aliases||[]).join(' ')).includes(query))&&(!f.role||f.role==='all'||c.role===f.role)&&(!f.status||f.status==='all'||c.status===f.status)&&(!f.format||f.format==='all'||(c.currentFormat||c.format)===f.format)&&(!f.basis||f.basis==='all'||c.basis===f.basis)&&(!f.level||f.level==='all'||c.level===f.level)&&(!f.personal||f.personal==='all'||c.personal===f.personal)).sort((a,b)=>(a.sourceNumber||9999)-(b.sourceNumber||9999)||a.name.localeCompare(b.name,'ru'));}
+const directorySort = new Intl.Collator('ru', { sensitivity: 'base' });
+export function filterClients(s, f = {}) {
+  const words = String(f.query || '').split(/\s+/).map(normalizeSearch).filter(Boolean);
+  return Object.values(s.clients).filter(c => {
+    const format = c.currentFormat || c.format;
+    const labels = [c.name, ...(c.aliases || [])].map(normalizeSearch);
+    return words.every(word => labels.some(label => label.includes(word)))
+      && (!f.role || f.role === 'all' || c.role === f.role)
+      && (!f.status || f.status === 'all' || c.status === f.status)
+      && (!f.format || f.format === 'all' || format === f.format)
+      && (!f.quick || f.quick === 'all' || (f.quick === 'gym' ? c.personal === 'gym' : format === f.quick))
+      && (!f.basis || f.basis === 'all' || c.basis === f.basis)
+      && (!f.level || f.level === 'all' || c.level === f.level)
+      && (!f.personal || f.personal === 'all' || c.personal === f.personal);
+  }).sort((a,b) => directorySort.compare(a.name, b.name) || a.id.localeCompare(b.id));
+}
 function recordMovement(s, client, previous, day) {
   if (client.role !== 'Клиент' || client.status === previous) return;
   if (!validDate(day) || day > localDate()) throw Error('Проверь дату изменения статуса');
@@ -94,4 +111,4 @@ export function applyAgentResult(s,recordId,result){
 }
 export function parseImport(text){if(typeof text!=='string'||text.length>8*1024*1024)throw Error('Файл слишком большой');const raw=JSON.parse(text);if(raw?.format!=='the-trail-clients-backup'||raw.schemaVersion!==SCHEMA||!raw.state)throw Error('Это не файл базы THE.TRAIL Clients');return validateState(raw.state);}
 export function exportState(s){validateState(s);return JSON.stringify({format:'the-trail-clients-backup',schemaVersion:SCHEMA,exportedAt:stamp(),state:s},null,2);}
-export function mergeState(current,incoming){validateState(incoming);const next=clone(current);for(const name of ['clients','goals','tasks','records'])for(const [key,value] of Object.entries(incoming[name]))if(!next[name][key])next[name][key]=clone(value);const events=new Set(next.events.map(e=>e.id));for(const e of incoming.events)if(!events.has(e.id)){next.events.push(clone(e));events.add(e.id);}next.events.sort((a,b)=>a.at.localeCompare(b.at));mergeAccounting(next,incoming);return validateState(next);}
+export function mergeState(current,incoming){validateState(incoming);const next=clone(current);for(const name of ['clients','goals','tasks','records'])for(const [key,value] of Object.entries(incoming[name]))if(!next[name][key])next[name][key]=clone(value);const events=new Set(next.events.map(e=>e.id));for(const e of incoming.events)if(!events.has(e.id)){next.events.push(clone(e));events.add(e.id);}next.events.sort((a,b)=>a.at.localeCompare(b.at));mergeAccounting(next,incoming);if(!next.ledger&&incoming.ledger)next.ledger=clone(incoming.ledger);return validateState(next);}

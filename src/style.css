@@ -50,6 +50,15 @@ main{max-width:920px;margin:0 auto;padding:24px 20px calc(110px + env(safe-area-
 .tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .client-tile,.task-tile{display:flex;flex-direction:column;align-items:flex-start;gap:8px;text-align:left;width:100%;padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--panel);color:var(--text);min-width:0;font-weight:400}
 .client-tile-name{font-size:17px;font-weight:650;line-height:1.35}
+.catalog-page{gap:8px}
+.catalog-page .page-title{margin-bottom:0}
+.catalog-quick{gap:6px}
+.catalog-quick button{border:1px solid var(--line);padding:5px 12px;font-size:13px}
+.catalog-quick button[aria-pressed=true]{background:var(--ink);color:var(--on-ink);border-color:var(--ink)}
+.client-directory{display:grid}
+.client-directory-item{width:100%;text-align:left;border-radius:0;padding:8px 6px;font-weight:500;overflow-wrap:anywhere}
+.client-directory-item+.client-directory-item{border-top-color:var(--line)}
+.catalog-page .fold summary{min-height:44px;padding-block:10px}
 .task-client-name{font-size:14px;font-weight:400;color:var(--muted)}
 .chip{display:inline-block;border-radius:6px;padding:3px 7px;background:var(--soft);font-size:12px;line-height:1.5;font-weight:450;color:var(--muted)}
 .chip.emphasis{background:var(--ink);color:var(--on-ink);font-weight:550}
