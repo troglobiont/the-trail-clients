@@ -1,8 +1,9 @@
-import {Capacitor,registerPlugin} from '@capacitor/core';
+import {Capacitor,CapacitorHttp,registerPlugin} from '@capacitor/core';
 import {App} from '@capacitor/app';
 import {Filesystem,Directory,Encoding} from '@capacitor/filesystem';
 import {Share} from '@capacitor/share';
 import {CapacitorUpdater} from '@capgo/capacitor-updater';
+import {readPublicRelease} from '../src/updates.js';
 const Device=registerPlugin('TrailDevice');
 const native=Capacitor.isNativePlatform();
 window.TrailNative={
@@ -18,11 +19,11 @@ window.TrailNative={
   async microphonePermission(){if(Number((await App.getInfo()).build)<6)return {state:'native-update-required'};return Device.microphonePermission();},
   async requestMicrophonePermission(){if(Number((await App.getInfo()).build)<6)return {state:'native-update-required'};return Device.requestMicrophonePermission();},
   async openMicrophoneSettings(){return Device.openMicrophoneSettings();},
-  async readRelease(){return Device.readRelease();},
+  async readRelease(){return readPublicRelease(options=>CapacitorHttp.get(options));},
   async downloadUpdate(manifest,onProgress){
-    const resolved=await Device.resolveAsset({assetId:manifest.assetId});
+    const url=manifest.direct?manifest.bundle.url:(await Device.resolveAsset({assetId:manifest.assetId})).url;
     const listener=await CapacitorUpdater.addListener('download',e=>{if(e.bundle?.version===manifest.version)onProgress(e.percent);});
-    try{return await CapacitorUpdater.download({version:manifest.version,url:resolved.url,checksum:manifest.bundle.sha256});}
+    try{return await CapacitorUpdater.download({version:manifest.version,url,checksum:manifest.bundle.sha256});}
     finally{await listener.remove();}
   },
   async applyUpdate(bundle){sessionStorage.setItem('trail-update-route',location.hash);await CapacitorUpdater.set({id:bundle.id});},
@@ -31,7 +32,7 @@ window.TrailNative={
 };
 if(native){
   const saved=sessionStorage.getItem('trail-update-route');
-  if(saved&&/^#(?:todo|clients|settings|client\/[a-zA-Z0-9_-]+)$/.test(saved))location.hash=saved;
+  if(saved&&/^#(?:todo|clients|account|settings|client\/[a-zA-Z0-9_-]+)$/.test(saved))location.hash=saved;
   sessionStorage.removeItem('trail-update-route');
   App.addListener('backButton',()=>{if(document.querySelector('dialog[open]'))document.querySelector('dialog[open]').close();else if(location.hash.startsWith('#client/'))history.back();else if(location.hash!=='#todo')location.hash='#todo';else App.minimizeApp();});
   App.addListener('appStateChange',state=>{if(state.isActive)window.dispatchEvent(new Event('trail-app-active'));});
