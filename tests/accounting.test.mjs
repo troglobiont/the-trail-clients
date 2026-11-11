@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as A from '../src/accounting.js';
 import { createClient, createTask, editClient, emptyState, exportState, mergeState, parseImport } from '../src/core.js';
 import { createStore } from '../src/store.js';
+import { beginCloudSync } from '../src/cloud-state.js';
 
 function enrollment(state, client, overrides = {}) {
   return A.saveService(state, {
@@ -74,6 +75,23 @@ test('sessions consume advances without increasing receipts and expenses affect 
   assert.deepEqual(summary.receipts, { RSD: 4000000 });
   assert.deepEqual(summary.sessions, { RSD: 800000 });
   assert.deepEqual(summary.localBalance, { RSD: 3400000 });
+});
+
+test('a paid session is atomic and creates one receipt for the editable amount', async () => {
+  const state = emptyState();
+  const client = createClient(state, { name:'Клиент' }, '2024-10-01');
+  const service = enrollment(state, client, { kind:'personal', block:'personal', day:null, reminder:false, place:'Зал', rate:400000 });
+  const values = { serviceId:service.id, date:'2024-11-11', place:'Зал', currency:'RSD', amount:400000, note:'' };
+  assert.throws(() => A.savePaidSession(state, values, 0), /сумму/);
+  assert.equal(A.operations(state).length, 0);
+  beginCloudSync(state, '10000000-0000-4000-8000-000000000001');
+  const store = await createStore({ load:async () => JSON.stringify(state), save:async () => {} });
+  const [session, receipt] = await store.mutate(next => A.savePaidSession(next, values, 300000));
+  assert.equal(receipt.sessionId, session.id);
+  assert.deepEqual(A.summarize(store.state(), '2024-11').receipts, { RSD:300000 });
+  assert.deepEqual(A.serviceBalance(store.state(), service.id), { received:300000, used:400000, balance:-100000 });
+  assert.deepEqual(Object.keys(store.state().cloudSync.pending).filter(key => key.startsWith('operations/')).sort(),
+    [receipt, session].map(item => 'operations/' + item.id).sort());
 });
 
 test('legacy backups open, accounting survives restore, and merge does not duplicate a payment', async () => {

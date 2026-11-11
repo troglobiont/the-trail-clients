@@ -56,8 +56,10 @@ main{max-width:920px;margin:0 auto;padding:24px 20px calc(110px + env(safe-area-
 .catalog-quick button{border:1px solid var(--line);padding:5px 12px;font-size:13px}
 .catalog-quick button[aria-pressed=true]{background:var(--ink);color:var(--on-ink);border-color:var(--ink)}
 .client-directory{display:grid}
+.directory-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}
+.directory-row+.directory-row{border-top:1px solid var(--line)}
 .client-directory-item{width:100%;text-align:left;border-radius:0;padding:8px 6px;font-weight:500;overflow-wrap:anywhere}
-.client-directory-item+.client-directory-item{border-top-color:var(--line)}
+.directory-account{min-height:44px;font-size:13px;color:var(--muted);padding-inline:10px}
 .catalog-page .fold summary{min-height:44px;padding-block:10px}
 .task-client-name{font-size:14px;font-weight:400;color:var(--muted)}
 .chip{display:inline-block;border-radius:6px;padding:3px 7px;background:var(--soft);font-size:12px;line-height:1.5;font-weight:450;color:var(--muted)}
@@ -90,6 +92,7 @@ details[open]>summary{margin-bottom:4px;color:var(--text)}
 .reference-sections>.fold>summary{min-height:48px;padding:12px 0}
 .feature-section{gap:10px}
 .feature-section>.row{min-height:36px}
+button.feature-add{background:var(--soft);border-color:var(--line);font-size:14px;padding:6px 12px}
 .feature{padding:13px 14px 6px;background:var(--feature-bg);border-radius:10px}
 .feature-text{font-size:16px;font-weight:550;line-height:1.5}
 .feature-footer{gap:4px;margin-top:4px}
@@ -134,7 +137,7 @@ progress{width:100%;height:12px;accent-color:var(--ink)}
 [hidden]{display:none!important}
 .record-result{padding:12px;background:var(--soft);border-radius:10px}
 .form-error{color:var(--danger)}
-.telegram-panel{gap:8px;border-top:1px solid var(--line);padding-top:16px}
+.telegram-panel{gap:8px}
 .telegram-linked{color:var(--success-text);margin-top:2px}
 .telegram-recipient{font-size:16px;font-weight:600;line-height:1.4}
 .telegram-controls{gap:4px;margin:-4px 0 0 -8px}
@@ -153,7 +156,7 @@ button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opa
 .account-section{display:grid;gap:4px}
 .account-section h2{margin-bottom:4px}
 .account-line,button.account-line{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,max-content);align-items:center;gap:8px 16px;width:100%;min-height:44px;padding:8px 0;text-align:left}
-.account-line+.account-line,.account-reminder+.account-reminder,.account-service+.account-service{border-top:1px solid var(--line)}
+.account-line+.account-line,.account-reminder+.account-reminder{border-top:1px solid var(--line)}
 .account-label{min-width:0;overflow-wrap:anywhere}
 .account-label small{display:block;color:var(--muted);font-weight:400}
 .account-value{text-align:right;font-weight:650;font-variant-numeric:tabular-nums;max-width:15ch;overflow-wrap:anywhere}
@@ -162,6 +165,12 @@ button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opa
 .account-fields label{min-width:0}
 .account-allocation{border-top:1px solid var(--line);padding-top:10px}
 .account-allocation button{justify-self:start}
+.account-client-status{padding:2px 12px;background:var(--soft);border-radius:10px}
+.account-main-action{width:100%}
+.account-extra-action{justify-self:start;text-align:left;border-color:var(--line)}
+.account-picker{gap:0}
+.account-confirmation{padding-inline:10px;background:var(--success);color:var(--success-text);border-radius:10px}
+.account-form-client{font-weight:600}
 input.account-month{width:auto;max-width:100%}
 @media(hover:hover){button:not(:disabled):not(.primary):not(.sent):hover,.client-tile:hover,.task-tile:hover{background:var(--soft)}}
 @media(max-width:560px){

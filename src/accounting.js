@@ -76,6 +76,7 @@ function checkOperation(book, operation) {
   if (!validDate(date) || !CURRENCIES.includes(currency) || !validMoney(amount) || !validNote(note) || typeof voided !== 'boolean') throw Error('Проверь дату, валюту и сумму операции');
   if (kind === 'payment') {
     const { payer, allocations } = operation;
+    if (operation.sessionId !== undefined && !validKey(operation.sessionId)) throw Error('Некорректная связь с занятием');
     if (!validNote(payer) || !Array.isArray(allocations) || !allocations.length || allocations.length > 120) throw Error('Укажи, что покрывает оплата');
     let allocated = 0;
     const targets = new Set();
@@ -117,7 +118,7 @@ export function validateAccounting(state) {
   }
 }
 
-export function saveOperation(state, values, operationId = id('operation')) {
+function prepareOperation(state, values, operationId) {
   const book = accounting(state);
   const prior = book.operations[operationId];
   if (!validKey(operationId) || (prior && prior.kind !== values.kind)) throw Error('Некорректная операция');
@@ -126,8 +127,23 @@ export function saveOperation(state, values, operationId = id('operation')) {
   if (operation.date > localDate()) throw Error('Укажи дату фактической операции');
   if (operation.kind === 'session' && (prior?.serviceId !== operation.serviceId || prior?.date !== operation.date)
       && !activeService(book.services[operation.serviceId], operation.date)) throw Error('На эту дату услуга не действовала');
+  return operation;
+}
+
+export function saveOperation(state, values, operationId = id('operation')) {
+  const operation = prepareOperation(state, values, operationId);
   writable(state).operations[operationId] = operation;
   return operation;
+}
+
+export function savePaidSession(state, values, received) {
+  const session = prepareOperation(state, { ...values, kind: 'session' }, id('operation'));
+  const payment = prepareOperation(state, {
+    kind: 'payment', date: session.date, amount: received, currency: session.currency, note: '', payer: '',
+    sessionId: session.id, allocations: [{ serviceId: session.serviceId, month: null, part: received, credit: received }]
+  }, id('operation'));
+  Object.assign(writable(state).operations, { [session.id]: session, [payment.id]: payment });
+  return [session, payment];
 }
 
 export function setVoided(state, operationId, voided) {
