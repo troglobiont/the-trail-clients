@@ -7,7 +7,7 @@ const version=JSON.parse(await readFile(path.join(root,'package.json'),'utf8')).
 if(!/^\d+\.\d+\.\d+$/.test(version))throw Error('Invalid application version');
 const dist=path.join(root,'dist');await rm(dist,{recursive:true,force:true});await mkdir(dist,{recursive:true});
 await cp(path.join(root,'index.html'),path.join(dist,'index.html'));
-await cp(path.join(root,'icon.svg'),path.join(dist,'icon.svg'));
+await cp(path.join(root,'mobile/android/app/src/main/res/drawable-nodpi/trail_logo.png'),path.join(dist,'icon.png'));
 await cp(path.join(root,'src/style.css'),path.join(dist,'style.css'));
 await build({entryPoints:[path.join(root,'src/main.js')],outfile:path.join(dist,'app.js'),bundle:true,format:'iife',target:['chrome90'],minify:true,define:{__APP_VERSION__:JSON.stringify(version)}});
 await build({entryPoints:[path.join(root,'mobile/native-entry.js')],outfile:path.join(dist,'native.js'),bundle:true,format:'iife',target:['chrome90'],minify:true});
