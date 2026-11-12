@@ -263,6 +263,78 @@ export function summarize(state, month) {
   return result;
 }
 
+function receiptKey(owners,date,currency,amount) {
+  return date && owners.length ? JSON.stringify([[...new Set(owners)].sort(),date,currency,amount]) : null;
+}
+
+export function combinedSummary(state, month) {
+  const result = summarize(state,month), book = accounting(state);
+  result.imported = { receipts:0, expenses:0, sessionRows:0, skippedDuplicates:0, review:0 };
+  const nativeByKey = new Map();
+  const historicalServices = new Map();
+  const ledgerByKey = new Map();
+  const payments = [];
+  for (const service of Object.values(book.services)) {
+    const services = historicalServices.get(service.clientId) || [];
+    services.push(service);
+    historicalServices.set(service.clientId,services);
+  }
+  for (const operation of operations(state,{month})) {
+    if (operation.kind !== 'payment') continue;
+    const owners = operation.allocations.map(item => book.services[item.serviceId].clientId);
+    const key = receiptKey(owners,operation.date,operation.currency,operation.amount);
+    nativeByKey.set(key,(nativeByKey.get(key)||0)+1);
+  }
+  for (const row of state.ledger?.rows || []) {
+    if (row.kind === 'review') {
+      if (row.month === month) result.imported.review++;
+      continue;
+    }
+    if (row.kind === 'payment' || row.kind === 'shared') {
+      if (!validDate(row.date) || !row.date.startsWith(month+'-')) continue;
+      for (const [currency,amount] of Object.entries(row.values)) if (amount > 0) {
+        const key = receiptKey(row.owners,row.date,currency,amount);
+        if (key) ledgerByKey.set(key,(ledgerByKey.get(key)||0)+1);
+        payments.push({row,currency,amount,key});
+      }
+      continue;
+    }
+    if (row.month !== month) continue;
+    if (row.kind === 'expense') {
+      for (const [currency,amount] of Object.entries(row.values)) {
+        addTotal(result.expenses,currency,amount);
+        addTotal(result.localBalance,currency,-amount);
+      }
+      result.imported.expenses++;
+    } else if (row.kind === 'session') {
+      for (const [currency,amount] of Object.entries(row.values)) addTotal(result.sessions,currency,amount);
+      const sessions = Number(/^([\d.]+) зан\./.exec(row.detail || '')?.[1]);
+      if (Number.isInteger(sessions) && sessions > 0) result.count += sessions;
+      result.imported.sessionRows++;
+    }
+  }
+  for (const {row,currency,amount,key} of payments) {
+    if (key && nativeByKey.get(key) === 1 && ledgerByKey.get(key) === 1) {
+      result.imported.skippedDuplicates++;
+      continue;
+    }
+    const candidates = row.owners.length === 1
+      ? (historicalServices.get(row.owners[0])||[]).filter(s=>s.block===row.block&&activeService(s,row.date))
+      : [];
+    const packageId = Object.hasOwn(PACKAGES,row.package) ? row.package
+      : candidates.length===1 ? servicePackage(candidates[0])
+      : row.block==='personal' ? 'personal'
+      : row.block==='online' ? 'unclassified-online'
+      : row.block==='belgrade' ? 'unclassified-belgrade' : 'unclassified';
+    addTotal(result.receipts,currency,amount);
+    addTotal(result.blocks[row.block]??={},currency,amount);
+    addTotal(result.services[packageId]??={},currency,amount);
+    if (row.block !== 'online') addTotal(result.localBalance,currency,amount);
+    result.imported.receipts++;
+  }
+  return result;
+}
+
 export function nextMonth(month, delta = 1) {
   const date = new Date(month + '-01T12:00:00Z');
   date.setUTCMonth(date.getUTCMonth() + delta);

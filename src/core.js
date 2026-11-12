@@ -1,7 +1,8 @@
 import { addDays, id, localDate, validDate } from './model-utils.js';
 import { mergeAccounting, validateAccounting } from './accounting.js';
-import { validateStoredLedger } from './ledger-import.js';
+import { nameKey, validateStoredLedger } from './ledger-import.js';
 import { validateCloudState } from './cloud-state.js';
+import { raceCatalog, raceDefinition, raceGoal, setProfile, setTraining } from './client-details.js';
 export { TIMEZONE, id, localDate, validDate, addDays } from './model-utils.js';
 
 export const SCHEMA=1;
@@ -55,7 +56,7 @@ export function filterClients(s, f = {}) {
       && (!f.role || f.role === 'all' || c.role === f.role)
       && (!f.status || f.status === 'all' || c.status === f.status)
       && (!f.format || f.format === 'all' || format === f.format)
-      && (!f.quick || f.quick === 'all' || (f.quick === 'gym' ? c.personal === 'gym' : format === f.quick))
+      && (!f.quick || f.quick === 'all' || (f.quick === 'gym' ? c.personal === 'gym' : c.format === f.quick))
       && (!f.basis || f.basis === 'all' || c.basis === f.basis)
       && (!f.level || f.level === 'all' || c.level === f.level)
       && (!f.personal || f.personal === 'all' || c.personal === f.personal);
@@ -74,41 +75,117 @@ function recordMovement(s, client, previous, day) {
 }
 export function createClient(s,values,day=localDate()){
   const name=String(values.name||'').trim();if(!name||name.length>180)throw Error('Введи имя клиента');
+  ensureUniqueName(s,name);
   const client={id:id('client'),aliases:[],role:'Клиент',status:'Активный',format:'Уточнить',currentFormat:null,group:'Уточнить',personal:'unknown',basis:'Сейчас плана нет',level:'Обычное',features:[],rules:[],camps:[],zones:null,telegram:null,lastContact:null,context:'',...values,name};
   s.clients[client.id]=client;event(s,'client-created',client.id,client.id);recordMovement(s,client,null,day);return client;
 }
 export function editClient(s,clientId,values,day=localDate()){
   const c=s.clients[clientId];if(!c)throw Error('Клиент не найден');
   const previous=c.role==='Клиент'?c.status:null;
-  const allowed=['name','role','status','format','currentFormat','group','personal','basis','level','context','telegram','engagement','teamRole','pause','billingNote'];
+  if (values.name && nameKey(values.name) !== nameKey(c.name)) ensureUniqueName(s,values.name,clientId);
+  const allowed=['name','role','status','format','currentFormat','group','personal','basis','level','context','rules','telegram','engagement','teamRole','pause','billingNote'];
   for(const k of allowed)if(k in values)c[k]=values[k];
   event(s,'client-edited',clientId,clientId);recordMovement(s,c,previous,day);
+}
+function ensureUniqueName(s,name,except) {
+  const key = nameKey(name);
+  if (Object.values(s.clients).some(c => c.id !== except && !c.mergedInto && [c.name,...(c.aliases || [])].some(value => nameKey(value) === key))) {
+    throw Error('Карточка с таким именем уже есть. Проверь другие категории, включая архив.');
+  }
+}
+export function saveProfile(s,clientId,values){
+  setProfile(s.clients[clientId],values);
+  event(s,'profile-edited',clientId,clientId);
+}
+export function saveTraining(s,clientId,values){
+  setTraining(s.clients[clientId],values);
+  event(s,'training-edited',clientId,clientId);
+}
+export function noteTelegramOpen(s,clientId,peerId,at=stamp()){
+  const c=s.clients[clientId];
+  if(!c || c.telegram?.peerId !== peerId || !Number.isFinite(Date.parse(at))) return;
+  if(!c.telegramOpenedAt || Date.parse(c.telegramOpenedAt)<=Date.parse(at)) c.telegramOpenedAt=at;
+  event(s,'telegram-opened',clientId,clientId,{at});
+}
+export function setTelegramCheck(s,clientId,days,today=localDate()){
+  const c=s.clients[clientId];
+  if(!c || days!==null && (!Number.isInteger(days) || days<1 || days>365 || !validDate(today))) throw Error('Укажи от 1 до 365 дней');
+  c.telegramCheck=days===null?null:{days,since:c.telegramCheck?.since||today};
 }
 export function setTelegramBinding(s,clientId,binding){
   const c=s.clients[clientId];if(!c)throw Error('Клиент не найден');
   if(s.settings.pendingTelegram?.[clientId])throw Error('Сначала проверь предыдущую неподтверждённую отправку');
   if(binding!==null&&(!binding||!/^[1-9]\d{0,19}$/.test(binding.peerId||'')))throw Error('Выбери получателя из результатов поиска');
+  if(binding && Object.values(s.clients).some(other=>other.id!==clientId&&!other.mergedInto&&other.telegram?.peerId===binding.peerId)) throw Error('Эта переписка уже привязана к другой карточке');
+  if(c.telegram?.peerId!==binding?.peerId){c.telegramOpenedAt=null;c.telegramCheck=null;}
   c.telegram=binding===null?null:clone(binding);
   event(s,binding?'telegram-linked':'telegram-unlinked',clientId,clientId);
 }
 export function addGoal(s,clientId,title,status='Желание клиента',sourceRecordId=null){title=String(title).trim();if(!s.clients[clientId]||!title||title.length>500||!GOAL_STATUSES.includes(status))throw Error('Проверь цель');const existing=Object.values(s.goals).find(g=>g.clientId===clientId&&!g.deletedAt&&normalizeSearch(g.title)===normalizeSearch(title));if(existing){if(existing.status!==status){existing.status=status;existing.updatedAt=stamp();event(s,'goal-edited',clientId,existing.id,{sourceRecordId});}return existing;}const g={id:id('goal'),clientId,title,status,sourceRecordId,createdAt:stamp(),updatedAt:stamp(),deletedAt:null};s.goals[g.id]=g;event(s,'goal-created',clientId,g.id,{sourceRecordId});return g;}
-export function editGoal(s,goalId,title,status){const g=s.goals[goalId];if(!g||!title?.trim()||title.length>500||!GOAL_STATUSES.includes(status))throw Error('Проверь цель');const before={title:g.title,status:g.status};g.title=title.trim();g.status=status;g.updatedAt=stamp();event(s,'goal-edited',g.clientId,g.id,{before});}
+export function defineRace(s,values){
+  const race=raceDefinition(values);
+  const existing=raceCatalog(s).find(r=>r.id===race.id);
+  if(existing)return existing;
+  event(s,'race-defined',null,race.id,{race});return race;
+}
+export function setRaceDistances(s,raceId,distances) {
+  const race=raceCatalog(s).find(r=>r.id===raceId);
+  if(!race)throw Error('Старт не найден');
+  const clean=[...new Set(distances.map(value=>String(value).trim()).filter(Boolean))];
+  if(clean.length>20||clean.some(value=>value.length>45))throw Error('Проверь список дистанций');
+  event(s,'race-defined',null,raceId,{race:{...race,distances:clean}});
+}
+export function editGoal(s,goalId,title,status,classification){
+  const g=s.goals[goalId];
+  if(!g||!title?.trim()||title.length>500||!GOAL_STATUSES.includes(status))throw Error('Проверь цель');
+  const before={title:g.title,status:g.status};
+  if(classification)Object.assign(g,raceGoal(s,classification));
+  g.title=title.trim();g.status=status;g.updatedAt=stamp();event(s,'goal-edited',g.clientId,g.id,{before});
+}
 export function deleteGoal(s,goalId,deleted=true){const g=s.goals[goalId];if(!g)throw Error('Цель не найдена');g.deletedAt=deleted?stamp():null;g.updatedAt=stamp();event(s,deleted?'goal-deleted':'goal-restored',g.clientId,g.id);}
 export function createTask(s,clientId,title,options={}){if(!s.clients[clientId]||!title?.trim())throw Error('Введи действие');const {sourceRecordId=null}=options;const due=options.due||null;if(due&&!validDate(due))throw Error('Проверь срок');const existing=sourceRecordId&&Object.values(s.tasks).find(t=>t.sourceRecordId===sourceRecordId&&normalizeSearch(t.title)===normalizeSearch(title));if(existing)return existing;const t={id:id('task'),clientId,title:title.trim().slice(0,1000),due,lane:options.lane==='discussion'?'discussion':'current',needsReply:!!options.needsReply,waitDays:options.waitDays||s.settings.waitDays,phase:'todo',outboundCount:0,lastSentAt:null,checkOn:null,createdAt:stamp(),closedAt:null,sourceRecordId,linkedGoalId:options.linkedGoalId||null};s.tasks[t.id]=t;event(s,'task-created',clientId,t.id,{sourceRecordId});return t;}
 export function completeTask(s,taskId,done=true){const t=s.tasks[taskId];if(!t)throw Error('Задача не найдена');if((t.phase==='done')===done)return;t.phase=done?'done':t.lastSentAt?'waiting':'todo';t.closedAt=done?stamp():null;event(s,done?'task-closed':'task-reopened',t.clientId,t.id);}
-export function editTask(s,taskId,title,due=null){
+export function editTask(s,taskId,title,due=null,linkedGoalId=undefined){
   const t=s.tasks[taskId];if(!t)throw Error('Задача не найдена');
   if(typeof title!=='string'||!title.trim()||title.trim().length>1000)throw Error('Введи действие · не более 1000 символов');
   if(due!==null&&!validDate(due))throw Error('Проверь дату');
-  title=title.trim();if(t.title===title&&t.due===due)return;
+  if(linkedGoalId && s.goals[linkedGoalId]?.clientId!==t.clientId)throw Error('Выбери цель этого клиента');
+  title=title.trim();if(t.title===title&&t.due===due&&(linkedGoalId===undefined||linkedGoalId===t.linkedGoalId))return;
   const before={title:t.title,due:t.due};t.title=title;t.due=due;t.updatedAt=stamp();
+  if(linkedGoalId!==undefined)t.linkedGoalId=linkedGoalId;
   event(s,'task-edited',t.clientId,t.id,{before,after:{title,due}});
+}
+export const pauseTaskId = clientId => 'pause-' + clientId;
+export function clientTasks(s,clientId=null){
+  const tasks=openTasks(s,{clientId,lane:'all'}).filter(t=>s.clients[t.clientId]&&!s.clients[t.clientId].mergedInto);
+  const followUps=pauseContacts(s).filter(c=>!clientId||c.id===clientId).map(c=>({
+    id:pauseTaskId(c.id),clientId:c.id,title:'Связаться после паузы',due:c.pause.contactOn,phase:'todo',needsReply:false,pauseContact:true
+  }));
+  return [...tasks,...followUps].sort((a,b)=>(taskDate(a)||'9999').localeCompare(taskDate(b)||'9999'));
+}
+export function taskGoal(s,task){
+  if(task.linkedGoalId)return s.goals[task.linkedGoalId];
+  if(task.lane!=='discussion')return null;
+  const title=normalizeSearch(task.title);
+  const matches=Object.values(s.goals).filter(g=>{
+    if(g.clientId!==task.clientId||g.deletedAt)return false;
+    const name=normalizeSearch(g.title.split(' · ')[0]);
+    return name.length>=8&&title.includes(name);
+  });
+  return matches.length===1?matches[0]:null;
+}
+export function completePauseContact(s,clientId){
+  const c=s.clients[clientId];
+  if(!c?.pause?.contactOn)return;
+  const due=c.pause.contactOn;
+  c.pause.contactOn=null;
+  event(s,'pause-contact-completed',clientId,pauseTaskId(clientId),{text:'Связаться после паузы',due});
 }
 export function markSent(s,taskId,at=stamp(),messageKey=null){const t=s.tasks[taskId];if(!t||t.phase==='done'||!t.needsReply)throw Error('Задача не ожидает переписки');if(messageKey&&s.events.some(e=>e.type==='outbound'&&e.messageKey===messageKey&&e.entityId===taskId))return;const previous=t.lastSentAt?Date.parse(t.lastSentAt):0;if(!messageKey&&Date.parse(at)-previous<2500)return;t.lastSentAt=at;t.phase='waiting';t.lane='current';t.outboundCount++;t.checkOn=addDays(localDate(new Date(at)),t.waitDays);event(s,'outbound',t.clientId,t.id,{at,messageKey,source:messageKey?'telegram':'coach-mark'});}
 export function scheduleTask(s,taskId,due){const t=s.tasks[taskId];if(!t||!validDate(due))throw Error('Выбери дату');t.due=due;t.lane='current';event(s,'task-scheduled',t.clientId,t.id,{due});}
 export function setWait(s,taskId,days,globalDefault=false){const t=s.tasks[taskId];if(!t||!Number.isInteger(days)||days<1||days>30)throw Error('Укажи от 1 до 30 дней');t.waitDays=days;if(t.phase==='waiting'&&t.lastSentAt)t.checkOn=addDays(localDate(new Date(t.lastSentAt)),days);if(globalDefault)s.settings.waitDays=days;event(s,'task-wait-edited',t.clientId,t.id,{days,globalDefault});}
 export function taskDate(t){return t.phase==='waiting'?t.checkOn:t.due;}
-export function openTasks(s,{filter='all',clientId=null,lane='current'}={}){return Object.values(s.tasks).filter(t=>t.phase!=='done'&&t.lane===lane&&(!clientId||t.clientId===clientId)&&(filter==='all'||(filter==='reply')===t.needsReply)).sort((a,b)=>(taskDate(a)||'9999').localeCompare(taskDate(b)||'9999')||a.createdAt.localeCompare(b.createdAt));}
+export function openTasks(s,{filter='all',clientId=null,lane='current'}={}){return Object.values(s.tasks).filter(t=>t.phase!=='done'&&(lane==='all'||t.lane===lane)&&(!clientId||t.clientId===clientId)&&(filter==='all'||(filter==='reply')===t.needsReply)).sort((a,b)=>(taskDate(a)||'9999').localeCompare(taskDate(b)||'9999')||a.createdAt.localeCompare(b.createdAt));}
 export function taskWarning(t,today=localDate()){if(t.phase!=='waiting'||!t.checkOn||t.checkOn>today)return null;if(t.outboundCount>=3)return {level:'danger',text:'Задача остаётся открытой после нескольких сообщений · проверь переписку'};if(t.outboundCount>=2)return {level:'warning',text:'Повторная проверка переписки'};return null;}
 export function saveRecord(s,clientId,text,kind='record',recordId=id('record')){if(!s.clients[clientId]||!text?.trim()||text.length>16000)throw Error('Введи запись');if(s.records[recordId])return s.records[recordId];const r={id:recordId,clientId,text:text.trim(),kind,createdAt:stamp(),status:'saved',result:null};s.records[r.id]=r;event(s,'record-created',clientId,r.id);return r;}
 export function addFeature(s,clientId,text,kind='Сейчас',sourceRecordId=null){const c=s.clients[clientId];if(!c||!text?.trim())throw Error('Введи особенность');if(c.features.some(f=>f.active!==false&&normalizeSearch(f.text)===normalizeSearch(text)))return;const f={id:id('feature'),kind,text:text.trim(),active:true,sourceRecordId,createdAt:stamp()};c.features.push(f);event(s,'feature-created',clientId,f.id);return f;}
@@ -126,15 +203,15 @@ export function editFeature(s, clientId, featureId, text, kind) {
 }
 export function setFeatureActive(s,clientId,featureId,active){const f=s.clients[clientId]?.features.find(f=>f.id===featureId);if(!f)throw Error('Особенность не найдена');f.active=active;event(s,active?'feature-restored':'feature-archived',clientId,featureId);}
 export function confirmedContact(s,clientId,{at=stamp(),channel='Telegram',direction='out',source='coach',messageKey=null}={}){const c=s.clients[clientId];if(!c)throw Error('Клиент не найден');if(messageKey&&s.events.some(e=>e.type==='contact'&&e.messageKey===messageKey))return;if(!c.lastContact||Date.parse(at)>=Date.parse(c.lastContact.at))c.lastContact={at,channel,direction,source};event(s,'contact',clientId,clientId,{at,channel,direction,source,messageKey});}
-export function processManualRecord(s,recordId,options={}){const r=s.records[recordId];if(!r)throw Error('Запись не найдена');if(r.status==='processed')return r.result;const changes=[];if(r.kind==='goal'){const g=addGoal(s,r.clientId,r.text,options.goalStatus||'Желание клиента',r.id);changes.push({type:'goal',id:g.id,title:g.title});}else if(r.kind==='task'){const t=createTask(s,r.clientId,r.text,{...options,sourceRecordId:r.id});changes.push({type:'task',id:t.id,title:t.title});}r.status='processed';r.result={mode:'manual',changes};return r.result;}
-export function applyAgentResult(s,recordId,result){
+export function processManualRecord(s,recordId,options={}){const r=s.records[recordId];if(!r)throw Error('Запись не найдена');if(r.status==='processed')return r.result;const changes=[];if(r.kind==='goal'){const g=addGoal(s,r.clientId,r.text,options.goalStatus||'Желание клиента',r.id);if(options.goalType)Object.assign(g,raceGoal(s,{type:options.goalType}));changes.push({type:'goal',id:g.id,title:g.title});}else if(r.kind==='task'){const t=createTask(s,r.clientId,r.text,{...options,sourceRecordId:r.id});changes.push({type:'task',id:t.id,title:t.title});}r.status='processed';r.result={mode:'manual',changes};return r.result;}
+export function applyAgentResult(s,recordId,result,{goalType}={}){
   const r=s.records[recordId];if(!r)throw Error('Запись не найдена');if(r.status==='processed')return r.result;
   if(!result||!Array.isArray(result.changes)||result.changes.length>30)throw Error('Агент вернул некорректный результат');
   const draft=clone(s),record=draft.records[recordId],changes=[];
   for(const change of result.changes){
     if(typeof change.title!=='string'||!change.title.trim()||change.title.length>1000)throw Error('Проверь результат агента');
     if(change.type==='task'){const t=createTask(draft,r.clientId,change.title,{due:change.due||null,lane:change.lane,needsReply:change.needsReply,sourceRecordId:r.id});changes.push({type:'task',id:t.id,title:t.title});}
-    else if(change.type==='goal'){let g;if(change.id){g=draft.goals[change.id];if(!g||g.clientId!==r.clientId)throw Error('Агент указал чужую цель');editGoal(draft,g.id,change.title,change.status);}else g=addGoal(draft,r.clientId,change.title,change.status,r.id);changes.push({type:'goal',id:g.id,title:g.title});}
+    else if(change.type==='goal'){let g;if(change.id){g=draft.goals[change.id];if(!g||g.clientId!==r.clientId)throw Error('Агент указал чужую цель');editGoal(draft,g.id,change.title,change.status);}else g=addGoal(draft,r.clientId,change.title,change.status,r.id);if(record.kind==='goal'&&goalType&&g.type!==goalType)Object.assign(g,raceGoal(draft,{type:goalType}));changes.push({type:'goal',id:g.id,title:g.title});}
     else if(change.type==='feature'){const f=addFeature(draft,r.clientId,change.title,change.kind||'Сейчас',r.id);if(f)changes.push({type:'feature',id:f.id,title:f.text});}
     else throw Error('Неизвестная операция агента');
   }

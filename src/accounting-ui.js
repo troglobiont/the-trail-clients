@@ -495,6 +495,14 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return group('По оплатам', ...list);
   }
 
+  function todoItems() {
+    return A.paymentReminders(state()).map(({service,month:period,due,remaining})=>({
+      name:clientName(service.clientId), title:'Оплата · '+serviceTitle(service),
+      due, next:A.money(remaining,service.currency), reminder:true,
+      open:()=>editPayment({clientId:service.clientId,serviceId:service.id,period,suggested:remaining})
+    }));
+  }
+
   function sourceSummary() {
     const source = state().ledger?.months.find(item => item.month === month);
     if (!source) return null;
@@ -531,14 +539,25 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   }
 
   function summary() {
-    const summary = A.summarize(state(), month);
-    const metrics = append(el('div', null, 'panel stack'), text(state().ledger ? 'Оплаты, записанные в приложении' : 'Получено за месяц'), el('h2', totals(summary.receipts), 'account-total'));
-    const byService = group('По пакетам', ...Object.entries(A.PACKAGES).map(([key, label]) => line(label, '', totals(summary.services[key] || {}))));
+    const summary = A.combinedSummary(state(), month);
+    const metrics = append(el('div', null, 'panel stack'), text('Получено за месяц'), el('h2', totals(summary.receipts), 'account-total'),
+      state().ledger && text('Приложение и подтверждённые оплаты из таблицы · по дате поступления'));
+    const packages = { ...A.PACKAGES, 'unclassified-belgrade':'Белград · пакет не указан',
+      'unclassified-online':'Онлайн · пакет не указан', unclassified:'Пакет не установлен' };
+    const grouped = Object.entries(packages).filter(([key])=>summary.services[key]);
+    const byService = group('По пакетам', ...(grouped.length?grouped.map(([key, label]) => line(label, '', totals(summary.services[key]))):[text('Поступлений пока нет')]));
     const byBlock = section('Итоги по блокам', 'account-totals', [
       ...Object.entries(A.BLOCKS).map(([key, label]) => line(label, 'Поступления', totals(summary.blocks[key] || {}))),
       line('Расходы', '', totals(summary.expenses)), line('Остаток по Белграду и персональным', '', totals(summary.localBalance))
     ]);
-    return [sourceSummary(), metrics, byService, group('Персональные занятия', line(`Проведено · ${summary.count}`, 'Стоимость проведённых занятий', totals(summary.sessions))), remindersPanel(3, month), byBlock];
+    const source = sourceSummary();
+    return [metrics, byService, group('Персональные занятия', line(`Проведено · ${summary.count}`, 'Стоимость проведённых занятий', totals(summary.sessions))), byBlock,
+      source && section('Сверка с бухгалтерией','account-source-totals',[
+        summary.imported.review>0&&text('Строки без подтверждённой оплаты не включены · '+summary.imported.review),
+        summary.imported.skippedDuplicates>0&&text('Точные совпадения учтены один раз · '+summary.imported.skippedDuplicates),
+        summary.imported.sessionRows>0&&text('В таблице занятия могут быть сгруппированы за месяц. Без дат отдельных занятий совпадения с приложением не проверяются.'),
+        source
+      ]),remindersPanel(3,month)];
   }
 
   function movement() {
@@ -625,7 +644,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       () => quickEntry(client.id, action), style);
     const journal = clientHistory(history, client.id);
     const previous = services.filter(s => !active.includes(s));
-    return section('Оплаты и занятия', `${client.id}-account`, [
+    const panel=section('Оплаты и занятия', `${client.id}-account`, [
       client.billingNote && text(client.billingNote),
       ...active.map(currentStatus), !active.length && !client.billingNote && text(services.length ? 'Нет действующих услуг' : 'Тарифы пока не заданы'),
       primary && actionButton(primary, 'primary account-main-action'),
@@ -634,13 +653,14 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         ...active.map(tariffLine), previous.length && section('Другие периоды', `${client.id}-past-services`, previous.map(tariffLine)),
         button('Добавить услугу', () => editService(client.id), 'subtle')
       ]),
-      !active.length && button('Добавить услугу', () => editService(client.id)),
       previous.length && button('Оплата за прошлую услугу', () => editPayment({ clientId:client.id }), 'subtle'),
       (imported.length || history.length) && section('История оплат и занятий', `${client.id}-account-history`, [
         lastPayment(client.id, imported, history), ...journal,
         imported.length && section('Из бухгалтерии 2026 · ' + imported.length, `${client.id}-source-history`, imported.map(entry => sourceLine(entry, client.id)))
       ])
     ]);
+    panel.classList.add('client-accounting');
+    return panel;
   }
 
   function clientHistory(history, clientId) {
@@ -666,7 +686,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
 
   function settingsPanel() {
     const controls = Object.entries(A.BLOCKS).map(([key, name]) => ({ key, control: numberInput(book().reminders[key] ?? A.DEFAULT_REMINDERS[key], 0, 30), name }));
-    return append(el('section', null, 'stack settings-section'), el('h2', 'Учёт'),
+    return append(el('section', null, 'stack settings-section'),
       text('За сколько дней до срока показывать напоминание в ToDo. Ноль означает день оплаты.'),
       ...controls.map(({ name, control }) => field(name, control)), row(button('Сохранить напоминания', async () => {
         if (controls.some(({ control }) => !control.value.trim())) throw Error('Укажи число дней для каждого раздела');
@@ -675,5 +695,5 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       })));
   }
 
-  return { page, clientPanel, remindersPanel, settingsPanel, quickEntry, activeClientIds, resumeClient };
+  return { page, clientPanel, remindersPanel, todoItems, settingsPanel, quickEntry, activeClientIds, resumeClient };
 }

@@ -9,11 +9,13 @@ import {createAccountingUI} from './accounting-ui.js';
 import {applyLedger, LEDGER_FORMAT, parseLedgerImport} from './ledger-import.js';
 import {createCloudAPI} from './cloud-api.js';
 import {createCloudSync} from './cloud-sync.js';
+import {createClientDetailsUI} from './client-details-ui.js';
+import {birthdayReminders,telegramReminders,GOAL_TYPES} from './client-details.js';
 import {cloudConfig} from './cloud-config.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,cloud,noticeTimer,draftTimer;
-const catalogViews = { active:'Клиенты', occasional:'Разовые', paused:'На паузе', archive:'Архив', team:'Команда', pending:'Ожидают старта и требуют уточнения' };
+const catalogViews = { active:'Клиенты', occasional:'Разовые', paused:'На паузе', archive:'Архив', team:'Команда', pending:'До старта' };
 const CATALOG_PAGE_SIZE = 12;
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
   packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7)});
@@ -41,11 +43,12 @@ function clientStatus(c) {
   if (c.status === 'На паузе') return 'На паузе · ' + C.PAUSE_KINDS[C.pauseKind(c)].toLowerCase();
   return c.status;
 }
-function chips(c){const list=el('span',null,'row');for(const value of c.role==='Клиент'?[clientStatus(c),c.currentFormat||c.format,'Основа: '+c.basis]:[C.clientRole(c)])list.append(el('span',value,'chip'));if(c.level==='Премиум')list.append(el('span','Премиум','chip emphasis'));if(['gym','outside'].includes(c.personal))list.append(el('span',c.personal==='gym'?'Персональный зал с Сергеем':'Персонально с Сергеем · улица','chip emphasis'));return list;}
+function chips(c){const list=el('span',null,'row');for(const value of c.role==='Клиент'?[clientStatus(c),c.format,'Основа: '+c.basis]:[C.clientRole(c)])list.append(el('span',value,'chip'));if(c.level==='Премиум')list.append(el('span','Премиум','chip emphasis'));if(['gym','outside'].includes(c.personal))list.append(el('span',c.personal==='gym'?'Персональный зал с Сергеем':'Персонально с Сергеем · улица','chip emphasis'));return list;}
 function formatDate(iso,withTime=false){if(!iso)return '';return new Intl.DateTimeFormat('ru-RU',{timeZone:C.TIMEZONE,day:'numeric',month:'short',...(withTime?{hour:'2-digit',minute:'2-digit'}:{})}).format(new Date(iso.length===10?iso+'T12:00:00Z':iso));}
 function section(title,key,children){const d=el('details',null,'fold'),summary=el('summary',title);d.open=ui.open.has(key);d.addEventListener('toggle',()=>{if(d.open)ui.open.add(key);else ui.open.delete(key);});append(d,summary,append(el('div',null,'fold-body stack'),...children));return d;}
 function navigate(hash){location.hash=hash;}
-function openClient(clientId){ui.returnTo=location.hash.startsWith('#client/')?ui.returnTo:location.hash||'#todo';navigate('#client/'+clientId);}
+function openClient(clientId,type,target){ui.returnTo=location.hash.startsWith('#client/')?ui.returnTo:location.hash||'#todo';navigate('#client/'+clientId+(type?'/'+type+(target?'/'+target:''):''));}
+const detailsUI=createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message});
 const accountingUI=createAccountingUI({state,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,navigate,message,importLedger:()=>importDatabase(true),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   activateClient:(s,id,day)=>C.editClient(s,id,{status:'Активный',engagement:null,pause:null},day),
@@ -109,7 +112,7 @@ function cloudConflict(){
 function renderCloudPanel(){
   const panel=document.getElementById('cloud-panel');
   if(!panel)return;
-  panel.replaceChildren(el('h2','Синхронизация'));
+  panel.replaceChildren();
   if(!cloud){panel.append(text('Доступна в Android-приложении.'));return;}
   const view=cloud.state();
   if(view.status==='disconnected'){
@@ -150,7 +153,9 @@ function editClient(clientId=null) {
     date.max = C.localDate();
     const effective = field('Дата изменения статуса',date);
     const statusField = field('Статус сотрудничества',status);
-    append(form, field('Фамилия Имя',name), field('Роль',role), statusField, pauseFields);
+    form.append(field('Фамилия Имя',name));
+    const classification=el('div',null,'stack');
+    append(classification,field('Роль',role),statusField,pauseFields);
     const controls = {
       format:select(['Очно','Дистанционно','Уточнить'],c?.format||'Уточнить'),
       basis:select(C.BASES,c?.basis||'Сейчас плана нет'),
@@ -160,8 +165,13 @@ function editClient(clientId=null) {
       currentFormat:select([['','Нет временного изменения'],['Очно','Временно очно'],['Дистанционно','Временно онлайн']],c?.currentFormat||'')
     };
     const labels = {format:'Обычный формат',basis:'Основа плана',level:'Ведение',group:'Групповые с Сергеем',personal:'Персональные с Сергеем',currentFormat:'Формат сейчас'};
-    for (const [key,control] of Object.entries(controls)) form.append(field(labels[key],control));
-    form.append(effective);
+    for (const [key,control] of Object.entries(controls)) classification.append(field(labels[key],control));
+    const context=el('textarea');context.value=c?.context||'';context.rows=2;
+    const rules=el('textarea');rules.value=(c?.rules||[]).join('\n');rules.rows=3;
+    append(classification,effective,field('Контекст',context),field('Правила плана · по одному на строку',rules));
+    const fold=section('Классификация',(c?.id||'new')+'-classification',[classification]);
+    if(!c)fold.open=true;
+    form.append(fold);
     const actualStatus = () => status.value === 'occasional' ? 'Активный' : status.value;
     const syncFields = () => {
       const isClient = role.value === 'Клиент';
@@ -176,7 +186,7 @@ function editClient(clientId=null) {
       const isClient = role.value === 'Клиент';
       const values = {
         ...Object.fromEntries(Object.entries(controls).map(([key,control])=>[key,control.value])),
-        name:name.value.trim(), role:isClient ? 'Клиент' : 'Тренер', teamRole:role.value === 'Организатор' ? 'Организатор' : null,
+        name:name.value.trim(), context:context.value.trim(), rules:rules.value.split('\n').map(r=>r.trim()).filter(Boolean), role:isClient ? 'Клиент' : 'Тренер', teamRole:role.value === 'Организатор' ? 'Организатор' : null,
         status:isClient ? actualStatus() : 'Тренер', currentFormat:controls.currentFormat.value || null,
         engagement:isClient && status.value === 'occasional' ? 'occasional' : null,
         pause:!pauseFields.hidden ? {kind:pauseType.value,returnWindow:returnWindow.value.trim(),contactOn:contactOn.value || null} : null
@@ -227,12 +237,12 @@ function renderCatalog(scope) {
       if (key) counts[key] = (counts[key] || 0) + 1;
     }
     for (const key of ['occasional','paused','archive','team','pending']) {
-      if (key === 'pending' && !counts[key]) continue;
       const link = button('',()=>navigate('#clients/'+key),'catalog-section-link');
       append(link,el('span',catalogViews[key]),el('span',String(counts[key] || 0),'muted'),el('span','›','muted'));
       links.append(link);
     }
-    page.append(links);
+    const more=section('Другие категории','catalog-other',[links]);
+    more.classList.add('catalog-other');page.append(more);
   }
   return page;
 }
@@ -294,7 +304,7 @@ function activeCatalogFilters() {
     renderCatalogResults();
   });
   extra.append(monthField);
-  return append(el('div',null,'stack catalog-options'),quick,section('Фильтр','catalog-filters',[
+  return append(el('div',null,'stack catalog-options'),quick,section('Фильтры','catalog-filters',[
     extra,button('Сбросить фильтры',()=>{
       ui.filters = {...defaultFilters(),query:ui.filters.query};
       ui.catalogLimit = CATALOG_PAGE_SIZE;
@@ -341,22 +351,64 @@ function renderCatalogResults() {
 }
 function emptyDatabase(){return append(el('div',null,'empty'),el('h2','Твоя клиентская база'),el('p','Импортируй подготовленный файл или добавь первого клиента. База хранится на этом устройстве.'),row(button('Импортировать базу',()=>importDatabase(),'primary'),button('Добавить клиента',()=>editClient())));}
 function taskStateLabel(t){if(!t.needsReply)return 'Моё действие';if(t.phase==='todo')return 'Нужно написать клиенту';return (t.checkOn<=C.localDate()?'Проверить переписку':'Жду ответа клиента')+' · '+formatDate(t.checkOn);}
-function renderTodo(){const page=el('div',null,'stack-lg'),tasks=C.openTasks(state());page.append(append(el('div',null,'page-title'),el('h1','ToDo'),text(tasks.length+' открыто')));if(!Object.keys(state().clients).length){page.append(emptyDatabase());return page;}const filters=el('div',null,'segmented');for(const [value,label] of [['all','Все'],['mine','Мои действия'],['reply','Нужен ответ']]){const count=C.openTasks(state(),{filter:value}).length,b=button(label+' · '+count,()=>{ui.taskFilter=value;render();});b.setAttribute('aria-pressed',String(ui.taskFilter===value));filters.append(b);}page.append(filters);const list=el('div',null,'stack');const shown=C.openTasks(state(),{filter:ui.taskFilter});if(!shown.length)list.append(text('Открытых задач в этом разделе нет.'));for(const t of shown){const b=button('',()=>openClient(t.clientId),'task-tile');append(b,el('span',state().clients[t.clientId].name,'task-client-name'),el('span',t.title,'task-title'),text((t.phase==='waiting'?'':(t.due?formatDate(t.due):'Без срока')+' · ')+taskStateLabel(t)));const w=C.taskWarning(t);if(w)b.append(text(w.text,w.level==='danger'?'danger-text small':'warning-text small'));list.append(b);}append(page,list,pauseReminders(),accountingUI.remindersPanel());const discussions=C.openTasks(state(),{lane:'discussion'});page.append(section('Обсудить с клиентами · '+discussions.length,'discussions-global',discussions.length?discussions.map(t=>discussion(t,true)):[text('Тем для обсуждения пока нет.')]));return page;}
+function renderTodo(){
+  const page=el('div',null,'stack-lg');
+  const tasks=C.clientTasks(state()).map(t=>({
+    name:state().clients[t.clientId].name,title:t.title,due:C.taskDate(t),
+    next:taskStateLabel(t),reply:t.needsReply,warning:C.taskWarning(t),open:()=>openClient(t.clientId,'task',t.id)
+  }));
+  const payment=accountingUI.todoItems();
+  const birthday=birthdayReminders(state()).map(({client,day})=>({
+    name:client.name,title:'День рождения',due:day,next:'Можно поздравить',reminder:true,open:()=>openClient(client.id,'profile')
+  }));
+  const telegram=telegramReminders(state()).map(({client,day})=>({
+    name:client.name,title:'Давно не открывал переписку',due:day,next:'Проверить Telegram',reminder:true,open:()=>openClient(client.id,'telegram')
+  }));
+  const entries=[...tasks,...payment,...birthday,...telegram].sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
+  append(page,append(el('div',null,'page-title'),el('h1','ToDo'),text(entries.length+' в списке')));
+  if(!Object.keys(state().clients).length){page.append(emptyDatabase());return page;}
+  const filters=el('div',null,'row catalog-quick');
+  const matches=(value,e)=>value==='all'||(value==='reply'?e.reply:value==='reminders'?e.reminder:!e.reminder&&!e.reply);
+  for(const [value,label] of [['all','Все'],['mine','Мои действия'],['reply','Нужен ответ'],['reminders','Напоминания']]){
+    const b=button(label+' · '+entries.filter(e=>matches(value,e)).length,()=>{ui.taskFilter=value;render();});
+    b.setAttribute('aria-pressed',String(ui.taskFilter===value));filters.append(b);
+  }
+  const list=el('div',null,'stack');
+  for(const item of entries.filter(e=>matches(ui.taskFilter,e))){
+    const b=button('',item.open,'task-tile');
+    append(b,el('span',item.name,'task-client-name'),el('span',item.title,'task-title'),
+      text((item.due?formatDate(item.due):'Без срока')+' · '+item.next));
+    if(item.warning)b.append(text(item.warning.text,item.warning.level==='danger'?'danger-text small':'warning-text small'));
+    list.append(b);
+  }
+  append(page,filters,list.children.length?list:text('Открытых задач в этом разделе нет.'));
+  return page;
+}
 function editTask(t){
   modal('Редактировать задачу',form=>{
     const title=el('textarea'),due=input('date',t.due||'');title.value=t.title;title.maxLength=1000;
-    append(form,field('Что сделать',title),field('Когда сделать · можно оставить пустым',due));
+    const goals=Object.values(state().goals).filter(g=>g.clientId===t.clientId&&!g.deletedAt);
+    const goal=select([['','Не связана'],...goals.map(g=>[g.id,g.title])],C.taskGoal(state(),t)?.id||'');
+    append(form,!t.pauseContact&&field('Что сделать',title),field('Когда сделать · можно оставить пустым',due),
+      !t.pauseContact&&goals.length&&field('Связанная цель',goal));
     if(t.phase==='waiting')form.append(text('Проверка ответа остаётся '+formatDate(t.checkOn)+'. Её интервал меняется в настройках задачи.'));
-    return ()=>commit(s=>C.editTask(s,t.id,title.value,due.value||null));
+    return ()=>commit(s=>{
+      if(t.pauseContact){
+        const c=s.clients[t.clientId];
+        C.editClient(s,c.id,{pause:{...c.pause,contactOn:due.value||null}});
+      }else C.editTask(s,t.id,title.value,due.value||null,goals.length?goal.value||null:undefined);
+    });
   });
 }
 function task(t){
   const wrap=el('div',null,'task');
+  wrap.id='task-'+t.id;wrap.tabIndex=-1;
   wrap.append(append(el('div',null,'task-heading'),el('div',t.title,'task-title'),button('Изменить',()=>editTask(t),'subtle')));
-  if(t.phase==='done'){
-    append(wrap,text('Выполнено · '+formatDate(t.closedAt,true)),button('Вернуть в работу',()=>commit(s=>C.completeTask(s,t.id,false))));return wrap;
-  }
   wrap.append(text((t.due&&t.phase==='todo'?formatDate(t.due)+' · ':'')+taskStateLabel(t)));
+  const goal=C.taskGoal(state(),t);
+  if(goal&&!goal.deletedAt)wrap.append(button('К цели: '+goal.title,()=>{
+    ui.goalFilters??={};ui.goalFilters[t.clientId]='';render();focusCard('goal',goal.id);
+  },'subtle'));
   if(t.lastSentAt)wrap.append(text('Последняя отметка: '+formatDate(t.lastSentAt,true)+' · проверка '+formatDate(t.checkOn)));
   if(t.needsReply){
     const controls=el('div',null,'task-actions'),ack=ui.sendAck[t.id]===t.lastSentAt&&t.checkOn>C.localDate(),label=ack?(t.outboundCount>1?'Я написал клиенту повторно, жду ответа':'Я написал клиенту, жду ответа'):(t.lastSentAt?'Написать клиенту повторно':'Написать клиенту');
@@ -370,14 +422,11 @@ function task(t){
     ]));
   }else{
     const checkbox=input('checkbox');checkbox.checked=false;
-    checkbox.addEventListener('change',()=>run(()=>commit(s=>C.completeTask(s,t.id,true))));
+    checkbox.addEventListener('change',()=>run(()=>commit(s=>t.pauseContact?C.completePauseContact(s,t.clientId):C.completeTask(s,t.id,true))));
     wrap.append(append(el('label',null,'checkbox'),checkbox,el('span','Выполнено')));
   }
   return wrap;
 }
-function discussion(t,withClient=false){const wrap=el('div',null,'task'),date=input('date');wrap.append(withClient?button(state().clients[t.clientId].name+' · '+t.title,()=>openClient(t.clientId),'subtle'):el('div',t.title));append(wrap,field('Когда обсудить',date),row(button('Изменить',()=>editTask(t),'subtle'),button('Добавить в ToDo',()=>commit(s=>C.scheduleTask(s,t.id,date.value))),button('Закрыть тему',()=>commit(s=>C.completeTask(s,t.id,true)))));return wrap;}
-function editGoal(goal){modal('Редактировать цель',form=>{const title=input('text',goal.title),status=select(goal.status==='Рабочая цель тренера'?['Рабочая цель тренера']:C.GOAL_STATUSES.filter(s=>s!=='Рабочая цель тренера'),goal.status);title.maxLength=500;append(form,field('Цель',title),field('Плашка',status));return ()=>commit(s=>C.editGoal(s,goal.id,title.value,status.value));});}
-function goalRow(g){const wrap=el('div',null,'goal');append(wrap,row(el('span',g.title),el('span',g.status,'chip')));const controls=el('div',null,'goal-controls');if(g.deletedAt)controls.append(button('Восстановить',()=>commit(s=>C.deleteGoal(s,g.id,false))));else controls.append(button('Изменить',()=>editGoal(g),'subtle'),button('Удалить',async()=>{await commit(s=>C.deleteGoal(s,g.id,true));message('Цель удалена. Её можно восстановить ниже.');},'subtle danger'));wrap.append(controls);return wrap;}
 function editFeature(clientId, feature) {
   modal(feature ? 'Изменить особенность' : 'Добавить особенность', form => {
     const note = el('textarea');
@@ -393,49 +442,116 @@ function editFeature(clientId, feature) {
   });
 }
 
-function featureRow(clientId, feature) {
-  const active = feature.active !== false;
-  const footer = append(el('div', null, 'row between feature-footer'), text(feature.kind),
-    button('Изменить', () => editFeature(clientId, feature), 'subtle'),
-    button(active ? 'Уже не актуально' : 'Снова актуально',
-      () => commit(s => C.setFeatureActive(s, clientId, feature.id, !active)), 'subtle'));
-  return append(el('div', null, 'feature'), el('div', feature.text, 'feature-text'), footer);
+function featureRow(clientId,feature) {
+  const kind=feature.kind||'';
+  const [label,...metadata]=kind.split(' · ');
+  const wrap=el('div',null,'feature');wrap.id='feature-'+feature.id;wrap.tabIndex=-1;
+  return append(wrap,el('div',feature.text,'feature-text'),label&&text(label),
+    metadata.length&&section('Подробности',feature.id+'-meta',[text(metadata.join(' · '))]),
+    append(el('div',null,'row feature-footer'),
+      button('Изменить',()=>editFeature(clientId,feature),'subtle'),
+      button('Уже не актуально',()=>commit(s=>C.setFeatureActive(s,clientId,feature.id,false)),'subtle')));
 }
 
 function renderFeatures(client) {
-  const box = el('section', null, 'stack feature-section');
-  box.append(append(el('div', null, 'row between feature-heading'), el('h2', 'Особенности', 'block-heading'),
-    button('+ Добавить', () => editFeature(client.id), 'feature-add')));
-  const active = client.features.filter(feature => feature.active !== false);
-  box.append(...(active.length ? active.map(feature => featureRow(client.id, feature)) : [text('Пока не зафиксированы')]));
-  const past = client.features.filter(feature => feature.active === false);
-  if (past.length) box.append(section('Прежние особенности · ' + past.length, client.id + '-old-features',
-    past.map(feature => featureRow(client.id, feature))));
-  return box;
+  const active=client.features.filter(f=>f.active!==false);
+  return append(el('section',null,'stack feature-section'),
+    append(el('div',null,'row between feature-heading'),el('h2','Особенности','block-heading'),
+      button('+ Добавить',()=>editFeature(client.id),'feature-add')),
+    ...active.map(f=>featureRow(client.id,f)),
+    !active.length&&text('Пока не зафиксированы'));
 }
 
 function pauseDetails(client) {
   if (!['paused','archive'].includes(C.clientSection(client))) return null;
-  const contact = client.pause?.contactOn;
   return append(el('section',null,'stack'),
-    client.pause?.returnWindow && text('Ориентир возврата · ' + client.pause.returnWindow),
-    contact && text('Связаться · ' + formatDate(contact)),
-    row(button('Возобновить',()=>accountingUI.resumeClient(client)),
-      contact && button('Убрать напоминание',()=>commit(s=>{
-        const current = s.clients[client.id];
-        if (current.pause?.contactOn === contact) C.editClient(s,client.id,{pause:{...current.pause,contactOn:null}});
-      }),'subtle')));
+    client.pause?.returnWindow&&text('Ориентир возврата · '+client.pause.returnWindow),
+    row(button('Возобновить',()=>accountingUI.resumeClient(client))));
 }
 
-function pauseReminders() {
-  const contacts = C.pauseContacts(state());
-  if (!contacts.length) return null;
-  return section('Связаться после паузы · ' + contacts.length,'pause-contacts',contacts.map(client =>
-    button(client.name + ' · ' + formatDate(client.pause.contactOn),()=>openClient(client.id),'task-tile')));
+function focusCard(type,id){
+  requestAnimationFrame(()=>{
+    const target=document.getElementById(id?type+'-'+id:type+'-client-panel');
+    if(!target)return;
+    for(let parent=target;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
+    target.focus({preventScroll:true});target.scrollIntoView({block:'start'});
+  });
 }
-function renderClient(clientId){const c=state().clients[clientId];if(!c||c.mergedInto){navigate('#clients');return el('div');}const page=el('div',null,'stack-lg client-page');page.append(button(ui.returnTo==='#todo'?'← К ToDo':ui.returnTo==='#account'?'← К учёту':'← К списку клиентов',()=>navigate(ui.returnTo),'back subtle'));const header=el('header',null,'stack client-header');append(header,append(el('div',null,'page-title'),el('h1',c.name),button('Изменить',()=>editClient(c.id),'subtle')),chips(c),text(c.lastContact?'Последний контакт: '+formatDate(c.lastContact.at,!c.lastContact.dateOnly)+' · '+c.lastContact.channel:'Последний контакт пока не указан'));page.append(header);const followUp=pauseDetails(c);if(followUp)page.append(followUp);const tasks=C.openTasks(state(),{clientId}),done=Object.values(state().tasks).filter(t=>t.clientId===clientId&&t.phase==='done');if(tasks.length||done.length){const box=el('section',null,'panel action-panel');append(box,el('h2','Действия по клиенту','block-heading'),...tasks.map(task));if(done.length)box.append(section('Выполнено · '+done.length,clientId+'-done',done.map(task)));page.append(box);}page.append(renderFeatures(c));if(c.role==='Клиент')page.append(accountingUI.clientPanel(c));const reference=el('div',null,'reference-sections');reference.append(section('Сообщения в Telegram',c.id+'-telegram',[telegramPanel(c)]));const zones=[];if(c.zones){zones.push(text(c.zones.status));if(c.zones.lthr)zones.push(text('LTHR в сохранённых настройках: '+c.zones.lthr+' уд/мин'));if(c.zones.rows?.length){const grid=el('div',null,'zones');for(const [name,min,max] of c.zones.rows)grid.append(append(el('div'),text(name),el('div',min+'–'+max)));zones.push(grid);}zones.push(text(c.zones.source||''));}else zones.push(text('Зоны не внесены. Численные значения не назначались.'));reference.append(section('Пульсовые зоны · бег',c.id+'-zones',zones));const goals=Object.values(state().goals).filter(g=>g.clientId===c.id),current=goals.filter(g=>!g.deletedAt&&g.status!=='Рабочая цель тренера'),work=goals.filter(g=>!g.deletedAt&&g.status==='Рабочая цель тренера');const goalBody=[button('Добавить цель',()=>{const draft=getDraft(c.id);draft.kind='goal';const form=document.getElementById('compose');form.querySelectorAll('[data-kind]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.kind==='goal')));document.getElementById('goal-status-field').hidden=false;document.getElementById('task-fields').hidden=true;form.scrollIntoView({behavior:'smooth',block:'start'});document.getElementById('client-note').focus({preventScroll:true});saveDraftSoon();}),...current.map(goalRow)];if(!current.length)goalBody.push(text('Пока не внесены'));if(work.length)goalBody.push(el('h3','Рабочие цели тренера'),...work.map(goalRow));const removed=goals.filter(g=>g.deletedAt);if(removed.length)goalBody.push(section('Удалённые цели · '+removed.length,c.id+'-deleted-goals',removed.map(goalRow)));reference.append(section('Цели клиента · '+current.length,c.id+'-goals',goalBody));const discussions=C.openTasks(state(),{clientId,lane:'discussion'});if(discussions.length)reference.append(section('Обсудить с клиентом',c.id+'-discussions',discussions.map(t=>discussion(t))));reference.append(section('Кемпы и история участия',c.id+'-camps',c.camps?.length?c.camps.map(camp=>text(camp.name+' · '+camp.status,' ')):[text('История участия пока не восстановлена')]));const system=el('dl',null,'system');for(const [name,value] of [['Роль',C.clientRole(c)],['Статус сотрудничества',clientStatus(c)],['Обычный формат',c.format],['Формат сейчас',c.currentFormat||'Без временного изменения'],['Основа плана',c.basis],['Групповые с Сергеем',c.group],['Персональные с Сергеем',({gym:'В зале',outside:'На улице',none:'Нет',unknown:'Нужно уточнить'})[c.personal]],['Ведение',c.level]])system.append(append(el('div'),el('dt',name),el('dd',value)));reference.append(section('Системные данные и подгруппы',c.id+'-system',[system,...(c.context?[text(c.context)]:[]),el('h3','Регулярные правила плана'),...(c.rules.length?c.rules.map(r=>el('div',r)):[text('Пока не внесены')]),button('Изменить правила',()=>editRules(c))]));const history=el('ol',null,'history');const events=state().events.filter(e=>e.clientId===c.id).slice().reverse().slice(0,100);for(const e of events){const record=state().records[e.entityId],goal=state().goals[e.entityId],t=state().tasks[e.entityId],title=record?.text||goal?.title||t?.title||e.text||eventLabel(e.type);history.append(append(el('li'),text(e.sourceMeta||formatDate(e.at,true)+' · '+eventLabel(e.type)),el('div',title,e.type==='feature-edited'?'feature-copy':'')));}if(!events.length)history.append(text('Записей пока нет'));reference.append(section('История записей',c.id+'-history',[history]));page.append(reference,compose(c));return page;}
-function eventLabel(type){return ({'record-created':'Запись Сергея','goal-created':'Цель добавлена','goal-edited':'Цель изменена','goal-deleted':'Цель удалена','goal-restored':'Цель восстановлена','task-created':'Задача создана','task-edited':'Задача изменена','telegram-linked':'Переписка привязана','telegram-unlinked':'Переписка отвязана','task-closed':'Задача закрыта','task-reopened':'Задача возвращена','outbound':'Исходящее сообщение','task-scheduled':'Разговор назначен','client-edited':'Данные клиента изменены','client-created':'Клиент добавлен','client-movement':'Статус сотрудничества изменён','feature-created':'Особенность добавлена','feature-edited':'Особенность изменена','feature-archived':'Особенность снята с актуального','feature-restored':'Особенность снова актуальна','contact':'Контакт с клиентом','source-note':'Сведения от Сергея'})[type]||'Изменение';}
-function editRules(c){modal('Регулярные правила плана',form=>{const area=el('textarea');area.value=c.rules.join('\n');form.append(field('Одно правило на строку',area));return ()=>commit(s=>{s.clients[c.id].rules=area.value.split('\n').map(x=>x.trim()).filter(Boolean);C.event(s,'rules-edited',c.id,c.id);});});}
+
+function renderHistory(c) {
+  const history=el('ol',null,'history');
+  const features=new Map(c.features.map(f=>[f.id,f]));
+  const past=Object.values(state().tasks).filter(t=>t.clientId===c.id&&t.phase==='done');
+  for(const t of past.sort((a,b)=>(b.closedAt||'').localeCompare(a.closedAt||''))){
+    history.append(append(el('li'),text('Выполнено'+(t.closedAt?' · '+formatDate(t.closedAt,true):'')),el('div',t.title),
+      button('Вернуть в работу',async()=>{await commit(s=>C.completeTask(s,t.id,false));focusCard('task',t.id);},'subtle')));
+  }
+  for(const f of features.values())if(f.active===false) {
+    history.append(append(el('li'),text('Прежняя особенность'),el('div',f.text,'feature-copy'),
+      button('Снова актуально',async()=>{await commit(s=>C.setFeatureActive(s,c.id,f.id,true));focusCard('feature',f.id);},'subtle')));
+  }
+  const events=state().events.filter(e=>e.clientId===c.id).slice().reverse()
+    .filter(e=>!(e.type==='task-closed'&&state().tasks[e.entityId]?.phase==='done')&&!(e.type==='feature-archived'&&features.get(e.entityId)?.active===false)).slice(0,100);
+  const lastPause=events.find(e=>e.type==='pause-contact-completed');
+  for(const e of events){
+    const record=state().records[e.entityId],goal=state().goals[e.entityId],t=state().tasks[e.entityId],f=features.get(e.entityId);
+    const title=e.text||record?.text||goal?.title||t?.title||f?.text;
+    const entry=append(el('li'),text([e.sourceMeta||formatDate(e.at,true),eventLabel(e.type)].filter(Boolean).join(' · ')),
+      title&&el('div',title,f?'feature-copy':''));
+    if(t&&t.phase!=='done')entry.append(button('К задаче',()=>focusCard('task',t.id),'subtle'));
+    if(e===lastPause&&C.clientSection(c)==='paused'&&!c.pause?.contactOn&&C.validDate(e.due))entry.append(button('Вернуть напоминание',async()=>{
+      await commit(s=>{const current=s.clients[c.id];if(C.clientSection(current)==='paused'&&!current.pause?.contactOn)C.editClient(s,c.id,{pause:{...current.pause,contactOn:e.due}});});
+      focusCard('task',C.pauseTaskId(c.id));
+    },'subtle'));
+    history.append(entry);
+  }
+  return history.children.length?history:text('Записей пока нет');
+}
+
+function renderClient(clientId,targetType,targetId){
+  const c=state().clients[clientId];
+  if(!c||c.mergedInto){navigate('#clients');return el('div');}
+  const page=el('div',null,'stack-lg client-page');
+  const backLabel={'#todo':'← К ToDo','#account':'← К учёту','#races':'← К стартам'}[ui.returnTo]||'← К списку клиентов';
+  page.append(button(backLabel,()=>navigate(ui.returnTo),'back subtle'));
+  const header=el('header',null,'stack client-header');
+  append(header,append(el('div',null,'page-title'),el('h1',c.name),button('Изменить',()=>editClient(c.id),'subtle')),chips(c),
+    text(c.lastContact?'Последний контакт: '+formatDate(c.lastContact.at,!c.lastContact.dateOnly)+' · '+c.lastContact.channel:'Последний контакт пока не указан'));
+  const followUp=pauseDetails(c);
+  append(page,header,followUp);
+  const tasks=C.clientTasks(state(),clientId);
+  if(tasks.length)page.append(append(el('section',null,'panel action-panel'),el('h2','Действия по клиенту','block-heading'),...tasks.map(task)));
+  page.append(renderFeatures(c));
+  if(c.role==='Клиент')page.append(accountingUI.clientPanel(c));
+  const reference=el('div',null,'reference-sections');
+  const telegram=section('Сообщения в Telegram',c.id+'-telegram',[telegramPanel(c)]);
+  telegram.id='telegram-client-panel';telegram.tabIndex=-1;
+  const profile=section('О клиенте',c.id+'-profile',detailsUI.profile(c));
+  profile.id='profile-client-panel';profile.tabIndex=-1;
+  reference.append(telegram,profile,section('Тренировочные данные · пульсовые зоны',c.id+'-zones',detailsUI.training(c)));
+  reference.append(detailsUI.goals(c,()=>{
+    const draft=getDraft(c.id);draft.kind='goal';
+    const form=document.getElementById('compose');
+    form.querySelectorAll('[data-kind]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.kind==='goal')));
+    document.getElementById('goal-status-field').hidden=false;
+    document.getElementById('task-fields').hidden=true;
+    form.scrollIntoView({behavior:'smooth',block:'start'});
+    document.getElementById('client-note').focus({preventScroll:true});
+    saveDraftSoon();
+  }));
+  reference.append(section('Кемпы и история участия',c.id+'-camps',c.camps?.length?c.camps.map(camp=>text(camp.name+' · '+camp.status,' ')):[text('История участия пока не восстановлена')]));
+  reference.append(section('История записей',c.id+'-history',[renderHistory(c)]));
+  page.append(reference,compose(c));
+  if(targetType&&ui.focusRoute!==location.hash){
+    ui.focusRoute=location.hash;
+    if(targetType==='goal'){
+      ui.open.add(c.id+'-goals');
+    }
+    focusCard(targetType,targetId);
+  }
+  return page;
+}
+function eventLabel(type){return ({'pause-contact-completed':'Связь после паузы отмечена','telegram-opened':'Открыта переписка в Telegram','profile-edited':'Обновлены сведения о клиенте','training-edited':'Обновлены тренировочные данные','record-created':'Запись Сергея','goal-created':'Цель добавлена','goal-edited':'Цель изменена','goal-deleted':'Цель удалена','goal-restored':'Цель восстановлена','task-created':'Задача создана','task-edited':'Задача изменена','telegram-linked':'Переписка привязана','telegram-unlinked':'Переписка отвязана','task-closed':'Задача закрыта','task-reopened':'Задача возвращена','outbound':'Исходящее сообщение','task-scheduled':'Разговор назначен','client-edited':'Данные клиента изменены','client-created':'Клиент добавлен','client-movement':'Статус сотрудничества изменён','feature-created':'Особенность добавлена','feature-edited':'Особенность изменена','feature-archived':'Особенность снята с актуального','feature-restored':'Особенность снова актуальна','contact':'Контакт с клиентом','source-note':'Сведения от Сергея'})[type]||'Изменение';}
 function getDraft(clientId){return ui.drafts[clientId]||(ui.drafts[clientId]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'});}
 function saveDraftSoon(){clearTimeout(draftTimer);draftTimer=setTimeout(()=>run(()=>saveDrafts()),500);}
 async function saveDrafts(){clearTimeout(draftTimer);if(!store)return;await commit(s=>{s.settings.drafts=C.clone(ui.drafts);},false);}
@@ -452,7 +568,9 @@ function compose(c){
   append(taskFields,field('Когда сделать · можно оставить пустым',due),append(el('label',null,'checkbox'),reply,el('span','Нужен ответ клиента · проверять через '+state().settings.waitDays+' дн. после сообщения')));
   const status=select(C.GOAL_STATUSES,d.goalStatus||'Желание клиента');
   status.addEventListener('change',()=>{d.goalStatus=status.value;saveDraftSoon();});
-  const goalField=field('Плашка цели',status);goalField.id='goal-status-field';goalField.hidden=d.kind!=='goal';
+  const type=select([['','Без типа'],...Object.entries(GOAL_TYPES)],d.goalType||'');
+  type.addEventListener('change',()=>{d.goalType=type.value;saveDraftSoon();});
+  const goalField=append(el('div',null,'stack'),field('Статус цели',status),field('Тип цели',type));goalField.id='goal-status-field';goalField.hidden=d.kind!=='goal';
   for(const [kind,label] of [['record','Без пометки'],['task','Задача'],['goal','Цель']]){
     const b=button(label,()=>{d.kind=kind;modes.querySelectorAll('button').forEach(item=>item.setAttribute('aria-pressed',String(item===b)));taskFields.hidden=kind!=='task';goalField.hidden=kind!=='goal';updateAction();saveDraftSoon();});
     b.dataset.kind=kind;b.setAttribute('aria-pressed',String(d.kind===kind));modes.append(b);
@@ -501,7 +619,11 @@ async function ensureAgent(voice=false){
   if(voice&&!status.voiceReady)throw Error('Расшифровка голоса на Mac не готова. Проверь подключение');
   await commit(s=>{s.settings.agentEnabled=true;},false);
 }
-async function submitRecord(c,d){const data={...d};const pending=state().records[d.pendingRecordId];const record=pending&&pending.text===data.text.trim()&&pending.kind===data.kind?pending:await commit(s=>C.saveRecord(s,c.id,data.text,data.kind),false);d.pendingRecordId=record.id;await saveDrafts();let result;if(state().settings.serviceURL&&state().settings.agentEnabled){try{const response=await service('/records/parse',{client:{...state().clients[c.id]},goals:Object.values(state().goals).filter(g=>g.clientId===c.id&&!g.deletedAt),openTasks:C.openTasks(state(),{clientId:c.id}),record,timezone:C.TIMEZONE,waitDays:state().settings.waitDays,needsReply:data.needsReply});if(response.question){ui.recordResults[c.id]='Нужно уточнить: '+response.question;render();return;}result=await commit(s=>C.applyAgentResult(s,record.id,response),false);}catch(e){ui.recordResults[c.id]='Запись сохранена. Обработка не завершена: '+e.message;render();return;}}else result=await commit(s=>C.processManualRecord(s,record.id,{due:data.due||null,needsReply:data.needsReply,goalStatus:data.goalStatus}),false);ui.recordResults[c.id]=result.changes.length?result.changes.map(x=>(x.type==='task'?'Задача: ':x.type==='goal'?'Цель: ':'Особенность: ')+x.title).join('\n'):result.mode==='agent'?'Запись сохранена. Агент не выделил задач, целей или особенностей.':'Запись сохранена в истории';ui.drafts[c.id]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'};await saveDrafts();render();}
+function agentClient(c){
+  const keys=['id','name','role','status','format','currentFormat','basis','group','personal','level','features','rules','context'];
+  return Object.fromEntries(keys.map(key=>[key,c[key]]));
+}
+async function submitRecord(c,d){const data={...d};const pending=state().records[d.pendingRecordId];const record=pending&&pending.text===data.text.trim()&&pending.kind===data.kind?pending:await commit(s=>C.saveRecord(s,c.id,data.text,data.kind),false);d.pendingRecordId=record.id;await saveDrafts();let result;if(state().settings.serviceURL&&state().settings.agentEnabled){try{const response=await service('/records/parse',{client:agentClient(state().clients[c.id]),goals:Object.values(state().goals).filter(g=>g.clientId===c.id&&!g.deletedAt),openTasks:C.clientTasks(state(),c.id).filter(t=>!t.pauseContact),record,timezone:C.TIMEZONE,waitDays:state().settings.waitDays,needsReply:data.needsReply});if(response.question){ui.recordResults[c.id]='Нужно уточнить: '+response.question;render();return;}result=await commit(s=>C.applyAgentResult(s,record.id,response,{goalType:data.goalType}),false);}catch(e){ui.recordResults[c.id]='Запись сохранена. Обработка не завершена: '+e.message;render();return;}}else result=await commit(s=>C.processManualRecord(s,record.id,{due:data.due||null,needsReply:data.needsReply,goalStatus:data.goalStatus,goalType:data.goalType}),false);ui.recordResults[c.id]=result.changes.length?result.changes.map(x=>(x.type==='task'?'Задача: ':x.type==='goal'?'Цель: ':'Особенность: ')+x.title).join('\n'):result.mode==='agent'?'Запись сохранена. Агент не выделил задач, целей или особенностей.':'Запись сохранена в истории';ui.drafts[c.id]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'};await saveDrafts();render();}
 async function service(path,body){const base=state().settings.serviceURL;if(!base)throw Error('Подключи сервис в настройках');const address=new URL(path,base);if(address.protocol!=='https:')throw Error('Нужен HTTPS-адрес сервиса');if(window.TrailNative?.native){const res=await window.TrailNative.request(address.href,'POST',body);return JSON.parse(res.body);}throw Error('Подключение сервиса доступно в установленном Android-приложении');}
 async function recordVoice(clientId){
   if(ui.recorder){
@@ -577,7 +699,7 @@ function agentConnectionCheck(){
 function telegramPanel(c){
   const panel=el('section',null,'stack telegram-panel'),bound=!!c.telegram?.peerId;
   if(bound){
-    panel.append(text('Переписка привязана','telegram-linked small'),el('div',(c.telegram.displayName||'Telegram')+(c.telegram.username?' · @'+c.telegram.username:''),'telegram-recipient'));
+    panel.append(text('Переписка привязана','telegram-linked small'),el('div',(c.telegram.displayName||'Telegram')+(c.telegram.username?' · @'+c.telegram.username:''),'telegram-recipient'),...detailsUI.telegramOptions(c));
     panel.append(append(el('div',null,'row telegram-controls'),
       button('Изменить получателя',()=>bindTelegram(c),'subtle'),
       button('Отвязать переписку',()=>unbindTelegram(c),'subtle')));
@@ -587,7 +709,7 @@ function telegramPanel(c){
   }
   const connected=!!state().settings.serviceURL;
   if(!connected)panel.append(text('Для отправки подключи сервис в настройках. Привязка получателя сохранена.'));
-  const replies=C.openTasks(state(),{clientId:c.id}).filter(t=>t.needsReply),linked=select([['','Без привязки к задаче'],...replies.map(t=>[t.id,t.title])],'');
+  const replies=C.clientTasks(state(),c.id).filter(t=>t.needsReply),linked=select([['','Без привязки к задаче'],...replies.map(t=>[t.id,t.title])],'');
   if(replies.length)panel.append(field('Ожидать ответ по задаче',linked));
   const list=el('div',null,'telegram-templates');
   panel.append(text('Заготовки · нажатие отправит сообщение'));
@@ -737,10 +859,6 @@ function applyAppearance({ retryLauncher = false } = {}) {
 
 function appearancePanel() {
   const panel = el('section',null,'stack settings-section');
-  const heading = el('h2','Оформление');
-  heading.id = 'appearance-heading';
-  panel.setAttribute('aria-labelledby',heading.id);
-  panel.append(heading);
 
   function updateSelection() {
     const current = currentAppearance();
@@ -777,8 +895,69 @@ function appearancePanel() {
   updateSelection();
   return panel;
 }
-function renderSettings(){const page=el('div',null,'stack-lg');append(page,el('h1','Настройки'),appearancePanel());const data=el('section',null,'stack settings-section');append(data,el('h2','Данные на устройстве'),text(Object.keys(state().clients).length+' человек · '+Object.keys(state().records).length+' записей · версия базы '+state().schemaVersion),row(button('Импортировать базу',()=>importDatabase()),button('Экспортировать резервную копию',()=>backup())),text('Резервная копия содержит клиентские сведения. Ключи подключений в неё не входят. При обновлении интерфейса база сохраняется.'));page.append(data);const cloudPanel=el('section',null,'stack settings-section');cloudPanel.id='cloud-panel';page.append(cloudPanel);const update=el('section',null,'stack settings-section');update.id='update-panel';page.append(update);const wait=input('number',state().settings.waitDays);wait.min=1;wait.max=30;const taskDefaults=el('section',null,'stack settings-section');append(taskDefaults,el('h2','Задачи'),field('Дней до проверки ответа в новых задачах',wait),button('Сохранить',()=>commit(s=>{const n=Number(wait.value);if(!Number.isInteger(n)||n<1||n>30)throw Error('Укажи от 1 до 30 дней');s.settings.waitDays=n;})),text('Интервалы уже созданных задач сохраняются.'));page.append(taskDefaults,accountingUI.settingsPanel());const services=el('section',null,'stack settings-section'),url=input('url',state().settings.serviceURL||'','https://…'),token=input('password','','Новый ключ сервиса');token.autocomplete='off';const agentEnabled=input('checkbox');agentEnabled.checked=!!state().settings.agentEnabled;append(services,el('h2','Агент и Telegram'),field('Адрес твоего сервиса',url),field('Ключ доступа · оставить пустым, чтобы сохранить прежний',token),append(el('label',null,'checkbox'),agentEnabled,el('span','Использовать AI-разбор записей')),button('Сохранить подключение',async()=>{if(!window.TrailNative?.native)throw Error('Подключения доступны в установленном приложении');let base='';if(url.value.trim()){const parsed=new URL(url.value.trim());if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.search||parsed.hash)throw Error('Укажи HTTPS-адрес без ключей в ссылке');base=parsed.origin;}if(base!==(state().settings.serviceURL||''))await window.TrailNative.setSecret('serviceToken','');await commit(s=>{s.settings.serviceURL=base;s.settings.agentEnabled=agentEnabled.checked;});if(token.value)await window.TrailNative.setSecret('serviceToken',token.value.trim());message('Настройки подключения сохранены');}),text('Агент и голос работают через твой Mac. Способ обработки указан в проверке ниже. При выключенном AI записи, цели и задачи сохраняются локально.'));services.append(agentConnectionCheck(),connectionCodePanel(),telegramConnectionCheck());if(ui.pendingVoice)services.append(text('Есть сохранённая голосовая запись для '+(state().clients[ui.pendingVoice.clientId]?.name||'клиента')),row(button('Открыть запись',()=>openClient(ui.pendingVoice.clientId)),button('Удалить аудиочерновик',async()=>{if(window.TrailNative?.native)await window.TrailNative.clearVoice();ui.pendingVoice=null;render();})) );page.append(services);return page;}
+function renderSettings(){
+  const page=el('div',null,'stack-lg');
+  const update=el('section',null,'stack settings-section');update.id='update-panel';
+  const appearance=appearancePanel();
+  const data=append(el('div',null,'stack'),text(Object.keys(state().clients).length+' человек · '+Object.keys(state().records).length+' записей · версия базы '+state().schemaVersion),
+    row(button('Импортировать базу',()=>importDatabase()),button('Экспортировать резервную копию',()=>backup())),
+    text('Резервная копия содержит клиентские сведения. Ключи подключений в неё не входят. При обновлении интерфейса база сохраняется.'));
+  const cloudPanel=el('div',null,'stack');cloudPanel.id='cloud-panel';
+  const wait=input('number',state().settings.waitDays);wait.min=1;wait.max=30;
+  const taskDefaults=append(el('div',null,'stack'),field('Дней до проверки ответа в новых задачах',wait),
+    button('Сохранить',()=>commit(s=>{
+      const n=Number(wait.value);if(!Number.isInteger(n)||n<1||n>30)throw Error('Укажи от 1 до 30 дней');s.settings.waitDays=n;
+    })),text('Интервалы уже созданных задач сохраняются.'));
+  const services=el('div',null,'stack'),url=input('url',state().settings.serviceURL||'','https://…'),token=input('password','','Новый ключ сервиса');
+  token.autocomplete='off';
+  const agentEnabled=input('checkbox');agentEnabled.checked=!!state().settings.agentEnabled;
+  append(services,field('Адрес твоего сервиса',url),field('Ключ доступа · оставить пустым, чтобы сохранить прежний',token),
+    append(el('label',null,'checkbox'),agentEnabled,el('span','Использовать AI-разбор записей')),
+    button('Сохранить подключение',async()=>{
+      if(!window.TrailNative?.native)throw Error('Подключения доступны в установленном приложении');
+      let base='';
+      if(url.value.trim()){
+        const parsed=new URL(url.value.trim());
+        if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.search||parsed.hash)throw Error('Укажи HTTPS-адрес без ключей в ссылке');
+        base=parsed.origin;
+      }
+      if(base!==(state().settings.serviceURL||''))await window.TrailNative.setSecret('serviceToken','');
+      await commit(s=>{s.settings.serviceURL=base;s.settings.agentEnabled=agentEnabled.checked;});
+      if(token.value)await window.TrailNative.setSecret('serviceToken',token.value.trim());
+      message('Настройки подключения сохранены');
+    }),text('Агент и голос работают через твой Mac. Способ обработки указан в проверке ниже. При выключенном AI записи, цели и задачи сохраняются локально.'),
+    agentConnectionCheck(),connectionCodePanel(),telegramConnectionCheck());
+  if(ui.pendingVoice)services.append(text('Есть сохранённая голосовая запись для '+(state().clients[ui.pendingVoice.clientId]?.name||'клиента')),
+    row(button('Открыть запись',()=>openClient(ui.pendingVoice.clientId)),button('Удалить аудиочерновик',async()=>{
+      if(window.TrailNative?.native)await window.TrailNative.clearVoice();ui.pendingVoice=null;render();
+    })));
+  return append(page,el('h1','Настройки'),update,
+    append(el('div',null,'reference-sections settings-folds'),
+      section('Оформление','settings-appearance',[appearance]),
+      section('Данные на устройстве','settings-device',[data]),
+      section('Синхронизация','settings-cloud',[cloudPanel]),
+      section('Задачи','settings-tasks',[taskDefaults]),
+      section('Напоминания об оплате','settings-accounting',[accountingUI.settingsPanel()]),
+      section('Агент и Telegram','settings-services',[services])));
+}
 function renderUpdate(){const panel=document.getElementById('update-panel');if(!panel)return;panel.textContent='';const u=updater.state(),errors={save:'Не удалось сохранить базу перед обновлением. Повтори после освобождения места.', 'asset-id':'Не удалось прочитать ID архива обновления. Нужен исправленный APK.', 'rate-limit':'GitHub временно ограничил загрузку. Попробуй другую сеть или повтори позже.', forbidden:'GitHub отклонил загрузку. Проверь, открывается ли выпуск в браузере.',storage:'Недостаточно места для обновления. Освободи место и повтори.',timeout:'Сервер обновлений не ответил вовремя. Повтори загрузку.',tls:'Не удалось установить защищённое соединение с сервером обновлений.',native:'Обновление интерфейса доступно в установленном Android-приложении.',manifest:'Не удалось проверить сведения об обновлении. Текущая версия сохранена.','native-required':'Для этой версии нужен новый APK. Установи его поверх приложения.','github-auth':'GitHub отклонил запрос обновления. Проверь доступ к выпуску.','release-missing':'Готовый выпуск не найден или к нему временно нет доступа.',checksum:'Архив не прошёл проверку целостности. Текущая версия сохранена.',network:'Не удалось загрузить обновление. Проверь интернет и повтори.'},labels={idle:'Проверка по нажатию',checking:'Проверяю обновление…',current:'Установлена актуальная версия',available:'Доступна версия '+u.latest,downloading:'Загружаю · '+Math.round(u.progress)+'%',applying:'Открываю новую версию…',error:errors[u.error]||'Обновление не выполнено'};append(panel,el('h2','Данные и обновления'),text('THE.TRAIL Clients · '+VERSION),text(labels[u.status],u.status==='error'?'danger-text small':'muted small'));if(u.status==='error')panel.append(text('Этап: '+({save:'сохранение базы',release:'проверка выпуска',compatibility:'совместимость APK',download:'получение архива',apply:'запуск обновления'}[u.step]||'проверка')+' · код '+u.error));const progress=el('progress');progress.max=100;progress.value=u.progress;progress.hidden=u.status!=='downloading';panel.append(progress);const update=button('Обновить сейчас',()=>updater.update(),'primary');update.disabled=['checking','downloading','applying'].includes(u.status);panel.append(update);panel.append(text('Обновление сохраняет базу и черновики. При неудачном запуске возвращается предыдущая рабочая версия. Новые системные возможности могут потребовать нового APK.'));}
-function render(){if(!store)return;applyAppearance();const hash=location.hash||'#todo';root.textContent='';document.querySelectorAll('.app-nav a').forEach(a=>a.setAttribute('aria-current',a.hash===(hash.startsWith('#client/')?(ui.returnTo?.startsWith('#clients')?'#clients':ui.returnTo||'#clients'):hash.startsWith('#clients/')?'#clients':hash)?'page':'false'));if(hash.startsWith('#client/'))root.append(renderClient(hash.slice(8)));else if(hash==='#clients'||hash.startsWith('#clients/')){const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();}else if(hash==='#account'){root.append(accountingUI.page());}else if(hash==='#settings'){root.append(renderSettings());renderUpdate();renderCloudPanel();}else root.append(renderTodo());}
+function render(){
+  if(!store)return;
+  applyAppearance();const hash=location.hash||'#todo';
+  if(ui.focusRoute!==hash)ui.focusRoute=null;
+  const activeTab=hash.startsWith('#client/')?(ui.returnTo?.startsWith('#clients')?'#clients':ui.returnTo):hash.startsWith('#clients/')?'#clients':hash;
+  root.replaceChildren();
+  document.querySelectorAll('.app-nav a').forEach(a=>a.setAttribute('aria-current',a.hash===activeTab?'page':'false'));
+  if(hash.startsWith('#client/')){
+    const [,id,type,target]=hash.split('/');
+    if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
+    root.append(renderClient(id,type,target));
+  }else if(hash==='#clients'||hash.startsWith('#clients/')){
+    const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();
+  }else if(hash==='#account')root.append(accountingUI.page());
+  else if(hash==='#races')root.append(detailsUI.races());
+  else if(hash==='#settings'){root.append(renderSettings());renderUpdate();renderCloudPanel();}
+  else root.append(renderTodo());
+}
 async function start(){try{store=await createStore(window.TrailNative?.native?window.TrailNative.adapter:browserAdapter());applyAppearance();ui.drafts=C.clone(state().settings.drafts||{});if(window.TrailNative?.native){try{ui.pendingVoice=await window.TrailNative.loadVoice();}catch{message('Голосовой черновик не удалось прочитать. База клиентов доступна.',true);}}updater=createUpdater({version:VERSION,bridge:window.TrailNative,flush:async()=>{await saveDrafts();await store.flush();},onChange:u=>{renderUpdate();const link=document.querySelector('.app-nav a[href="#settings"]');if(link)link.textContent=u.status==='available'?'Настройки · обновление':'Настройки';}});if(!location.hash)history.replaceState(null,'','#todo');window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});await refreshMicrophonePermission();render();document.getElementById('save-status').textContent='На устройстве';await window.TrailNative?.ready();startCloud();if(window.TrailNative?.native)setTimeout(()=>updater.check(),1500);}catch(e){root.textContent='';append(root,el('h1','Не удалось открыть базу'),text(e.message,'danger-text'),text('Не удаляй приложение: данные могут оставаться на устройстве.'),button('Повторить',()=>location.reload()));}}
 start();

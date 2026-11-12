@@ -46,6 +46,31 @@ public class TrailDevicePlugin extends Plugin {
       return new JSObject();
     });
   }
+  @PluginMethod public void openTelegram(PluginCall call) {
+    String peer = call.getString("peerId", "");
+    String account = call.getString("accountPeerId", "");
+    String username = call.getString("username", "");
+    if (!peer.matches("[1-9][0-9]{0,18}") || !account.isEmpty() && !account.matches("[1-9][0-9]{0,18}")) {
+      call.reject("Проверь привязку Telegram");return;
+    }
+    String direct = "tg://openmessage?user_id=" + peer + (account.isEmpty() ? "" : "&account_user_id=" + account);
+    getActivity().runOnUiThread(() -> {
+      // Use the ID only in official clients that implement openmessage.
+      for (String app : new String[]{"org.telegram.messenger", "org.telegram.messenger.web", "org.telegram.messenger.beta"}) {
+        try {
+          getActivity().startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(direct)).setPackage(app));
+          call.resolve(new JSObject().put("opened", true));return;
+        } catch (android.content.ActivityNotFoundException | SecurityException ignored) {}
+      }
+      if (username.matches("[A-Za-z][A-Za-z0-9_]{4,31}")) {
+        try {
+          getActivity().startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("tg://resolve?domain=" + username)));
+          call.resolve(new JSObject().put("opened", true));return;
+        } catch (android.content.ActivityNotFoundException | SecurityException ignored) {}
+      }
+      call.reject("Не удалось открыть Telegram. Проверь, что Telegram установлен.");
+    });
+  }
   @PluginMethod public void loadVoice(PluginCall call){work(call,()->{String text="";try(FileInputStream in=voice().openRead()){text=new String(read(in,9*1024*1024),StandardCharsets.UTF_8);}catch(FileNotFoundException ignored){}return new JSObject().put("text",text);});}
   @PluginMethod public void saveVoice(PluginCall call){work(call,()->{String text=call.getString("text","");byte[] bytes=text.getBytes(StandardCharsets.UTF_8);if(bytes.length>9*1024*1024)throw new IOException("Запись слишком большая");new JSONObject(text);AtomicFile file=voice();FileOutputStream out=null;try{out=file.startWrite();out.write(bytes);file.finishWrite(out);}catch(Exception e){if(out!=null)file.failWrite(out);throw e;}return new JSObject().put("saved",true);});}
   @PluginMethod public void clearVoice(PluginCall call){work(call,()->{voice().delete();return new JSObject().put("cleared",true);});}

@@ -17,6 +17,12 @@ window.TrailNative={
     appInfo ??= App.getInfo().catch(error => { appInfo = undefined; throw error; });
     if (Number((await appInfo).build) >= 10) await Device.setLauncherPalette({ palette });
   },
+  async openTelegram({ peerId, accountPeerId, username }) {
+    if (!native) return { opened:false };
+    appInfo ??= App.getInfo().catch(error => { appInfo = undefined; throw error; });
+    if (Number((await appInfo).build) < 11) return { opened:false };
+    return Device.openTelegram({ peerId, accountPeerId:accountPeerId || '', username:username || '' });
+  },
   async setSecret(key,value){return Device.setSecret({key,value});},
   async getSecret(key){return (await Device.getSecret({key})).value||'';},
   async cloudRequest(options){return CapacitorHttp.request(options);},

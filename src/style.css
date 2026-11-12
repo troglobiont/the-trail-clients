@@ -235,3 +235,27 @@ input.account-month{width:auto;max-width:100%}
   .account-value{max-width:12ch}
 }
 @media(prefers-reduced-motion:no-preference){button,a{transition:background-color .12s ease}}
+
+/* Keep secondary data subordinate to the actions above it. */
+.catalog-other{margin-top:16px;padding-top:3px}
+.catalog-other .catalog-sections{margin-top:0;border-top:0}
+.feature-footer{margin-top:8px;justify-content:flex-end;flex-wrap:wrap}
+.feature-footer button{min-height:40px}
+.feature .fold{font-size:.85rem}
+.feature .fold summary{padding:4px 0}
+.feature-text{overflow-wrap:anywhere}
+.client-accounting>.fold-body{margin:0 0 10px 7px;padding:0 0 8px 12px;border-left:2px solid var(--line)}
+.client-accounting>.fold-body>.fold{border-top:0;background:var(--soft);border-radius:9px;padding:0 10px}
+.client-accounting>.fold-body>.fold>summary{padding-block:9px;font-size:.9rem}
+.client-accounting .fold .fold{margin-left:8px;padding-left:9px;border-left:1px solid var(--line)}
+.settings-folds .settings-section{padding:0;border:0;background:none}
+.detail-line{display:grid;grid-template-columns:minmax(100px,.85fr) minmax(0,1.15fr);gap:10px;align-items:baseline}
+.detail-line>*{overflow-wrap:anywhere}
+.inline-link{color:var(--accent);text-underline-offset:3px}
+.task[tabindex],.goal[tabindex],.feature[tabindex],.fold[tabindex]{scroll-margin-top:12px}
+.task[tabindex]:focus,.goal[tabindex]:focus,.feature[tabindex]:focus{outline:2px solid var(--accent);outline-offset:3px}
+.history .subtle{margin-top:3px;padding-left:0}
+@media(max-width:600px){
+  .app-nav{grid-template-columns:repeat(5,minmax(0,1fr))}
+  .app-nav a{padding-inline:1px;font-size:12px}
+}
