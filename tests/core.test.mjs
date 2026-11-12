@@ -57,6 +57,28 @@ test('processing same record is idempotent; note alone creates no task',()=>{con
 test('agent result is applied atomically; foreign goal and bad enum rejected',()=>{const {s,a,b}=fixture();const g=C.addGoal(s,b.id,'Чужая цель');const r=C.saveRecord(s,a.id,'Запись');const before=JSON.stringify(s);assert.throws(()=>C.applyAgentResult(s,r.id,{changes:[{type:'task',title:'Можно'},{type:'goal',id:g.id,title:'Чужое',status:'Согласовано'}]}));assert.equal(JSON.stringify(s),before);assert.throws(()=>C.applyAgentResult(s,r.id,{changes:[{type:'goal',title:'Цель',status:'Уже оплачено'}]}));});
 test('agent can create independent actions and update a known goal once',()=>{const {s,a}=fixture();const g=C.addGoal(s,a.id,'Десятка');const r=C.saveRecord(s,a.id,'Согласовали десятку, добавить блок и спросить в среду');const changes={changes:[{type:'goal',id:g.id,title:'Десятка',status:'Согласовано'},{type:'task',title:'Добавить блок'},{type:'task',title:'Спросить самочувствие',due:'2026-11-11'}]};C.applyAgentResult(s,r.id,changes);C.applyAgentResult(s,r.id,changes);assert.equal(Object.keys(s.tasks).length,2);assert.equal(Object.keys(s.goals).length,1);assert.equal(s.goals[g.id].status,'Согласовано');});
 test('archiving a feature preserves history and does not imply health recovery',()=>{const {s,a}=fixture();const f=C.addFeature(s,a.id,'Болеет, возврат неизвестен');C.setFeatureActive(s,a.id,f.id,false);assert.equal(s.clients[a.id].features.length,1);assert.equal(f.active,false);assert.ok(s.events.find(e=>e.type==='feature-archived'));assert.equal(s.clients[a.id].lastContact,null);});
+test('editing a saved feature preserves lines, identity and archived status through persistence', async () => {
+  const { s, a } = fixture();
+  const record = C.saveRecord(s, a.id, 'Сведения для карточки');
+  const feature = C.addFeature(s, a.id, 'Первоначальная запись', 'Сейчас', record.id);
+  C.setFeatureActive(s, a.id, feature.id, false);
+  let saved = JSON.stringify(s);
+  const store = await createStore({ async load() { return saved; }, async save(value) { saved = value; } });
+  const note = 'Первая строка\n\nВторая строка';
+
+  await assert.rejects(store.mutate(next => C.editFeature(next, a.id, feature.id, ' \n ', 'Сейчас')), /Введи особенность/);
+  assert.equal(store.state().clients[a.id].features[0].text, feature.text);
+  await store.mutate(next => C.editFeature(next, a.id, feature.id, `  ${note}  `, 'Постоянно учитывать'));
+
+  const restored = C.validateState(JSON.parse(saved));
+  assert.deepEqual(restored.clients[a.id].features, [{ ...feature, text: note, kind: 'Постоянно учитывать' }]);
+  assert.equal(restored.records[record.id].text, record.text);
+  const edits = () => restored.events.filter(event => event.type === 'feature-edited');
+  assert.equal(edits()[0].text, note);
+  assert.deepEqual(edits()[0].before, { text: feature.text, kind: feature.kind });
+  C.editFeature(restored, a.id, feature.id, note, 'Постоянно учитывать');
+  assert.equal(edits().length, 1);
+});
 test('backup is validated, merge does not overwrite newer local edits',()=>{const {s,a}=fixture();const initial=C.parseImport(C.exportState(s));s.clients[a.id].name='Новая правка';const merged=C.mergeState(s,initial);assert.equal(merged.clients[a.id].name,'Новая правка');assert.throws(()=>C.parseImport('{"format":"other"}'));const unsafe=JSON.parse(C.exportState(s));Object.defineProperty(unsafe.state.clients,'__proto__',{value:{},enumerable:true});assert.throws(()=>C.parseImport(JSON.stringify(unsafe)));});
 test('failed disk save leaves committed state unchanged; next save still succeeds',async()=>{let text=null,fail=true;const store=await createStore({async load(){return text;},async save(next){if(fail)throw Error('disk full');text=next;}});await assert.rejects(store.mutate(s=>C.createClient(s,{name:'Не сохранён'})));assert.equal(Object.keys(store.state().clients).length,0);fail=false;await store.mutate(s=>C.createClient(s,{name:'Сохранён'}));const restored=await createStore({async load(){return text;},async save(){}});assert.equal(Object.values(restored.state().clients)[0].name,'Сохранён');});
 test('serialized writes retain both simultaneous changes',async()=>{let text=null;const store=await createStore({async load(){return null;},async save(next){await new Promise(r=>setTimeout(r,5));text=next;}});await Promise.all([store.mutate(s=>C.createClient(s,{name:'Один'})),store.mutate(s=>C.createClient(s,{name:'Два'}))]);assert.equal(Object.keys(JSON.parse(text).clients).length,2);assert.equal(store.state().revision,2);});

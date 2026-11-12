@@ -128,9 +128,10 @@ details[open]>summary{margin-bottom:4px;color:var(--text)}
 button.feature-add{background:var(--soft);border-color:var(--line);font-size:14px;padding:6px 12px}
 .feature{padding:13px 14px 6px;background:var(--feature-bg);border-radius:10px}
 .feature-text{font-size:16px;font-weight:550;line-height:1.5}
+.feature-text,.feature-copy{white-space:pre-wrap;overflow-wrap:anywhere}
 .feature-footer{gap:4px;margin-top:4px}
 .feature-footer button{font-size:13px}
-.feature-footer .small{flex:1;min-width:100px}
+.feature-footer .small{flex:1}
 .feature-section .fold .feature{background:var(--soft);color:var(--muted);font-size:15px}
 .goal{padding:12px 0}
 .goal+.goal{border-top:1px solid var(--line)}

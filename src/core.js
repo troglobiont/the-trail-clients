@@ -95,6 +95,18 @@ export function openTasks(s,{filter='all',clientId=null,lane='current'}={}){retu
 export function taskWarning(t,today=localDate()){if(t.phase!=='waiting'||!t.checkOn||t.checkOn>today)return null;if(t.outboundCount>=3)return {level:'danger',text:'Задача остаётся открытой после нескольких сообщений · проверь переписку'};if(t.outboundCount>=2)return {level:'warning',text:'Повторная проверка переписки'};return null;}
 export function saveRecord(s,clientId,text,kind='record',recordId=id('record')){if(!s.clients[clientId]||!text?.trim()||text.length>16000)throw Error('Введи запись');if(s.records[recordId])return s.records[recordId];const r={id:recordId,clientId,text:text.trim(),kind,createdAt:stamp(),status:'saved',result:null};s.records[r.id]=r;event(s,'record-created',clientId,r.id);return r;}
 export function addFeature(s,clientId,text,kind='Сейчас',sourceRecordId=null){const c=s.clients[clientId];if(!c||!text?.trim())throw Error('Введи особенность');if(c.features.some(f=>f.active!==false&&normalizeSearch(f.text)===normalizeSearch(text)))return;const f={id:id('feature'),kind,text:text.trim(),active:true,sourceRecordId,createdAt:stamp()};c.features.push(f);event(s,'feature-created',clientId,f.id);return f;}
+export function editFeature(s, clientId, featureId, text, kind) {
+  const feature = s.clients[clientId]?.features.find(f => f.id === featureId);
+  if (!feature) throw Error('Особенность не найдена');
+  const note = text.trim();
+  if (!note) throw Error('Введи особенность');
+  if (feature.text === note && feature.kind === kind) return;
+
+  const before = { text: feature.text, kind: feature.kind };
+  feature.text = note;
+  feature.kind = kind;
+  event(s, 'feature-edited', clientId, featureId, { text: note, before });
+}
 export function setFeatureActive(s,clientId,featureId,active){const f=s.clients[clientId]?.features.find(f=>f.id===featureId);if(!f)throw Error('Особенность не найдена');f.active=active;event(s,active?'feature-restored':'feature-archived',clientId,featureId);}
 export function confirmedContact(s,clientId,{at=stamp(),channel='Telegram',direction='out',source='coach',messageKey=null}={}){const c=s.clients[clientId];if(!c)throw Error('Клиент не найден');if(messageKey&&s.events.some(e=>e.type==='contact'&&e.messageKey===messageKey))return;if(!c.lastContact||Date.parse(at)>=Date.parse(c.lastContact.at))c.lastContact={at,channel,direction,source};event(s,'contact',clientId,clientId,{at,channel,direction,source,messageKey});}
 export function processManualRecord(s,recordId,options={}){const r=s.records[recordId];if(!r)throw Error('Запись не найдена');if(r.status==='processed')return r.result;const changes=[];if(r.kind==='goal'){const g=addGoal(s,r.clientId,r.text,options.goalStatus||'Желание клиента',r.id);changes.push({type:'goal',id:g.id,title:g.title});}else if(r.kind==='task'){const t=createTask(s,r.clientId,r.text,{...options,sourceRecordId:r.id});changes.push({type:'task',id:t.id,title:t.title});}r.status='processed';r.result={mode:'manual',changes};return r.result;}
