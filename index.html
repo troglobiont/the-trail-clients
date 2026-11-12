@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#263c32">
-  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#fffdfa">
+  <meta name="color-scheme" content="light">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'">
   <title>THE.TRAIL Clients</title>
   <link rel="icon" href="./icon.png" type="image/png">
@@ -13,7 +13,7 @@
   <script src="./app.js" defer></script>
 </head>
 <body>
-  <header class="app-header"><div><span class="brand">THE.TRAIL</span><span class="brand-sub">Клиенты</span></div><span id="save-status" class="muted small" role="status">Загрузка…</span></header>
+  <header class="app-header"><div class="app-brand"><span class="brand-mark"><img src="./icon.png" width="34" height="34" alt=""></span><div><span class="brand">THE.TRAIL</span><span class="brand-sub">Клиенты</span></div></div><span id="save-status" class="muted small" role="status">Загрузка…</span></header>
   <main id="app" aria-live="polite"><div class="empty"><h1>Открываю базу…</h1></div></main>
   <nav class="app-nav" aria-label="Основные разделы"><a href="#todo">ToDo</a><a href="#clients">Клиенты</a><a href="#account">Учёт</a><a href="#settings">Настройки</a></nav>
   <div id="notice" class="notice" role="status" hidden></div>
