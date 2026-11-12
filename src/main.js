@@ -506,14 +506,21 @@ function currentAppearance(settings = state().settings) {
   }));
 }
 
-function applyAppearance() {
+function applyAppearance({ retryLauncher = false } = {}) {
   const { palette, mode } = currentAppearance();
   const html = document.documentElement;
-  if (html.dataset.palette === palette && html.dataset.appearance === mode) return;
-  html.dataset.palette = palette;
-  html.dataset.appearance = mode;
-  document.querySelector('meta[name="color-scheme"]').content = mode;
-  document.querySelector('meta[name="theme-color"]').content = getComputedStyle(html).getPropertyValue('--panel').trim();
+  const paletteChanged = html.dataset.palette !== palette;
+  if (paletteChanged || html.dataset.appearance !== mode) {
+    html.dataset.palette = palette;
+    html.dataset.appearance = mode;
+    document.querySelector('meta[name="color-scheme"]').content = mode;
+    document.querySelector('meta[name="theme-color"]').content = getComputedStyle(html).getPropertyValue('--panel').trim();
+  }
+  if (paletteChanged || retryLauncher) {
+    window.TrailNative?.setLauncherPalette?.(palette)?.catch(() => {
+      if (currentAppearance().palette === palette) message('Не удалось сменить значок Android. Попробуй выбрать палитру ещё раз.',true);
+    });
+  }
 }
 
 function appearancePanel() {
@@ -541,7 +548,7 @@ function appearancePanel() {
         await commit(s => {
           s.settings.appearance = { ...currentAppearance(s.settings), [key]:value };
         },false);
-        applyAppearance();
+        applyAppearance({ retryLauncher:key === 'palette' });
         updateSelection();
       });
       option.dataset.setting = key;

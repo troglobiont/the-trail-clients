@@ -6,11 +6,17 @@ import {CapacitorUpdater} from '@capgo/capacitor-updater';
 import {readPublicRelease} from '../src/updates.js';
 const Device=registerPlugin('TrailDevice');
 const native=Capacitor.isNativePlatform();
+let appInfo;
 window.TrailNative={
   native,
   adapter:{async load(){return (await Device.load()).text||null;},async save(text){await Device.save({text});},async loadInitialData(){const info=await App.getInfo();if(Number(info.build)<4)return null;return (await Device.loadInitialData()).text||null;}},
   async ready(){if(native)await CapacitorUpdater.notifyAppReady();},
   async info(){const info=await App.getInfo();return {nativeVersion:info.version,runtime:1};},
+  async setLauncherPalette(palette) {
+    if (!native) return;
+    appInfo ??= App.getInfo().catch(error => { appInfo = undefined; throw error; });
+    if (Number((await appInfo).build) >= 10) await Device.setLauncherPalette({ palette });
+  },
   async setSecret(key,value){return Device.setSecret({key,value});},
   async getSecret(key){return (await Device.getSecret({key})).value||'';},
   async cloudRequest(options){return CapacitorHttp.request(options);},

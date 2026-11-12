@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item type="mipmap" name="ic_launcher_cobalt">@drawable/trail_logo_cobalt</item>
+    <item type="mipmap" name="ic_launcher_terracotta">@drawable/trail_logo_terracotta</item>
+    <item type="mipmap" name="ic_launcher_plum">@drawable/trail_logo_plum</item>
+</resources>

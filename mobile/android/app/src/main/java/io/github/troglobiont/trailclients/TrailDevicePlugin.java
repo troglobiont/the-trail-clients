@@ -40,6 +40,12 @@ public class TrailDevicePlugin extends Plugin {
   @PluginMethod public void load(PluginCall call){work(call,()->{String text="";try(FileInputStream in=store().openRead()){text=new String(read(in,MAX_STORE),StandardCharsets.UTF_8);}catch(FileNotFoundException ignored){}return new JSObject().put("text",text);});}
   @PluginMethod public void loadInitialData(PluginCall call){work(call,()->{String text="";try(InputStream in=getContext().getAssets().open("trail-initial.client-data.json")){text=new String(read(in,MAX_STORE),StandardCharsets.UTF_8);}catch(FileNotFoundException ignored){}return new JSObject().put("text",text);});}
   @PluginMethod public void save(PluginCall call){work(call,()->{String text=call.getString("text","");byte[] bytes=text.getBytes(StandardCharsets.UTF_8);if(bytes.length>MAX_STORE)throw new IOException("База превышает 32 МБ; сохрани резервную копию");new JSONObject(text);AtomicFile file=store();FileOutputStream out=null;try{out=file.startWrite();out.write(bytes);file.finishWrite(out);}catch(Exception e){if(out!=null)file.failWrite(out);throw e;}return new JSObject().put("saved",true);});}
+  @PluginMethod public void setLauncherPalette(PluginCall call) {
+    work(call, () -> {
+      LauncherPalette.apply(getContext(), call.getString("palette", ""));
+      return new JSObject();
+    });
+  }
   @PluginMethod public void loadVoice(PluginCall call){work(call,()->{String text="";try(FileInputStream in=voice().openRead()){text=new String(read(in,9*1024*1024),StandardCharsets.UTF_8);}catch(FileNotFoundException ignored){}return new JSObject().put("text",text);});}
   @PluginMethod public void saveVoice(PluginCall call){work(call,()->{String text=call.getString("text","");byte[] bytes=text.getBytes(StandardCharsets.UTF_8);if(bytes.length>9*1024*1024)throw new IOException("Запись слишком большая");new JSONObject(text);AtomicFile file=voice();FileOutputStream out=null;try{out=file.startWrite();out.write(bytes);file.finishWrite(out);}catch(Exception e){if(out!=null)file.failWrite(out);throw e;}return new JSObject().put("saved",true);});}
   @PluginMethod public void clearVoice(PluginCall call){work(call,()->{voice().delete();return new JSObject().put("cleared",true);});}
