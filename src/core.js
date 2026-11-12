@@ -6,6 +6,7 @@ export { TIMEZONE, id, localDate, validDate, addDays } from './model-utils.js';
 
 export const SCHEMA=1;
 export const STATUSES=['Активный','На паузе','Завершил','Ожидает старта','Нужно уточнить'];
+export const PAUSE_KINDS={ planned:'С ориентиром', open:'Без срока' };
 export const BASES=['Beginners','Middle','Hard','Simple','Online','Gym','С нуля','Сейчас плана нет'];
 export const GOAL_STATUSES=['Желание клиента','Согласовано','Предложение тренера','Рабочая цель тренера'];
 export const TEMPLATES=['Привет! Как дела?','Привет! Как самочувствие?','Привет! Как прошла тренировка?'];
@@ -29,12 +30,28 @@ export function validateState(s){
 }
 export function event(s,type,clientId,entityId,details={}){s.events.push({id:id('event'),type,clientId,entityId,at:stamp(),...details});}
 const directorySort = new Intl.Collator('ru', { sensitivity: 'base' });
+export const clientRole = client => client.teamRole === 'Организатор' ? 'Организатор' : client.role;
+export const pauseKind = client => client.pause?.kind === 'planned' ? 'planned' : 'open';
+export function clientSection(client) {
+  if (client.mergedInto) return null;
+  if (client.role !== 'Клиент') return 'team';
+  if (client.status === 'На паузе') return 'paused';
+  if (client.status === 'Завершил') return 'archive';
+  if (client.status !== 'Активный') return 'pending';
+  return client.engagement === 'occasional' ? 'occasional' : 'active';
+}
+export function pauseContacts(s) {
+  return filterClients(s, { section:'paused' }).filter(c => validDate(c.pause?.contactOn))
+    .sort((a,b) => a.pause.contactOn.localeCompare(b.pause.contactOn));
+}
 export function filterClients(s, f = {}) {
   const words = String(f.query || '').split(/\s+/).map(normalizeSearch).filter(Boolean);
   return Object.values(s.clients).filter(c => {
     const format = c.currentFormat || c.format;
     const labels = [c.name, ...(c.aliases || [])].map(normalizeSearch);
-    return words.every(word => labels.some(label => label.includes(word)))
+    return !c.mergedInto && words.every(word => labels.some(label => label.includes(word)))
+      && (!f.section || clientSection(c) === f.section)
+      && (!f.pauseKind || pauseKind(c) === f.pauseKind)
       && (!f.role || f.role === 'all' || c.role === f.role)
       && (!f.status || f.status === 'all' || c.status === f.status)
       && (!f.format || f.format === 'all' || format === f.format)
@@ -63,7 +80,7 @@ export function createClient(s,values,day=localDate()){
 export function editClient(s,clientId,values,day=localDate()){
   const c=s.clients[clientId];if(!c)throw Error('Клиент не найден');
   const previous=c.role==='Клиент'?c.status:null;
-  const allowed=['name','role','status','format','currentFormat','group','personal','basis','level','context','telegram'];
+  const allowed=['name','role','status','format','currentFormat','group','personal','basis','level','context','telegram','engagement','teamRole','pause','billingNote'];
   for(const k of allowed)if(k in values)c[k]=values[k];
   event(s,'client-edited',clientId,clientId);recordMovement(s,c,previous,day);
 }

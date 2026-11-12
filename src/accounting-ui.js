@@ -1,5 +1,5 @@
 import * as A from './accounting.js';
-import { localDate } from './model-utils.js';
+import { addDays, localDate } from './model-utils.js';
 import { ledgerRows } from './ledger-import.js';
 
 const today = () => localDate();
@@ -9,12 +9,12 @@ const monthLabel = month => new Intl.DateTimeFormat('ru-RU', { month: 'long', ye
   .format(new Date(month + '-15T12:00:00Z')).replace(/\s*г\.$/, '');
 const isMonthly = service => service.kind !== 'personal';
 
-export function createAccountingUI({ state, el, append, button, row, field, input, select, text, section, modal, commit, render, formatDate, openClient, navigate, message, importLedger, searchClients }) {
+export function createAccountingUI({ state, el, append, button, row, field, input, select, text, section, modal, commit, render, formatDate, openClient, navigate, message, importLedger, searchClients, activateClient }) {
   let month = today().slice(0, 7);
   let tab = 'summary';
   const book = () => A.accounting(state());
   const findService = id => book().services[id];
-  const serviceTitle = s => A.SERVICES[s.kind];
+  const serviceTitle = s => A.PACKAGES[A.servicePackage(s)];
   const clientName = id => state().clients[id]?.name || 'Клиент';
 
   function line(title, detail = '', value = '', action) {
@@ -45,7 +45,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return control.value;
   }
 
-  const activeServices = () => Object.values(book().services).filter(s => A.activeService(s, today()));
+  const activeServices = () => Object.values(book().services).filter(s =>
+    state().clients[s.clientId].status === 'Активный' && A.activeService(s, today()));
   const activeClientIds = () => new Set(activeServices().map(s => s.clientId));
   const serviceCaption = s => isMonthly(s) ? serviceTitle(s) : serviceTitle(s) + ' · ' + s.place;
   const importedPayment = (s, period) => ledgerRows(state(), { clientId:s.clientId, period })
@@ -138,7 +139,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           } else if (isMonthly(service)) {
             const charge = A.monthlyCharge(state(), service, period.value);
             const archived = importedPayment(service, period.value);
-            received.value = charge?.remaining && !archived ? String(charge.remaining / 100) : '';
+            received.value = !archived && (charge?.remaining ?? service.rate) ? String((charge?.remaining ?? service.rate) / 100) : '';
             if (archived) note.textContent = 'В бухгалтерии уже есть запись за этот месяц';
             else if (charge && !charge.remaining) note.textContent = 'Этот месяц уже оплачен';
           } else {
@@ -215,17 +216,20 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return [field(label, control), control];
   }
 
-  function editService(clientId, existing) {
+  function editService(clientId, existing, { resume = false } = {}) {
     const client = state().clients[clientId];
-    modal(existing ? 'Условия услуги' : 'Добавить услугу', form => {
-      const initial = client.group === 'Да' ? 'belgrade' : ['gym', 'outside'].includes(client.personal) ? 'personal' : 'coaching';
-      const kind = select(Object.entries(A.SERVICES), existing?.kind || initial);
-      const defaultBlock = type => ({ online: 'online', personal: 'personal', coaching: client.format === 'Дистанционно' ? 'online' : 'belgrade', belgrade: 'belgrade' })[type];
+    modal(resume ? 'Возобновить сотрудничество' : existing ? 'Условия услуги' : 'Добавить услугу', form => {
+      const initial = client.group === 'Да' ? 'belgrade' : ['gym', 'outside'].includes(client.personal) ? 'personal'
+        : client.level === 'Премиум' ? 'coaching' : 'online';
+      const options = Object.entries(A.PACKAGES);
+      if (resume) options.unshift(['','Без тарифа']);
+      const kind = select(options, existing ? A.servicePackage(existing) : resume ? '' : initial);
+      const defaultBlock = type => ({ online:'online', personal:'personal', coaching:'online', belgrade:'belgrade', gym:'belgrade', trainingpeaks:'online' })[type] || 'online';
       const block = select(Object.entries(A.BLOCKS), existing?.block || defaultBlock(kind.value));
-      const starts = dateInput(existing?.startsOn || today(), false);
-      const ends = dateInput(existing?.endsOn || '', false);
+      const starts = dateInput(resume ? today() : existing?.startsOn || today(), resume);
+      const ends = dateInput(resume ? '' : existing?.endsOn || '', false);
       const currency = select(currencyOptions, existing?.currency || (block.value === 'online' ? 'RUB' : 'RSD'));
-      const rate = moneyInput(existing?.rate);
+      const rate = moneyInput(existing?.rate ?? (kind.value === 'belgrade' ? 800000 : undefined));
       const day = numberInput(existing?.day ?? Number(starts.value.slice(-2)), 1, 31);
       const place = select(A.PLACES, existing?.place || (client.personal === 'outside' ? 'Улица' : 'Зал'));
       const reminder = input('checkbox');
@@ -233,8 +237,15 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const monthlyFields = append(el('div', null, 'stack'), field('День оплаты', day), append(el('label', null, 'checkbox'), reminder, el('span', 'Напоминать в ToDo')));
       const placeField = field('Обычное место занятия', place);
       const rateLabel = el('span');
+      const cover = input('month', existing?.coveredThrough || '');
+      const tariffFields = append(el('div', null, 'stack'), field('Раздел отчёта', block),
+        field('Последний день', ends),
+        append(el('div', null, 'account-fields'), append(el('label'), rateLabel, rate), field('Валюта тарифа', currency)),
+        monthlyFields, placeField);
+      monthlyFields.append(field('Оплачено по месяц включительно', cover));
       const sync = () => {
         const personal = kind.value === 'personal';
+        tariffFields.hidden = !kind.value;
         monthlyFields.hidden = personal;
         placeField.hidden = !personal;
         rateLabel.textContent = personal ? 'Ставка за занятие' : 'Тариф за месяц';
@@ -242,22 +253,48 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       kind.addEventListener('change', () => {
         block.value = defaultBlock(kind.value);
         currency.value = block.value === 'online' ? 'RUB' : 'RSD';
+        rate.value = kind.value === 'belgrade' ? '8000' : '';
         sync();
       });
       sync();
-      append(form, field('Услуга', kind), field('Раздел отчёта', block), append(el('div', null, 'account-fields'), field('Действует с', starts), field('Последний день', ends)),
-        append(el('div', null, 'account-fields'), append(el('label'), rateLabel, rate), field('Валюта тарифа', currency)), monthlyFields, placeField);
+      append(form, field('Пакет', kind), field('Действует с', starts), tariffFields);
       return async () => {
+        if (resume && !kind.value) return commit(s => activateClient(s, clientId, starts.value));
         const personal = kind.value === 'personal';
         if (!personal && !day.value) throw Error('Укажи день оплаты');
         const values = {
-          clientId, kind: kind.value, block: block.value, startsOn: starts.value, endsOn: ends.value || null,
+          clientId, kind: A.packageKind(kind.value), package:kind.value, block: block.value, startsOn: starts.value, endsOn: ends.value || null,
           currency: currency.value, rate: A.amountMinor(rate.value), day: personal ? null : Number(day.value),
-          reminder: !personal && reminder.checked, place: personal ? place.value : null
+          reminder: !personal && reminder.checked, place: personal ? place.value : null,
+          ...(!personal && cover.value ? { coveredThrough:cover.value } : {}),
+          ...(!resume && !personal && existing?.billingFrom ? { billingFrom:existing.billingFrom } : {}),
+          ...(!resume && personal && existing?.openingCredit ? { openingCredit:existing.openingCredit } : {}),
+          ...(!resume && existing?.note ? { note:existing.note } : {})
         };
-        await commit(s => A.saveService(s, values, existing?.id));
+        await commit(s => {
+          if (!resume) return A.saveService(s, values, existing?.id);
+          const current = A.clientServices(s, clientId).find(service => A.servicePackage(service) === values.package
+            && service.place === values.place && A.activeService(service, values.startsOn));
+          if (current) {
+            const sameTerms = ['block','currency','rate','day'].every(key => current[key] === values[key]);
+            if (sameTerms || personal && current.block === values.block && current.currency === values.currency) {
+              A.saveService(s, { ...current, rate:values.rate, endsOn:values.endsOn, reminder:values.reminder,
+                coveredThrough:values.coveredThrough ?? null }, current.id);
+              return activateClient(s, clientId, starts.value);
+            }
+            if (current.startsOn >= values.startsOn) throw Error('На эту дату уже действует этот пакет. Проверь дату или открой условия тарифа.');
+            A.saveService(s, { ...current, endsOn:addDays(values.startsOn,-1) }, current.id);
+          }
+          A.saveService(s, values);
+          activateClient(s, clientId, starts.value);
+        });
       };
     });
+  }
+
+  function resumeClient(client) {
+    const previous = A.clientServices(state(), client.id).sort((a,b) => Number(isMonthly(b)) - Number(isMonthly(a)) || b.startsOn.localeCompare(a.startsOn));
+    editService(client.id, previous[0] || client.priorTariff, { resume:true });
   }
 
   function choices(clientId, onlyPersonal = false) {
@@ -496,7 +533,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   function summary() {
     const summary = A.summarize(state(), month);
     const metrics = append(el('div', null, 'panel stack'), text(state().ledger ? 'Оплаты, записанные в приложении' : 'Получено за месяц'), el('h2', totals(summary.receipts), 'account-total'));
-    const byService = group('По услугам', ...Object.entries(A.SERVICES).map(([key, label]) => line(label, '', totals(summary.services[key] || {}))));
+    const byService = group('По пакетам', ...Object.entries(A.PACKAGES).map(([key, label]) => line(label, '', totals(summary.services[key] || {}))));
     const byBlock = section('Итоги по блокам', 'account-totals', [
       ...Object.entries(A.BLOCKS).map(([key, label]) => line(label, 'Поступления', totals(summary.blocks[key] || {}))),
       line('Расходы', '', totals(summary.expenses)), line('Остаток по Белграду и персональным', '', totals(summary.localBalance))
@@ -546,10 +583,11 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
 
   function clientPanel(client) {
     const services = A.clientServices(state(), client.id);
-    const active = services.filter(s => A.activeService(s, today()));
+    const active = services.filter(s => client.status === 'Активный' && A.activeService(s, today()));
     const history = A.operations(state(), { clientId: client.id, includeVoided: true });
     const imported = ledgerRows(state(), { clientId: client.id });
-    const tariffLine = s => line(serviceTitle(s), isMonthly(s) ? 'Оплата ' + s.day + '-го' : s.place,
+    const tariffLine = s => line(serviceTitle(s), [isMonthly(s) ? 'Оплата ' + s.day + '-го' : s.place,
+      s.startsOn > today() ? 'С ' + formatDate(s.startsOn) : '', s.note].filter(Boolean).join(' · '),
       A.money(s.rate, s.currency) + (isMonthly(s) ? ' / мес.' : ' / зан.'), () => editService(client.id, s));
     const currentStatus = s => {
       let status, value;
@@ -557,7 +595,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         const period = today().slice(0, 7);
         const charge = client.status === 'Активный' && A.monthlyCharge(state(), s, period);
         if (!charge) return null;
-        if (!charge.remaining) status = monthLabel(period) + ' · оплачено';
+        if (s.coveredThrough && period <= s.coveredThrough) status = 'Оплачено по ' + monthLabel(s.coveredThrough);
+        else if (!charge.remaining) status = monthLabel(period) + ' · оплачено';
         else if (importedPayment(s, period)) status = monthLabel(period) + ' · есть запись в бухгалтерии';
         else {
           status = monthLabel(period) + ' · к оплате';
@@ -587,7 +626,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const journal = clientHistory(history, client.id);
     const previous = services.filter(s => !active.includes(s));
     return section('Оплаты и занятия', `${client.id}-account`, [
-      ...active.map(currentStatus), !active.length && text(services.length ? 'Нет действующих услуг' : 'Тарифы пока не заданы'),
+      client.billingNote && text(client.billingNote),
+      ...active.map(currentStatus), !active.length && !client.billingNote && text(services.length ? 'Нет действующих услуг' : 'Тарифы пока не заданы'),
       primary && actionButton(primary, 'primary account-main-action'),
       actions.length > 1 && section('Другие действия', `${client.id}-account-actions`, actions.slice(1).map(action => actionButton(action, 'account-extra-action'))),
       section('Тарифы' + (active.length ? ' · ' + active.length : ''), `${client.id}-tariffs`, [
@@ -635,5 +675,5 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       })));
   }
 
-  return { page, clientPanel, remindersPanel, settingsPanel, quickEntry, activeClientIds };
+  return { page, clientPanel, remindersPanel, settingsPanel, quickEntry, activeClientIds, resumeClient };
 }

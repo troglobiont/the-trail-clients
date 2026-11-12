@@ -18,6 +18,33 @@ function payment(state, date, currency, amount, allocations) {
 
 const credit = (service, month, part, credited = part) => ({ serviceId: service.id, month, part, credit: credited });
 
+test('tariff currency is matched on the selected package independently of actual receipt currency', () => {
+  const s = emptyState();
+  const first = createClient(s,{name:'Первый'},'2024-10-01');
+  const second = createClient(s,{name:'Второй'},'2024-10-01');
+  const online = enrollment(s,first,{kind:'online',block:'online',currency:'EUR',rate:8000});
+  enrollment(s,second,{kind:'online',block:'online',currency:'RSD'});
+  enrollment(s,second,{kind:'coaching',package:'gym',currency:'EUR'});
+  payment(s,'2024-11-03','RSD',900000,[credit(online,'2024-11',900000,8000)]);
+  assert.deepEqual([...A.matchingTariffClients(s,{packageFilter:'all-online',tariffCurrency:'EUR',paymentCurrency:'RSD',
+    paymentMonth:'2024-11'},'2024-11-10')],[first.id]);
+  assert.deepEqual([...A.matchingTariffClients(s,{packageFilter:'gym',tariffCurrency:'EUR',paymentCurrency:'all'},'2024-11-10')],[second.id]);
+});
+
+test('imported coverage and opening advances suppress duplicate bills without creating receipts', () => {
+  const s = emptyState();
+  const c = createClient(s,{name:'Клиент'},'2024-10-01');
+  const recurring = enrollment(s,c,{billingFrom:'2024-11',coveredThrough:'2024-12'});
+  const personal = enrollment(s,c,{kind:'personal',block:'personal',place:'Улица',day:null,reminder:false,rate:400000,
+    openingCredit:{amount:3200000,date:'2024-11-12'}});
+  assert.equal(A.monthlyCharge(s,recurring,'2024-12','2024-12-26').remaining,0);
+  assert.deepEqual(A.paymentReminders(s,'2024-12-26'),[]);
+  assert.deepEqual(A.paymentReminders(s,'2025-01-24').map(r=>r.month),['2025-01']);
+  A.saveOperation(s,{kind:'session',serviceId:personal.id,date:'2024-11-13',place:'Улица',currency:'RSD',amount:400000,note:''});
+  assert.equal(A.serviceBalance(s,personal.id,'2024-11-14').balance,2800000);
+  assert.deepEqual(A.summarize(s,'2024-11').receipts,{});
+});
+
 test('one payment counts once by receipt date while covering several people, currencies and months', () => {
   const state = emptyState();
   const first = createClient(state, { name: 'Первый' }, '2024-10-01');

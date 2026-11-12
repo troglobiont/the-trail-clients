@@ -1,4 +1,5 @@
 import * as C from './core.js';
+import { CURRENCIES, PACKAGES, matchingTariffClients } from './accounting.js';
 import {createStore,browserAdapter} from './store.js';
 import {createUpdater} from './updates.js';
 import {parseConnection} from './connection.js';
@@ -12,8 +13,12 @@ import {cloudConfig} from './cloud-config.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,cloud,noticeTimer,draftTimer;
-const defaultFilters=()=>({query:'',status:'all',format:'all',quick:'all',basis:'all',level:'all',personal:'all',role:'Клиент'});
-const ui={filters:defaultFilters(),taskFilter:'all',returnTo:'#clients',open:new Set(),drafts:{},sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
+const catalogViews = { active:'Клиенты', occasional:'Разовые', paused:'На паузе', archive:'Архив', team:'Команда', pending:'Ожидают старта и требуют уточнения' };
+const CATALOG_PAGE_SIZE = 12;
+const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
+  packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7)});
+const ui={filters:defaultFilters(),catalogScope:'active',pauseFilter:null,catalogLimit:CATALOG_PAGE_SIZE,
+  taskFilter:'all',returnTo:'#clients',open:new Set(),drafts:{},sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
 const state=()=>store.state();
 function el(tag,text,className){const node=document.createElement(tag);if(text!==undefined&&text!==null)node.textContent=text;if(className)node.className=className;return node;}
 function append(parent,...children){parent.append(...children.filter(Boolean));return parent;}
@@ -30,13 +35,20 @@ function text(text,className='muted small'){return el('div',text,className);}
 function field(label,input){return append(el('label',label),input);}
 function input(type='text',value='',placeholder=''){const i=el('input');i.type=type;i.value=value;i.placeholder=placeholder;return i;}
 function select(values,value){const s=el('select');for(const item of values){const [v,label]=Array.isArray(item)?item:[item,item],o=el('option',label);o.value=v;s.append(o);}s.value=value;return s;}
-function chips(c){const list=el('span',null,'row');for(const value of c.role==='Тренер'?['Тренер']:[c.status,c.currentFormat||c.format,'Основа: '+c.basis])list.append(el('span',value,'chip'));if(c.level==='Премиум')list.append(el('span','Премиум','chip emphasis'));if(['gym','outside'].includes(c.personal))list.append(el('span',c.personal==='gym'?'Персональный зал с Сергеем':'Персонально с Сергеем · улица','chip emphasis'));return list;}
+function clientStatus(c) {
+  if (c.role !== 'Клиент') return C.clientRole(c);
+  if (C.clientSection(c) === 'occasional') return 'Разово';
+  if (c.status === 'На паузе') return 'На паузе · ' + C.PAUSE_KINDS[C.pauseKind(c)].toLowerCase();
+  return c.status;
+}
+function chips(c){const list=el('span',null,'row');for(const value of c.role==='Клиент'?[clientStatus(c),c.currentFormat||c.format,'Основа: '+c.basis]:[C.clientRole(c)])list.append(el('span',value,'chip'));if(c.level==='Премиум')list.append(el('span','Премиум','chip emphasis'));if(['gym','outside'].includes(c.personal))list.append(el('span',c.personal==='gym'?'Персональный зал с Сергеем':'Персонально с Сергеем · улица','chip emphasis'));return list;}
 function formatDate(iso,withTime=false){if(!iso)return '';return new Intl.DateTimeFormat('ru-RU',{timeZone:C.TIMEZONE,day:'numeric',month:'short',...(withTime?{hour:'2-digit',minute:'2-digit'}:{})}).format(new Date(iso.length===10?iso+'T12:00:00Z':iso));}
 function section(title,key,children){const d=el('details',null,'fold'),summary=el('summary',title);d.open=ui.open.has(key);d.addEventListener('toggle',()=>{if(d.open)ui.open.add(key);else ui.open.delete(key);});append(d,summary,append(el('div',null,'fold-body stack'),...children));return d;}
 function navigate(hash){location.hash=hash;}
 function openClient(clientId){ui.returnTo=location.hash.startsWith('#client/')?ui.returnTo:location.hash||'#todo';navigate('#client/'+clientId);}
 const accountingUI=createAccountingUI({state,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,navigate,message,importLedger:()=>importDatabase(true),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
+  activateClient:(s,id,day)=>C.editClient(s,id,{status:'Активный',engagement:null,pause:null},day),
   openClient(clientId){ui.open.add(clientId+'-account');openClient(clientId);}
 });
 function modal(title,build,{saveLabel='Сохранить',onSaved}={}){
@@ -122,68 +134,214 @@ function startCloud(){
   renderCloudStatus();
   run(()=>cloud.restore());
 }
-function editClient(clientId=null){const c=clientId?state().clients[clientId]:null;modal(c?'Данные клиента':'Новый клиент',form=>{const name=input('text',c?.name||'');name.maxLength=180;form.append(field('Фамилия Имя',name));const controls={role:select(['Клиент','Тренер'],c?.role||'Клиент'),status:select(C.STATUSES,c?.status||'Активный'),format:select(['Очно','Дистанционно','Уточнить'],c?.format||'Уточнить'),basis:select(C.BASES,c?.basis||'Сейчас плана нет'),level:select(['Обычное','Премиум'],c?.level||'Обычное'),group:select(['Да','Нет','Уточнить'],c?.group||'Уточнить'),personal:select([['none','Нет'],['gym','В зале'],['outside','На улице'],['unknown','Нужно уточнить']],c?.personal||'unknown'),currentFormat:select([['','Нет временного изменения'],['Очно','Временно очно'],['Дистанционно','Временно онлайн']],c?.currentFormat||'')};const labels={role:'Роль',status:'Статус сотрудничества',format:'Обычный формат',basis:'Основа плана',level:'Ведение',group:'Групповые с Сергеем',personal:'Персональные с Сергеем',currentFormat:'Формат сейчас'};for(const [key,control] of Object.entries(controls))form.append(field(labels[key],control));const date=input('date',C.localDate());date.max=C.localDate();const effective=field('Дата изменения статуса',date);const updateDate=()=>{effective.hidden=controls.role.value!=='Клиент'||!!c&&c.role==='Клиент'&&controls.status.value===c.status;};controls.role.addEventListener('change',updateDate);controls.status.addEventListener('change',updateDate);updateDate();form.append(effective);return async()=>{const values={name:name.value.trim(),...Object.fromEntries(Object.entries(controls).map(([k,v])=>[k,v.value]))};values.currentFormat=values.currentFormat||null;if(!values.name)throw Error('Введи имя');await commit(s=>c?C.editClient(s,c.id,values,date.value):C.createClient(s,values,date.value));};});}
-function renderCatalog(){
-  const page=el('div',null,'stack catalog-page');
-  page.append(append(el('div',null,'page-title'),el('h1','Клиенты'),
-    Object.keys(state().clients).length&&button('Добавить клиента',()=>editClient(),'subtle')));
-  if(!Object.keys(state().clients).length){page.append(emptyDatabase());return page;}
-  const search=input('search',ui.filters.query,'Поиск (фамилия имя)');
+function editClient(clientId=null) {
+  const c = clientId ? state().clients[clientId] : null;
+  modal(c ? 'Данные клиента' : 'Новый клиент', form => {
+    const name = input('text', c?.name || '');
+    name.maxLength = 180;
+    const role = select(['Клиент','Тренер','Организатор'], c ? C.clientRole(c) : 'Клиент');
+    const status = select([...C.STATUSES, ['occasional','Разово']], c?.engagement === 'occasional' ? 'occasional' : C.STATUSES.includes(c?.status) ? c.status : 'Активный');
+    const pauseType = select(Object.entries(C.PAUSE_KINDS), c ? C.pauseKind(c) : 'open');
+    const returnWindow = input('text', c?.pause?.returnWindow || '', 'Например, в январе');
+    returnWindow.maxLength = 140;
+    const contactOn = input('date', c?.pause?.contactOn || '');
+    const pauseFields = append(el('div',null,'stack'), field('Вид паузы',pauseType), field('Ориентир возврата',returnWindow), field('Связаться',contactOn));
+    const date = input('date', C.localDate());
+    date.max = C.localDate();
+    const effective = field('Дата изменения статуса',date);
+    const statusField = field('Статус сотрудничества',status);
+    append(form, field('Фамилия Имя',name), field('Роль',role), statusField, pauseFields);
+    const controls = {
+      format:select(['Очно','Дистанционно','Уточнить'],c?.format||'Уточнить'),
+      basis:select(C.BASES,c?.basis||'Сейчас плана нет'),
+      level:select(['Обычное','Премиум'],c?.level||'Обычное'),
+      group:select(['Да','Нет','Уточнить'],c?.group||'Уточнить'),
+      personal:select([['none','Нет'],['gym','В зале'],['outside','На улице'],['unknown','Нужно уточнить']],c?.personal||'unknown'),
+      currentFormat:select([['','Нет временного изменения'],['Очно','Временно очно'],['Дистанционно','Временно онлайн']],c?.currentFormat||'')
+    };
+    const labels = {format:'Обычный формат',basis:'Основа плана',level:'Ведение',group:'Групповые с Сергеем',personal:'Персональные с Сергеем',currentFormat:'Формат сейчас'};
+    for (const [key,control] of Object.entries(controls)) form.append(field(labels[key],control));
+    form.append(effective);
+    const actualStatus = () => status.value === 'occasional' ? 'Активный' : status.value;
+    const syncFields = () => {
+      const isClient = role.value === 'Клиент';
+      statusField.hidden = !isClient;
+      pauseFields.hidden = !isClient || status.value !== 'На паузе';
+      effective.hidden = !isClient || c?.role === 'Клиент' && actualStatus() === c.status;
+    };
+    role.addEventListener('change',syncFields);
+    status.addEventListener('change',syncFields);
+    syncFields();
+    return () => {
+      const isClient = role.value === 'Клиент';
+      const values = {
+        ...Object.fromEntries(Object.entries(controls).map(([key,control])=>[key,control.value])),
+        name:name.value.trim(), role:isClient ? 'Клиент' : 'Тренер', teamRole:role.value === 'Организатор' ? 'Организатор' : null,
+        status:isClient ? actualStatus() : 'Тренер', currentFormat:controls.currentFormat.value || null,
+        engagement:isClient && status.value === 'occasional' ? 'occasional' : null,
+        pause:!pauseFields.hidden ? {kind:pauseType.value,returnWindow:returnWindow.value.trim(),contactOn:contactOn.value || null} : null
+      };
+      if (!values.name) throw Error('Введи имя');
+      return commit(s=>c ? C.editClient(s,c.id,values,date.value) : C.createClient(s,values,date.value));
+    };
+  });
+}
+
+function renderCatalog(scope) {
+  if (scope !== ui.catalogScope) {
+    ui.catalogScope = scope;
+    ui.filters = defaultFilters();
+    ui.catalogLimit = CATALOG_PAGE_SIZE;
+    ui.pauseFilter = null;
+  }
+  const page = el('div',null,'stack catalog-page');
+  if (scope !== 'active') page.append(button('← К активным клиентам',()=>navigate('#clients'),'back subtle'));
+  page.append(append(el('div',null,'page-title'),el('h1',catalogViews[scope]),
+    scope === 'active' && Object.keys(state().clients).length && button('Добавить клиента',()=>editClient(),'subtle')));
+  if (!Object.keys(state().clients).length) {
+    page.append(emptyDatabase());
+    return page;
+  }
+
+  const search = input('search',ui.filters.query,'Поиск (фамилия имя)');
   search.setAttribute('aria-label','Поиск (фамилия имя)');
-  search.maxLength=100;
-  search.addEventListener('input',()=>{ui.filters.query=search.value;renderCatalogResults();});
-  const quick=el('div',null,'row catalog-quick');
-  quick.setAttribute('role','group');
-  quick.setAttribute('aria-label','Быстрые фильтры');
-  for(const [value,label] of [['Дистанционно','Онлайн'],['Очно','Очно'],['gym','Зал']]){
-    const control=button(label,()=>{
-      ui.filters.quick=ui.filters.quick===value?'all':value;
-      for(const b of quick.children)b.setAttribute('aria-pressed',String(b.dataset.quick===ui.filters.quick));
+  search.maxLength = 100;
+  search.addEventListener('input',()=>{
+    ui.filters.query = search.value;
+    ui.catalogLimit = CATALOG_PAGE_SIZE;
+    renderCatalogResults();
+  });
+  page.append(search);
+  if (scope === 'active') page.append(activeCatalogFilters());
+  if (scope === 'paused') page.append(pauseFilters());
+  const list = el('div',null,'client-directory');
+  list.id = 'client-tiles';
+  page.append(list);
+
+  if (scope === 'active') {
+    const links = el('nav',null,'catalog-sections');
+    links.setAttribute('aria-label','Другие списки клиентов');
+    const counts = {};
+    for (const c of Object.values(state().clients)) {
+      const key = C.clientSection(c);
+      if (key) counts[key] = (counts[key] || 0) + 1;
+    }
+    for (const key of ['occasional','paused','archive','team','pending']) {
+      if (key === 'pending' && !counts[key]) continue;
+      const link = button('',()=>navigate('#clients/'+key),'catalog-section-link');
+      append(link,el('span',catalogViews[key]),el('span',String(counts[key] || 0),'muted'),el('span','›','muted'));
+      links.append(link);
+    }
+    page.append(links);
+  }
+  return page;
+}
+
+function pauseFilters() {
+  const filters = el('div',null,'row catalog-quick');
+  filters.setAttribute('role','group');
+  filters.setAttribute('aria-label','Вид паузы');
+  const paused = C.filterClients(state(),{ section:'paused' });
+  for (const [key,label] of Object.entries(C.PAUSE_KINDS)) {
+    const count = paused.filter(c=>C.pauseKind(c) === key).length;
+    const control = button(label + ' · ' + count,()=>{
+      ui.pauseFilter = ui.pauseFilter === key ? null : key;
+      ui.catalogLimit = CATALOG_PAGE_SIZE;
+      for (const item of filters.children) item.setAttribute('aria-pressed',String(item.dataset.pause === ui.pauseFilter));
       renderCatalogResults();
     });
-    control.dataset.quick=value;
-    control.setAttribute('aria-pressed',String(ui.filters.quick===value));
+    control.dataset.pause = key;
+    control.setAttribute('aria-pressed',String(ui.pauseFilter === key));
+    filters.append(control);
+  }
+  return filters;
+}
+
+function activeCatalogFilters() {
+  const quick = el('div',null,'row catalog-quick');
+  quick.setAttribute('role','group');
+  quick.setAttribute('aria-label','Быстрые фильтры');
+  for (const [value,label] of [['Дистанционно','Онлайн'],['Очно','Очно'],['gym','Зал']]) {
+    const control = button(label,()=>{
+      ui.filters.quick = ui.filters.quick === value ? 'all' : value;
+      ui.catalogLimit = CATALOG_PAGE_SIZE;
+      for (const b of quick.children) b.setAttribute('aria-pressed',String(b.dataset.quick === ui.filters.quick));
+      renderCatalogResults();
+    });
+    control.dataset.quick = value;
+    control.setAttribute('aria-pressed',String(ui.filters.quick === value));
     quick.append(control);
   }
-  const extra=el('div',null,'filters');
-  for(const [key,label,values] of [
-    ['status','Статус',[['all','Все статусы'],...C.STATUSES]],
+  const extra = el('div',null,'filters');
+  const currencyOptions = [['all','Любая'],...CURRENCIES];
+  for (const [key,label,values] of [
+    ['packageFilter','Пакет',[['all','Любой'],['all-online','Весь онлайн'],...Object.entries(PACKAGES),['personal-gym','Персональная тренировка · зал']]],
+    ['tariffCurrency','Валюта тарифа',currencyOptions],
+    ['paymentCurrency','Валюта поступления',currencyOptions],
     ['format','Формат сейчас',[['all','Любой'],['Очно','Очно'],['Дистанционно','Онлайн'],['Уточнить','Нужно уточнить']]],
     ['basis','Основа плана',[['all','Любая'],...C.BASES]],
     ['level','Ведение',[['all','Любое'],'Обычное','Премиум']],
-    ['personal','Персональные с Сергеем',[['all','Любые'],['gym','В зале'],['outside','На улице'],['none','Нет'],['unknown','Нужно уточнить']]],
-    ['role','Роль',[['Клиент','Клиенты'],['Тренер','Тренеры'],['all','Все люди']]]
-  ])extra.append(filterControl(key,label,values));
-  const list=el('div',null,'client-directory');
-  list.id='client-tiles';
-  append(page,search,quick,section('Фильтр','catalog-filters',[
-    extra,button('Сбросить фильтры',()=>{const query=ui.filters.query;ui.filters={...defaultFilters(),query};render();},'subtle')
-  ]),list);
-  return page;
+    ['personal','Персональные с Сергеем',[['all','Любые'],['gym','В зале'],['outside','На улице'],['none','Нет'],['unknown','Нужно уточнить']]]
+  ]) extra.append(filterControl(key,label,values));
+  const month = input('month',ui.filters.paymentMonth);
+  const monthField = field('Месяц поступления',month);
+  monthField.hidden = ui.filters.paymentCurrency === 'all';
+  monthField.id = 'catalog-payment-month';
+  month.addEventListener('change',()=>{
+    if (!month.value) return;
+    ui.filters.paymentMonth = month.value;
+    ui.catalogLimit = CATALOG_PAGE_SIZE;
+    renderCatalogResults();
+  });
+  extra.append(monthField);
+  return append(el('div',null,'stack catalog-options'),quick,section('Фильтр','catalog-filters',[
+    extra,button('Сбросить фильтры',()=>{
+      ui.filters = {...defaultFilters(),query:ui.filters.query};
+      ui.catalogLimit = CATALOG_PAGE_SIZE;
+      render();
+    },'subtle')
+  ]));
 }
-function filterControl(key,label,values){
-  const control=select(values,ui.filters[key]);
-  control.addEventListener('change',()=>{ui.filters[key]=control.value;renderCatalogResults();});
+
+function filterControl(key,label,values) {
+  const control = select(values,ui.filters[key]);
+  control.addEventListener('change',()=>{
+    ui.filters[key] = control.value;
+    ui.catalogLimit = CATALOG_PAGE_SIZE;
+    if (key === 'paymentCurrency') document.getElementById('catalog-payment-month').hidden = control.value === 'all';
+    renderCatalogResults();
+  });
   return field(label,control);
 }
-function renderCatalogResults(){
-  const list=document.getElementById('client-tiles');
-  if(!list)return;
-  const clients=C.filterClients(state(),ui.filters);
-  const accountingClients=accountingUI.activeClientIds();
+
+function renderCatalogResults() {
+  const list = document.getElementById('client-tiles');
+  if (!list) return;
+  const scope = ui.catalogScope;
+  const tariffs = scope === 'active' ? matchingTariffClients(state(),ui.filters) : null;
+  const clients = C.filterClients(state(),{ ...ui.filters,section:scope,pauseKind:ui.pauseFilter })
+    .filter(c=>!tariffs || tariffs.has(c.id));
+  const accountingClients = accountingUI.activeClientIds();
   list.replaceChildren();
-  for(const c of clients){
-    const item=button(c.name,()=>openClient(c.id),'client-directory-item');
+  for (const c of clients.slice(0,ui.catalogLimit)) {
+    const item = button(c.name,()=>openClient(c.id),'client-directory-item');
     item.setAttribute('aria-label','Открыть клиента: '+c.name);
-    const quick=accountingClients.has(c.id)&&button('Учёт',()=>accountingUI.quickEntry(c.id),'directory-account');
-    if(quick)quick.setAttribute('aria-label','Учёт · '+c.name);
+    const detail = scope === 'paused' ? c.pause?.returnWindow || (c.pause?.contactOn && 'Связаться ' + formatDate(c.pause.contactOn))
+      : scope === 'team' ? C.clientRole(c) : '';
+    if (detail) item.append(text(detail));
+    const quick = accountingClients.has(c.id) && button('Учёт',()=>accountingUI.quickEntry(c.id),'directory-account');
+    if (quick) quick.setAttribute('aria-label','Учёт · '+c.name);
     list.append(append(el('div',null,'directory-row'),item,quick));
   }
-  if(!clients.length)list.append(text('Клиенты не найдены'));
+  if (clients.length > ui.catalogLimit) list.append(button('Показать ещё · ' + (clients.length-ui.catalogLimit),()=>{
+    ui.catalogLimit += CATALOG_PAGE_SIZE;
+    renderCatalogResults();
+  },'subtle'));
+  if (!clients.length) list.append(text('Карточки не найдены'));
 }
 function emptyDatabase(){return append(el('div',null,'empty'),el('h2','Твоя клиентская база'),el('p','Импортируй подготовленный файл или добавь первого клиента. База хранится на этом устройстве.'),row(button('Импортировать базу',()=>importDatabase(),'primary'),button('Добавить клиента',()=>editClient())));}
 function taskStateLabel(t){if(!t.needsReply)return 'Моё действие';if(t.phase==='todo')return 'Нужно написать клиенту';return (t.checkOn<=C.localDate()?'Проверить переписку':'Жду ответа клиента')+' · '+formatDate(t.checkOn);}
-function renderTodo(){const page=el('div',null,'stack-lg'),tasks=C.openTasks(state());page.append(append(el('div',null,'page-title'),el('h1','ToDo'),text(tasks.length+' открыто')));if(!Object.keys(state().clients).length){page.append(emptyDatabase());return page;}const filters=el('div',null,'segmented');for(const [value,label] of [['all','Все'],['mine','Мои действия'],['reply','Нужен ответ']]){const count=C.openTasks(state(),{filter:value}).length,b=button(label+' · '+count,()=>{ui.taskFilter=value;render();});b.setAttribute('aria-pressed',String(ui.taskFilter===value));filters.append(b);}page.append(filters);const list=el('div',null,'stack');const shown=C.openTasks(state(),{filter:ui.taskFilter});if(!shown.length)list.append(text('Открытых задач в этом разделе нет.'));for(const t of shown){const b=button('',()=>openClient(t.clientId),'task-tile');append(b,el('span',state().clients[t.clientId].name,'task-client-name'),el('span',t.title,'task-title'),text((t.phase==='waiting'?'':(t.due?formatDate(t.due):'Без срока')+' · ')+taskStateLabel(t)));const w=C.taskWarning(t);if(w)b.append(text(w.text,w.level==='danger'?'danger-text small':'warning-text small'));list.append(b);}append(page,list,accountingUI.remindersPanel());const discussions=C.openTasks(state(),{lane:'discussion'});page.append(section('Обсудить с клиентами · '+discussions.length,'discussions-global',discussions.length?discussions.map(t=>discussion(t,true)):[text('Тем для обсуждения пока нет.')]));return page;}
+function renderTodo(){const page=el('div',null,'stack-lg'),tasks=C.openTasks(state());page.append(append(el('div',null,'page-title'),el('h1','ToDo'),text(tasks.length+' открыто')));if(!Object.keys(state().clients).length){page.append(emptyDatabase());return page;}const filters=el('div',null,'segmented');for(const [value,label] of [['all','Все'],['mine','Мои действия'],['reply','Нужен ответ']]){const count=C.openTasks(state(),{filter:value}).length,b=button(label+' · '+count,()=>{ui.taskFilter=value;render();});b.setAttribute('aria-pressed',String(ui.taskFilter===value));filters.append(b);}page.append(filters);const list=el('div',null,'stack');const shown=C.openTasks(state(),{filter:ui.taskFilter});if(!shown.length)list.append(text('Открытых задач в этом разделе нет.'));for(const t of shown){const b=button('',()=>openClient(t.clientId),'task-tile');append(b,el('span',state().clients[t.clientId].name,'task-client-name'),el('span',t.title,'task-title'),text((t.phase==='waiting'?'':(t.due?formatDate(t.due):'Без срока')+' · ')+taskStateLabel(t)));const w=C.taskWarning(t);if(w)b.append(text(w.text,w.level==='danger'?'danger-text small':'warning-text small'));list.append(b);}append(page,list,pauseReminders(),accountingUI.remindersPanel());const discussions=C.openTasks(state(),{lane:'discussion'});page.append(section('Обсудить с клиентами · '+discussions.length,'discussions-global',discussions.length?discussions.map(t=>discussion(t,true)):[text('Тем для обсуждения пока нет.')]));return page;}
 function editTask(t){
   modal('Редактировать задачу',form=>{
     const title=el('textarea'),due=input('date',t.due||'');title.value=t.title;title.maxLength=1000;
@@ -255,7 +413,27 @@ function renderFeatures(client) {
     past.map(feature => featureRow(client.id, feature))));
   return box;
 }
-function renderClient(clientId){const c=state().clients[clientId];if(!c){navigate('#clients');return el('div');}const page=el('div',null,'stack-lg client-page');page.append(button(ui.returnTo==='#todo'?'← К ToDo':ui.returnTo==='#account'?'← К учёту':'← К списку клиентов',()=>navigate(ui.returnTo),'back subtle'));const header=el('header',null,'stack client-header');append(header,append(el('div',null,'page-title'),el('h1',c.name),button('Изменить',()=>editClient(c.id),'subtle')),chips(c),text(c.lastContact?'Последний контакт: '+formatDate(c.lastContact.at,!c.lastContact.dateOnly)+' · '+c.lastContact.channel:'Последний контакт пока не указан'));page.append(header);const tasks=C.openTasks(state(),{clientId}),done=Object.values(state().tasks).filter(t=>t.clientId===clientId&&t.phase==='done');if(tasks.length||done.length){const box=el('section',null,'panel action-panel');append(box,el('h2','Действия по клиенту','block-heading'),...tasks.map(task));if(done.length)box.append(section('Выполнено · '+done.length,clientId+'-done',done.map(task)));page.append(box);}page.append(renderFeatures(c));if(c.role==='Клиент')page.append(accountingUI.clientPanel(c));const reference=el('div',null,'reference-sections');reference.append(section('Сообщения в Telegram',c.id+'-telegram',[telegramPanel(c)]));const zones=[];if(c.zones){zones.push(text(c.zones.status));if(c.zones.lthr)zones.push(text('LTHR в сохранённых настройках: '+c.zones.lthr+' уд/мин'));if(c.zones.rows?.length){const grid=el('div',null,'zones');for(const [name,min,max] of c.zones.rows)grid.append(append(el('div'),text(name),el('div',min+'–'+max)));zones.push(grid);}zones.push(text(c.zones.source||''));}else zones.push(text('Зоны не внесены. Численные значения не назначались.'));reference.append(section('Пульсовые зоны · бег',c.id+'-zones',zones));const goals=Object.values(state().goals).filter(g=>g.clientId===c.id),current=goals.filter(g=>!g.deletedAt&&g.status!=='Рабочая цель тренера'),work=goals.filter(g=>!g.deletedAt&&g.status==='Рабочая цель тренера');const goalBody=[button('Добавить цель',()=>{const draft=getDraft(c.id);draft.kind='goal';const form=document.getElementById('compose');form.querySelectorAll('[data-kind]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.kind==='goal')));document.getElementById('goal-status-field').hidden=false;document.getElementById('task-fields').hidden=true;form.scrollIntoView({behavior:'smooth',block:'start'});document.getElementById('client-note').focus({preventScroll:true});saveDraftSoon();}),...current.map(goalRow)];if(!current.length)goalBody.push(text('Пока не внесены'));if(work.length)goalBody.push(el('h3','Рабочие цели тренера'),...work.map(goalRow));const removed=goals.filter(g=>g.deletedAt);if(removed.length)goalBody.push(section('Удалённые цели · '+removed.length,c.id+'-deleted-goals',removed.map(goalRow)));reference.append(section('Цели клиента · '+current.length,c.id+'-goals',goalBody));const discussions=C.openTasks(state(),{clientId,lane:'discussion'});if(discussions.length)reference.append(section('Обсудить с клиентом',c.id+'-discussions',discussions.map(t=>discussion(t))));reference.append(section('Кемпы и история участия',c.id+'-camps',c.camps?.length?c.camps.map(camp=>text(camp.name+' · '+camp.status,' ')):[text('История участия пока не восстановлена')]));const system=el('dl',null,'system');for(const [name,value] of [['Роль',c.role],['Статус сотрудничества',c.status],['Обычный формат',c.format],['Формат сейчас',c.currentFormat||'Без временного изменения'],['Основа плана',c.basis],['Групповые с Сергеем',c.group],['Персональные с Сергеем',({gym:'В зале',outside:'На улице',none:'Нет',unknown:'Нужно уточнить'})[c.personal]],['Ведение',c.level]])system.append(append(el('div'),el('dt',name),el('dd',value)));reference.append(section('Системные данные и подгруппы',c.id+'-system',[system,...(c.context?[text(c.context)]:[]),el('h3','Регулярные правила плана'),...(c.rules.length?c.rules.map(r=>el('div',r)):[text('Пока не внесены')]),button('Изменить правила',()=>editRules(c))]));const history=el('ol',null,'history');const events=state().events.filter(e=>e.clientId===c.id).slice().reverse().slice(0,100);for(const e of events){const record=state().records[e.entityId],goal=state().goals[e.entityId],t=state().tasks[e.entityId],title=record?.text||goal?.title||t?.title||e.text||eventLabel(e.type);history.append(append(el('li'),text(e.sourceMeta||formatDate(e.at,true)+' · '+eventLabel(e.type)),el('div',title,e.type==='feature-edited'?'feature-copy':'')));}if(!events.length)history.append(text('Записей пока нет'));reference.append(section('История записей',c.id+'-history',[history]));page.append(reference,compose(c));return page;}
+
+function pauseDetails(client) {
+  if (!['paused','archive'].includes(C.clientSection(client))) return null;
+  const contact = client.pause?.contactOn;
+  return append(el('section',null,'stack'),
+    client.pause?.returnWindow && text('Ориентир возврата · ' + client.pause.returnWindow),
+    contact && text('Связаться · ' + formatDate(contact)),
+    row(button('Возобновить',()=>accountingUI.resumeClient(client)),
+      contact && button('Убрать напоминание',()=>commit(s=>{
+        const current = s.clients[client.id];
+        if (current.pause?.contactOn === contact) C.editClient(s,client.id,{pause:{...current.pause,contactOn:null}});
+      }),'subtle')));
+}
+
+function pauseReminders() {
+  const contacts = C.pauseContacts(state());
+  if (!contacts.length) return null;
+  return section('Связаться после паузы · ' + contacts.length,'pause-contacts',contacts.map(client =>
+    button(client.name + ' · ' + formatDate(client.pause.contactOn),()=>openClient(client.id),'task-tile')));
+}
+function renderClient(clientId){const c=state().clients[clientId];if(!c||c.mergedInto){navigate('#clients');return el('div');}const page=el('div',null,'stack-lg client-page');page.append(button(ui.returnTo==='#todo'?'← К ToDo':ui.returnTo==='#account'?'← К учёту':'← К списку клиентов',()=>navigate(ui.returnTo),'back subtle'));const header=el('header',null,'stack client-header');append(header,append(el('div',null,'page-title'),el('h1',c.name),button('Изменить',()=>editClient(c.id),'subtle')),chips(c),text(c.lastContact?'Последний контакт: '+formatDate(c.lastContact.at,!c.lastContact.dateOnly)+' · '+c.lastContact.channel:'Последний контакт пока не указан'));page.append(header);const followUp=pauseDetails(c);if(followUp)page.append(followUp);const tasks=C.openTasks(state(),{clientId}),done=Object.values(state().tasks).filter(t=>t.clientId===clientId&&t.phase==='done');if(tasks.length||done.length){const box=el('section',null,'panel action-panel');append(box,el('h2','Действия по клиенту','block-heading'),...tasks.map(task));if(done.length)box.append(section('Выполнено · '+done.length,clientId+'-done',done.map(task)));page.append(box);}page.append(renderFeatures(c));if(c.role==='Клиент')page.append(accountingUI.clientPanel(c));const reference=el('div',null,'reference-sections');reference.append(section('Сообщения в Telegram',c.id+'-telegram',[telegramPanel(c)]));const zones=[];if(c.zones){zones.push(text(c.zones.status));if(c.zones.lthr)zones.push(text('LTHR в сохранённых настройках: '+c.zones.lthr+' уд/мин'));if(c.zones.rows?.length){const grid=el('div',null,'zones');for(const [name,min,max] of c.zones.rows)grid.append(append(el('div'),text(name),el('div',min+'–'+max)));zones.push(grid);}zones.push(text(c.zones.source||''));}else zones.push(text('Зоны не внесены. Численные значения не назначались.'));reference.append(section('Пульсовые зоны · бег',c.id+'-zones',zones));const goals=Object.values(state().goals).filter(g=>g.clientId===c.id),current=goals.filter(g=>!g.deletedAt&&g.status!=='Рабочая цель тренера'),work=goals.filter(g=>!g.deletedAt&&g.status==='Рабочая цель тренера');const goalBody=[button('Добавить цель',()=>{const draft=getDraft(c.id);draft.kind='goal';const form=document.getElementById('compose');form.querySelectorAll('[data-kind]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.kind==='goal')));document.getElementById('goal-status-field').hidden=false;document.getElementById('task-fields').hidden=true;form.scrollIntoView({behavior:'smooth',block:'start'});document.getElementById('client-note').focus({preventScroll:true});saveDraftSoon();}),...current.map(goalRow)];if(!current.length)goalBody.push(text('Пока не внесены'));if(work.length)goalBody.push(el('h3','Рабочие цели тренера'),...work.map(goalRow));const removed=goals.filter(g=>g.deletedAt);if(removed.length)goalBody.push(section('Удалённые цели · '+removed.length,c.id+'-deleted-goals',removed.map(goalRow)));reference.append(section('Цели клиента · '+current.length,c.id+'-goals',goalBody));const discussions=C.openTasks(state(),{clientId,lane:'discussion'});if(discussions.length)reference.append(section('Обсудить с клиентом',c.id+'-discussions',discussions.map(t=>discussion(t))));reference.append(section('Кемпы и история участия',c.id+'-camps',c.camps?.length?c.camps.map(camp=>text(camp.name+' · '+camp.status,' ')):[text('История участия пока не восстановлена')]));const system=el('dl',null,'system');for(const [name,value] of [['Роль',C.clientRole(c)],['Статус сотрудничества',clientStatus(c)],['Обычный формат',c.format],['Формат сейчас',c.currentFormat||'Без временного изменения'],['Основа плана',c.basis],['Групповые с Сергеем',c.group],['Персональные с Сергеем',({gym:'В зале',outside:'На улице',none:'Нет',unknown:'Нужно уточнить'})[c.personal]],['Ведение',c.level]])system.append(append(el('div'),el('dt',name),el('dd',value)));reference.append(section('Системные данные и подгруппы',c.id+'-system',[system,...(c.context?[text(c.context)]:[]),el('h3','Регулярные правила плана'),...(c.rules.length?c.rules.map(r=>el('div',r)):[text('Пока не внесены')]),button('Изменить правила',()=>editRules(c))]));const history=el('ol',null,'history');const events=state().events.filter(e=>e.clientId===c.id).slice().reverse().slice(0,100);for(const e of events){const record=state().records[e.entityId],goal=state().goals[e.entityId],t=state().tasks[e.entityId],title=record?.text||goal?.title||t?.title||e.text||eventLabel(e.type);history.append(append(el('li'),text(e.sourceMeta||formatDate(e.at,true)+' · '+eventLabel(e.type)),el('div',title,e.type==='feature-edited'?'feature-copy':'')));}if(!events.length)history.append(text('Записей пока нет'));reference.append(section('История записей',c.id+'-history',[history]));page.append(reference,compose(c));return page;}
 function eventLabel(type){return ({'record-created':'Запись Сергея','goal-created':'Цель добавлена','goal-edited':'Цель изменена','goal-deleted':'Цель удалена','goal-restored':'Цель восстановлена','task-created':'Задача создана','task-edited':'Задача изменена','telegram-linked':'Переписка привязана','telegram-unlinked':'Переписка отвязана','task-closed':'Задача закрыта','task-reopened':'Задача возвращена','outbound':'Исходящее сообщение','task-scheduled':'Разговор назначен','client-edited':'Данные клиента изменены','client-created':'Клиент добавлен','client-movement':'Статус сотрудничества изменён','feature-created':'Особенность добавлена','feature-edited':'Особенность изменена','feature-archived':'Особенность снята с актуального','feature-restored':'Особенность снова актуальна','contact':'Контакт с клиентом','source-note':'Сведения от Сергея'})[type]||'Изменение';}
 function editRules(c){modal('Регулярные правила плана',form=>{const area=el('textarea');area.value=c.rules.join('\n');form.append(field('Одно правило на строку',area));return ()=>commit(s=>{s.clients[c.id].rules=area.value.split('\n').map(x=>x.trim()).filter(Boolean);C.event(s,'rules-edited',c.id,c.id);});});}
 function getDraft(clientId){return ui.drafts[clientId]||(ui.drafts[clientId]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'});}
@@ -601,6 +779,6 @@ function appearancePanel() {
 }
 function renderSettings(){const page=el('div',null,'stack-lg');append(page,el('h1','Настройки'),appearancePanel());const data=el('section',null,'stack settings-section');append(data,el('h2','Данные на устройстве'),text(Object.keys(state().clients).length+' человек · '+Object.keys(state().records).length+' записей · версия базы '+state().schemaVersion),row(button('Импортировать базу',()=>importDatabase()),button('Экспортировать резервную копию',()=>backup())),text('Резервная копия содержит клиентские сведения. Ключи подключений в неё не входят. При обновлении интерфейса база сохраняется.'));page.append(data);const cloudPanel=el('section',null,'stack settings-section');cloudPanel.id='cloud-panel';page.append(cloudPanel);const update=el('section',null,'stack settings-section');update.id='update-panel';page.append(update);const wait=input('number',state().settings.waitDays);wait.min=1;wait.max=30;const taskDefaults=el('section',null,'stack settings-section');append(taskDefaults,el('h2','Задачи'),field('Дней до проверки ответа в новых задачах',wait),button('Сохранить',()=>commit(s=>{const n=Number(wait.value);if(!Number.isInteger(n)||n<1||n>30)throw Error('Укажи от 1 до 30 дней');s.settings.waitDays=n;})),text('Интервалы уже созданных задач сохраняются.'));page.append(taskDefaults,accountingUI.settingsPanel());const services=el('section',null,'stack settings-section'),url=input('url',state().settings.serviceURL||'','https://…'),token=input('password','','Новый ключ сервиса');token.autocomplete='off';const agentEnabled=input('checkbox');agentEnabled.checked=!!state().settings.agentEnabled;append(services,el('h2','Агент и Telegram'),field('Адрес твоего сервиса',url),field('Ключ доступа · оставить пустым, чтобы сохранить прежний',token),append(el('label',null,'checkbox'),agentEnabled,el('span','Использовать AI-разбор записей')),button('Сохранить подключение',async()=>{if(!window.TrailNative?.native)throw Error('Подключения доступны в установленном приложении');let base='';if(url.value.trim()){const parsed=new URL(url.value.trim());if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.search||parsed.hash)throw Error('Укажи HTTPS-адрес без ключей в ссылке');base=parsed.origin;}if(base!==(state().settings.serviceURL||''))await window.TrailNative.setSecret('serviceToken','');await commit(s=>{s.settings.serviceURL=base;s.settings.agentEnabled=agentEnabled.checked;});if(token.value)await window.TrailNative.setSecret('serviceToken',token.value.trim());message('Настройки подключения сохранены');}),text('Агент и голос работают через твой Mac. Способ обработки указан в проверке ниже. При выключенном AI записи, цели и задачи сохраняются локально.'));services.append(agentConnectionCheck(),connectionCodePanel(),telegramConnectionCheck());if(ui.pendingVoice)services.append(text('Есть сохранённая голосовая запись для '+(state().clients[ui.pendingVoice.clientId]?.name||'клиента')),row(button('Открыть запись',()=>openClient(ui.pendingVoice.clientId)),button('Удалить аудиочерновик',async()=>{if(window.TrailNative?.native)await window.TrailNative.clearVoice();ui.pendingVoice=null;render();})) );page.append(services);return page;}
 function renderUpdate(){const panel=document.getElementById('update-panel');if(!panel)return;panel.textContent='';const u=updater.state(),errors={save:'Не удалось сохранить базу перед обновлением. Повтори после освобождения места.', 'asset-id':'Не удалось прочитать ID архива обновления. Нужен исправленный APK.', 'rate-limit':'GitHub временно ограничил загрузку. Попробуй другую сеть или повтори позже.', forbidden:'GitHub отклонил загрузку. Проверь, открывается ли выпуск в браузере.',storage:'Недостаточно места для обновления. Освободи место и повтори.',timeout:'Сервер обновлений не ответил вовремя. Повтори загрузку.',tls:'Не удалось установить защищённое соединение с сервером обновлений.',native:'Обновление интерфейса доступно в установленном Android-приложении.',manifest:'Не удалось проверить сведения об обновлении. Текущая версия сохранена.','native-required':'Для этой версии нужен новый APK. Установи его поверх приложения.','github-auth':'GitHub отклонил запрос обновления. Проверь доступ к выпуску.','release-missing':'Готовый выпуск не найден или к нему временно нет доступа.',checksum:'Архив не прошёл проверку целостности. Текущая версия сохранена.',network:'Не удалось загрузить обновление. Проверь интернет и повтори.'},labels={idle:'Проверка по нажатию',checking:'Проверяю обновление…',current:'Установлена актуальная версия',available:'Доступна версия '+u.latest,downloading:'Загружаю · '+Math.round(u.progress)+'%',applying:'Открываю новую версию…',error:errors[u.error]||'Обновление не выполнено'};append(panel,el('h2','Данные и обновления'),text('THE.TRAIL Clients · '+VERSION),text(labels[u.status],u.status==='error'?'danger-text small':'muted small'));if(u.status==='error')panel.append(text('Этап: '+({save:'сохранение базы',release:'проверка выпуска',compatibility:'совместимость APK',download:'получение архива',apply:'запуск обновления'}[u.step]||'проверка')+' · код '+u.error));const progress=el('progress');progress.max=100;progress.value=u.progress;progress.hidden=u.status!=='downloading';panel.append(progress);const update=button('Обновить сейчас',()=>updater.update(),'primary');update.disabled=['checking','downloading','applying'].includes(u.status);panel.append(update);panel.append(text('Обновление сохраняет базу и черновики. При неудачном запуске возвращается предыдущая рабочая версия. Новые системные возможности могут потребовать нового APK.'));}
-function render(){if(!store)return;applyAppearance();const hash=location.hash||'#todo';root.textContent='';document.querySelectorAll('.app-nav a').forEach(a=>a.setAttribute('aria-current',a.hash===(hash.startsWith('#client/')?(ui.returnTo||'#clients'):hash)?'page':'false'));if(hash.startsWith('#client/'))root.append(renderClient(hash.slice(8)));else if(hash==='#clients'){root.append(renderCatalog());renderCatalogResults();}else if(hash==='#account'){root.append(accountingUI.page());}else if(hash==='#settings'){root.append(renderSettings());renderUpdate();renderCloudPanel();}else root.append(renderTodo());}
+function render(){if(!store)return;applyAppearance();const hash=location.hash||'#todo';root.textContent='';document.querySelectorAll('.app-nav a').forEach(a=>a.setAttribute('aria-current',a.hash===(hash.startsWith('#client/')?(ui.returnTo?.startsWith('#clients')?'#clients':ui.returnTo||'#clients'):hash.startsWith('#clients/')?'#clients':hash)?'page':'false'));if(hash.startsWith('#client/'))root.append(renderClient(hash.slice(8)));else if(hash==='#clients'||hash.startsWith('#clients/')){const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();}else if(hash==='#account'){root.append(accountingUI.page());}else if(hash==='#settings'){root.append(renderSettings());renderUpdate();renderCloudPanel();}else root.append(renderTodo());}
 async function start(){try{store=await createStore(window.TrailNative?.native?window.TrailNative.adapter:browserAdapter());applyAppearance();ui.drafts=C.clone(state().settings.drafts||{});if(window.TrailNative?.native){try{ui.pendingVoice=await window.TrailNative.loadVoice();}catch{message('Голосовой черновик не удалось прочитать. База клиентов доступна.',true);}}updater=createUpdater({version:VERSION,bridge:window.TrailNative,flush:async()=>{await saveDrafts();await store.flush();},onChange:u=>{renderUpdate();const link=document.querySelector('.app-nav a[href="#settings"]');if(link)link.textContent=u.status==='available'?'Настройки · обновление':'Настройки';}});if(!location.hash)history.replaceState(null,'','#todo');window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});await refreshMicrophonePermission();render();document.getElementById('save-status').textContent='На устройстве';await window.TrailNative?.ready();startCloud();if(window.TrailNative?.native)setTimeout(()=>updater.check(),1500);}catch(e){root.textContent='';append(root,el('h1','Не удалось открыть базу'),text(e.message,'danger-text'),text('Не удаляй приложение: данные могут оставаться на устройстве.'),button('Повторить',()=>location.reload()));}}
 start();

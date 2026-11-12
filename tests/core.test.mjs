@@ -3,6 +3,23 @@ import assert from 'node:assert/strict';
 import * as C from '../src/core.js';
 import {createStore} from '../src/store.js';
 function fixture(){const s=C.emptyState();const a=C.createClient(s,{name:'Клиент А',format:'Дистанционно',level:'Премиум',personal:'none',basis:'С нуля'});const b=C.createClient(s,{name:'Клиент Б',format:'Очно',level:'Обычное',personal:'gym',basis:'Hard'});return {s,a,b};}
+test('client directory keeps pauses, archives, occasional clients and leads out of the active list', () => {
+  const {s,a,b} = fixture();
+  C.editClient(s,b.id,{status:'На паузе',pause:{kind:'planned',returnWindow:'В январе',contactOn:'2027-01-12'}});
+  const oldPause = C.createClient(s,{name:'Ранняя пауза',status:'На паузе'});
+  const archived = C.createClient(s,{name:'Архивная карточка',status:'Завершил'});
+  C.createClient(s,{name:'Дубликат',status:'Завершил',mergedInto:archived.id});
+  const occasional = C.createClient(s,{name:'Разовое занятие',engagement:'occasional'});
+  C.createClient(s,{name:'Лид',status:'Ожидает старта'});
+  assert.deepEqual(C.filterClients(s,{section:'active'}).map(c=>c.id),[a.id]);
+  assert.deepEqual(C.filterClients(s,{section:'paused',pauseKind:'planned'}).map(c=>c.id),[b.id]);
+  assert.deepEqual(C.filterClients(s,{section:'paused',pauseKind:'open'}).map(c=>c.id),[oldPause.id]);
+  assert.deepEqual(C.filterClients(s,{section:'archive'}).map(c=>c.id),[archived.id]);
+  assert.deepEqual(C.filterClients(s,{section:'occasional'}).map(c=>c.id),[occasional.id]);
+  assert.deepEqual(C.pauseContacts(s).map(c=>c.id),[b.id]);
+  C.editClient(s,b.id,{status:'Активный',pause:null});
+  assert.deepEqual(C.pauseContacts(s),[]);
+});
 test('classification fields are independent and Cyrillic aliases searchable',()=>{const {s,a,b}=fixture();s.clients[a.id].aliases=['Shalaev'];assert.equal(C.filterClients(s,{format:'Дистанционно',level:'Премиум'})[0].id,a.id);assert.equal(C.filterClients(s,{personal:'gym'})[0].id,b.id);assert.equal(C.filterClients(s,{query:'Шалаев'})[0].id,a.id);assert.equal(C.filterClients(s,{status:'На паузе'}).length,0);C.validateState(s);});
 test('unlinking and restoring a Telegram recipient preserves client history and tasks across persistence',async()=>{
   const {s,a,b}=fixture(),binding={peerId:'123456',displayName:'Тестовый получатель',accountPeerId:'654321'};

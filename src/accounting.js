@@ -1,9 +1,12 @@
 import { addDays, id, localDate, validDate } from './model-utils.js';
 
 export const SERVICES = {
-  belgrade: 'Группа Белграда', online: 'Онлайн-группа',
-  coaching: 'Персональное ведение', personal: 'Персональные занятия'
+  belgrade: 'Группа Белграда', online: 'Онлайн-ведение',
+  coaching: 'Премиум онлайн', personal: 'Персональная тренировка'
 };
+export const PACKAGES = { ...SERVICES, gym:'План Gym', trainingpeaks:'TrainingPeaks' };
+export const packageKind = key => key === 'gym' || key === 'trainingpeaks' ? 'coaching' : key;
+export const servicePackage = service => service.package || service.kind;
 export const BLOCKS = { belgrade: 'Белград', online: 'Онлайн', personal: 'Персональные' };
 export const CURRENCIES = ['RSD', 'RUB', 'EUR', 'USD'];
 export const PLACES = ['Зал', 'Улица'];
@@ -45,10 +48,15 @@ function checkService(state, service) {
   if (!validKey(clientId) || !has(state.clients, clientId) || !has(SERVICES, kind) || !has(BLOCKS, block)) throw Error('Выбери клиента, услугу и раздел учёта');
   if (!validDate(startsOn) || (endsOn !== null && (!validDate(endsOn) || endsOn < startsOn))) throw Error('Проверь период действия услуги');
   if (!CURRENCIES.includes(currency) || !validMoney(rate)) throw Error('Проверь тариф и валюту');
+  const key = servicePackage(service);
+  if (!has(PACKAGES, key) || packageKind(key) !== kind) throw Error('Проверь пакет');
   if (kind === 'personal') {
     if (day !== null || reminder !== false || !PLACES.includes(place)) throw Error('Выбери место занятия');
+    if (service.openingCredit && (!validMoney(service.openingCredit.amount) || !validDate(service.openingCredit.date))) throw Error('Проверь остаток аванса');
   } else if (!Number.isInteger(day) || day < 1 || day > 31 || typeof reminder !== 'boolean' || place !== null) {
     throw Error('Укажи день оплаты от 1 до 31');
+  } else if ([service.billingFrom, service.coveredThrough].some(month => month != null && !validMonth(month))) {
+    throw Error('Проверь месяц начисления или предоплаты');
   }
 }
 
@@ -60,7 +68,8 @@ export function saveService(state, values, serviceId = id('service')) {
   if (!validKey(serviceId) || state.clients[service.clientId].role !== 'Клиент') throw Error('Услуги доступны в карточке клиента');
   if (before) {
     const history = Object.values(book.operations).filter(o => linked(o, serviceId));
-    if (history.length && ['kind', 'clientId', 'currency', 'block'].some(key => before[key] !== service[key])) {
+    if (history.length && (servicePackage(before) !== servicePackage(service)
+      || ['kind', 'clientId', 'currency', 'block'].some(key => before[key] !== service[key]))) {
       throw Error('У услуги есть операции. Для нового вида, раздела или валюты добавь отдельную услугу');
     }
     if (history.length && before.kind !== 'personal' && ['startsOn', 'rate', 'day'].some(key => before[key] !== service[key])) {
@@ -179,6 +188,33 @@ export function activeService(service, date) {
   return service.startsOn <= date && (!service.endsOn || service.endsOn >= date);
 }
 
+export function matchingTariffClients(state, { packageFilter, tariffCurrency, paymentCurrency, paymentMonth }, today = localDate()) {
+  const { services } = accounting(state);
+  const matchesPackage = s => {
+    const key = servicePackage(s);
+    if (packageFilter === 'all') return true;
+    if (packageFilter === 'all-online') return ['online', 'coaching'].includes(key);
+    if (packageFilter === 'personal-gym') return key === 'personal' && s.place === 'Зал';
+    return key === packageFilter;
+  };
+  const tariffs = packageFilter !== 'all' || tariffCurrency !== 'all'
+    ? new Set(Object.values(services).filter(s => activeService(s, today) && matchesPackage(s)
+      && (tariffCurrency === 'all' || s.currency === tariffCurrency)).map(s => s.clientId)) : null;
+  if (paymentCurrency === 'all') return tariffs;
+
+  const paid = new Set();
+  for (const o of operations(state, { month:paymentMonth })) {
+    if (o.kind !== 'payment' || o.currency !== paymentCurrency) continue;
+    for (const item of o.allocations) paid.add(services[item.serviceId].clientId);
+  }
+  for (const entry of state.ledger?.rows || []) {
+    if (['payment','shared'].includes(entry.kind) && entry.date.startsWith(paymentMonth + '-') && entry.values[paymentCurrency] > 0) {
+      for (const owner of entry.owners) paid.add(owner);
+    }
+  }
+  return tariffs ? new Set([...tariffs].filter(id => paid.has(id))) : paid;
+}
+
 export function operations(state, { month, clientId, includeVoided = false } = {}) {
   const services = clientId ? clientServices(state, clientId) : [];
   return Object.values(accounting(state).operations).filter(o => (includeVoided || !o.voided)
@@ -194,7 +230,9 @@ export function serviceBalance(state, serviceId, today = localDate()) {
     if (o.kind === 'session' && o.serviceId === serviceId) used += o.amount;
     if (o.kind === 'payment') for (const item of o.allocations) if (item.serviceId === serviceId) received += item.credit;
   }
-  return { received, used, balance: received - used };
+  const opening = accounting(state).services[serviceId]?.openingCredit;
+  const credit = opening && opening.date <= today ? opening.amount : 0;
+  return { received, used, balance: credit + received - used };
 }
 
 function addTotal(totals, currency, amount) {
@@ -211,7 +249,7 @@ export function summarize(state, month) {
       for (const item of operation.allocations) {
         const service = book.services[item.serviceId];
         addTotal(result.blocks[service.block] ??= {}, currency, item.part);
-        addTotal(result.services[service.kind] ??= {}, currency, item.part);
+        addTotal(result.services[servicePackage(service)] ??= {}, currency, item.part);
         if (service.block !== 'online') addTotal(result.localBalance, currency, item.part);
       }
     } else if (kind === 'expense') {
@@ -254,6 +292,8 @@ function monthlyCredits(book, today) {
 export function monthlyCharge(state, service, month, today = localDate()) {
   const due = dueDate(service, month);
   if (month < service.startsOn.slice(0, 7) || (service.endsOn && due > service.endsOn)) return null;
+  if (service.coveredThrough && month <= service.coveredThrough) return { due, remaining:0 };
+  if (service.billingFrom && month < service.billingFrom) return null;
   const credits = monthlyCredits(accounting(state), today);
   return { due, remaining: Math.max(0, service.rate - (credits.get(`${service.id}/${month}`) ?? 0)) };
 }
@@ -267,10 +307,12 @@ export function paymentReminders(state, today = localDate()) {
     if (service.kind === 'personal' || !service.reminder || client.role !== 'Клиент' || client.status !== 'Активный') continue;
     const horizon = addDays(today, book.reminders[service.block] ?? DEFAULT_REMINDERS[service.block]);
     const events = state.events.filter(e => e.type === 'client-movement' && e.clientId === service.clientId).reverse().sort((a, b) => b.day.localeCompare(a.day) || b.at.localeCompare(a.at));
-    for (let month = service.startsOn.slice(0, 7); month <= horizon.slice(0, 7); month = nextMonth(month)) {
+    const starts = service.startsOn.slice(0, 7);
+    const first = service.billingFrom > starts ? service.billingFrom : starts;
+    for (let month = first; month <= horizon.slice(0, 7); month = nextMonth(month)) {
       const due = dueDate(service, month);
       if (service.endsOn && due > service.endsOn) break;
-      if (due > horizon) continue;
+      if (due > horizon || (service.coveredThrough && month <= service.coveredThrough)) continue;
       const status = events.find(e => e.day <= due);
       if (status && status.status !== 'Активный') continue;
       const remaining = service.rate - (credits.get(`${service.id}/${month}`) ?? 0);

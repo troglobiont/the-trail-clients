@@ -94,6 +94,9 @@ main{max-width:920px;margin:0 auto;padding:24px 20px calc(110px + env(safe-area-
 .client-directory-item{width:100%;text-align:left;border-radius:0;padding:8px 6px;font-weight:500;overflow-wrap:anywhere}
 .directory-account{min-height:44px;font-size:13px;color:var(--muted);padding-inline:10px}
 .catalog-page .fold summary{min-height:44px;padding-block:10px}
+.catalog-options{gap:6px}
+.catalog-sections{display:grid;margin-top:12px;border-top:1px solid var(--line)}
+button.catalog-section-link{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:12px;text-align:left;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:10px 6px;min-height:46px}
 .task-client-name{font-size:14px;font-weight:400;color:var(--muted)}
 .chip{display:inline-block;border-radius:6px;padding:3px 7px;background:var(--soft);font-size:12px;line-height:1.5;font-weight:450;color:var(--muted)}
 .chip.emphasis{background:var(--ink);color:var(--on-ink);font-weight:550}
