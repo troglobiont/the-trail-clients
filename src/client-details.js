@@ -35,12 +35,12 @@ export function birthdayReminders(state, today = localDate(), days = 14) {
     const birthday = client.profile?.birthday;
     if (!birthday || !birthdayValid(birthday) || client.mergedInto || !['Активный','На паузе'].includes(client.status) && client.role === 'Клиент') continue;
     const monthDay = birthday.slice(-5);
-    for (const year of new Set([today.slice(0,4),horizon.slice(0,4)])) {
+    for (let year = Number(today.slice(0,4)); year <= Number(horizon.slice(0,4)); year++) {
       const day = year + '-' + monthDay;
       if (validDate(day) && today <= day && day <= horizon) output.push({ client, day });
     }
   }
-  return output;
+  return output.sort((a,b) => a.day.localeCompare(b.day) || a.client.name.localeCompare(b.client.name,'ru'));
 }
 
 export function telegramReminders(state, today = localDate()) {

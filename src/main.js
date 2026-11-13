@@ -208,6 +208,7 @@ function renderCatalog(scope) {
   if (scope !== 'active') page.append(button('← К активным клиентам',()=>navigate('#clients'),'back subtle'));
   page.append(append(el('div',null,'page-title'),el('h1',catalogViews[scope]),
     scope === 'active' && Object.keys(state().clients).length && button('Добавить клиента',()=>editClient(),'subtle')));
+  if (scope === 'active') page.append(row(button('Дни рождения',()=>navigate('#clients/birthdays'),'subtle')));
   if (!Object.keys(state().clients).length) {
     page.append(emptyDatabase());
     return page;
@@ -351,6 +352,31 @@ function renderCatalogResults() {
 }
 function emptyDatabase(){return append(el('div',null,'empty'),el('h2','Твоя клиентская база'),el('p','Импортируй подготовленный файл или добавь первого клиента. База хранится на этом устройстве.'),row(button('Импортировать базу',()=>importDatabase(),'primary'),button('Добавить клиента',()=>editClient())));}
 function taskStateLabel(t){if(!t.needsReply)return 'Моё действие';if(t.phase==='todo')return 'Нужно написать клиенту';return (t.checkOn<=C.localDate()?'Проверить переписку':'Жду ответа клиента')+' · '+formatDate(t.checkOn);}
+function renderBirthdays(){
+  const today=C.localDate();
+  const days=ui.birthdayDays||30;
+  const birthdays=birthdayReminders(state(),today,days);
+  const periods=el('div',null,'row catalog-quick');
+  periods.setAttribute('role','group');
+  periods.setAttribute('aria-label','Период');
+  for(const count of [30,90]){
+    const control=button(count+' дней',()=>{ui.birthdayDays=count;render();});
+    control.setAttribute('aria-pressed',String(count===days));
+    periods.append(control);
+  }
+  const list=el('div',null,'client-directory');
+  for(const {client,day} of birthdays){
+    const dayLabel=day===today?'Сегодня · '+formatDate(day):formatDate(day);
+    const entry=button(client.name,()=>openClient(client.id,'profile'),'client-directory-item');
+    entry.append(text(dayLabel));
+    list.append(append(el('div',null,'directory-row'),entry));
+  }
+  return append(el('div',null,'stack catalog-page'),
+    button('← К клиентам',()=>navigate('#clients'),'back subtle'),
+    el('h1','Дни рождения'),periods,
+    birthdays.length?list:text('На ближайшие '+days+' дней нет записанных дней рождения.'));
+}
+
 function renderTodo(){
   const page=el('div',null,'stack-lg');
   const tasks=C.clientTasks(state()).map(t=>({
@@ -381,7 +407,8 @@ function renderTodo(){
     if(item.warning)b.append(text(item.warning.text,item.warning.level==='danger'?'danger-text small':'warning-text small'));
     list.append(b);
   }
-  append(page,filters,list.children.length?list:text('Открытых задач в этом разделе нет.'));
+  append(page,filters,row(button('Дни рождения',()=>navigate('#clients/birthdays'),'subtle')),
+    list.children.length?list:text('Открытых задач в этом разделе нет.'));
   return page;
 }
 function editTask(t){
@@ -512,7 +539,7 @@ function renderClient(clientId,targetType,targetId){
   const c=state().clients[clientId];
   if(!c||c.mergedInto){navigate('#clients');return el('div');}
   const page=el('div',null,'stack-lg client-page');
-  const backLabel={'#todo':'← К ToDo','#account':'← К учёту','#races':'← К стартам'}[ui.returnTo]||'← К списку клиентов';
+  const backLabel={'#todo':'← К ToDo','#account':'← К учёту','#races':'← К стартам','#clients/birthdays':'← К дням рождения'}[ui.returnTo]||'← К списку клиентов';
   page.append(button(backLabel,()=>navigate(ui.returnTo),'back subtle'));
   const header=el('header',null,'stack client-header');
   append(header,append(el('div',null,'page-title'),el('h1',c.name),button('Изменить',()=>editClient(c.id),'subtle')),chips(c),
@@ -952,7 +979,8 @@ function render(){
     const [,id,type,target]=hash.split('/');
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
     root.append(renderClient(id,type,target));
-  }else if(hash==='#clients'||hash.startsWith('#clients/')){
+  }else if(hash==='#clients/birthdays')root.append(renderBirthdays());
+  else if(hash==='#clients'||hash.startsWith('#clients/')){
     const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();
   }else if(hash==='#account')root.append(accountingUI.page());
   else if(hash==='#races')root.append(detailsUI.races());
