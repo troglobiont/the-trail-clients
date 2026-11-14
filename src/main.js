@@ -1,4 +1,5 @@
 import * as C from './core.js';
+import { assistantKind, suggestAssistantClients } from './assistant.js';
 import { CURRENCIES, PACKAGES, amountMinor, matchingTariffClients } from './accounting.js';
 import {createStore,browserAdapter} from './store.js';
 import {createUpdater} from './updates.js';
@@ -672,20 +673,6 @@ function agentClient(c){
 }
 async function submitRecord(c,d){const data={...d};const pending=state().records[d.pendingRecordId];const record=pending&&pending.text===data.text.trim()&&pending.kind===data.kind?pending:await commit(s=>C.saveRecord(s,c.id,data.text,data.kind),false);d.pendingRecordId=record.id;await saveDrafts();let result;if(state().settings.serviceURL&&state().settings.agentEnabled){try{const response=await service('/records/parse',{client:agentClient(state().clients[c.id]),goals:Object.values(state().goals).filter(g=>g.clientId===c.id&&!g.deletedAt),openTasks:C.clientTasks(state(),c.id).filter(t=>!t.pauseContact),record,timezone:C.TIMEZONE,waitDays:state().settings.waitDays,needsReply:data.needsReply});if(response.question){ui.recordResults[c.id]='Нужно уточнить: '+response.question;render();return;}result=await commit(s=>C.applyAgentResult(s,record.id,response,{goalType:data.goalType}),false);}catch(e){ui.recordResults[c.id]='Запись сохранена. Обработка не завершена: '+e.message;render();return;}}else result=await commit(s=>C.processManualRecord(s,record.id,{due:data.due||null,needsReply:data.needsReply,goalStatus:data.goalStatus,goalType:data.goalType}),false);ui.recordResults[c.id]=result.changes.length?result.changes.map(x=>(x.type==='task'?'Задача: ':x.type==='goal'?'Цель: ':'Особенность: ')+x.title).join('\n'):result.mode==='agent'?'Запись сохранена. Агент не выделил задач, целей или особенностей.':'Запись сохранена в истории';ui.drafts[c.id]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'};await saveDrafts();render();}
 const assistantKey='__assistant__';
-const assistantKind=(value)=>/оплати|получил[аи]?\s|вн[её]с|аванс/iu.test(value) ? 'payment'
-  : /пров[её]л|занятие прошло|записать занятие/iu.test(value) ? 'session'
-  : /цель|хочет/iu.test(value) ? 'goal' : /спросить|напомни|проверить|узнать|написать|поставь задачу/iu.test(value) ? 'task' : 'record';
-function assistantPeople(value) {
-  const words=value.toLowerCase().match(/[\p{L}]{3,}/gu)||[];
-  const clients=Object.values(state().clients).filter(c=>!c.mergedInto);
-  const candidates=clients.map(c=>{
-    const aliases=[c.name,...(c.aliases||[])].map(name=>name.split(/\s+/).map(C.normalizeSearch));
-    const score=Math.max(0,...aliases.map(parts=>parts.filter(part=>part.length>=3&&words.some(word=>C.normalizeSearch(word)===part)).length));
-    return {id:c.id,score};
-  });
-  const best=Math.max(0,...candidates.map(c=>c.score));
-  return best?candidates.filter(c=>c.score===best).map(c=>c.id):[];
-}
 function assistantAmount(value) {
   const explicit=value.match(/(\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[,.](\d{1,2}))?\s*(тысяч\p{L}*|[кk](?!\p{L}))?\s*(RSD|RUB|EUR|USD|динар\p{L}*|дин|рубл\p{L}*|руб|евро|доллар\p{L}*|₽|€|[$])/iu);
   if(!explicit)return {};
@@ -711,13 +698,21 @@ function renderAssistant(){
   return append(page,el('h1','Ассистент'),note,row(voice,review));
 }
 function reviewAssistant(value){
-  const candidates=assistantPeople(value);
   const clients=C.filterClients(state());
+  const {selected,suggestions}=suggestAssistantClients(value,clients);
   const kinds={payment:'Принять оплату', session:'Записать занятие', task:'Поставить задачу',goal:'Добавить цель',record:'Сохранить запись'};
-  modal('Запись ассистента',form=>{
-    const client=select([['','Выбери клиента'],...clients.map(c=>[c.id,c.name])],candidates.length===1?candidates[0]:'');
+  modal('Запись ассистента',(form,setSaveEnabled)=>{
+    const client=select([['','Выбери клиента'],...clients.map(c=>[c.id,c.name])],selected);
     const kind=select(Object.entries(kinds),assistantKind(value));
-    append(form,text(value),field('Клиент',client),field('Действие',kind));
+    const update=()=>setSaveEnabled(!!client.value);
+    client.addEventListener('change',update);
+    const suggested=!selected&&suggestions.length&&append(el('div',null,'stack'),
+      text('Похожие имена в базе'),row(...suggestions.map(id=>button(state().clients[id].name,()=>{
+        client.value=id;
+        update();
+      },'subtle'))));
+    append(form,text(value),suggested,field('Клиент',client),field('Действие',kind));
+    update();
     return async()=>{
       const c=state().clients[client.value];
       if(!c||c.mergedInto)throw Error('Выбери клиента');
@@ -754,7 +749,7 @@ async function clearAssistantDraft(){
 }
 async function previewAssistantRecord(client,kind,value){
   const haveAgent=state().settings.serviceURL;
-  const record={id:C.id('record'),clientId:client.id,text:value.trim(),kind};
+  const record={id:C.id('record'),clientId:client.id,text:value.trim(),kind,createdAt:new Date().toISOString()};
   let result;
   if(haveAgent){
     await ensureAgent(false);
