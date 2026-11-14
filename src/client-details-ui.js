@@ -159,18 +159,37 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       race, ...raceCategory(race), people:raceParticipants(current,race),
       search:C.normalizeSearch([race.name,race.place].filter(Boolean).join(' '))
     }));
-    const years=[...new Set(catalog.map(({race})=>race.date.slice(0,4)))].sort().reverse();
-    const calendarYear=catalog.find(({race})=>race.id.startsWith('race-club-'))?.race.date.slice(0,4);
-    const year=select([['','Все сезоны'],...years],ui.raceYear??calendarYear??'');
-    const query=input('search',ui.raceQuery||'','Поиск старта');
-    const scopes=el('div',null,'row catalog-quick');
-    scopes.setAttribute('role','group');scopes.setAttribute('aria-label','Подборка');
-    for(const [value,label] of [['','Все'],['club','Рекомендуем'],['clients','Бегут клиенты']]){
-      const control=button(label,()=>{ui.raceScope=value;refresh();});
-      control.dataset.scope=value;scopes.append(control);
+    const years=[...new Set(['2026','2027',...catalog.map(({race})=>race.date.slice(0,4))])].sort().reverse();
+    const yearMenu=el('details',null,'race-year');
+    const yearLabel=el('summary');
+    const yearOptions=el('div',null,'race-year-options');
+    let year=ui.raceYear??'2027';
+    for(const [value,label] of [...years.map(value=>[value,value]),['','Все сезоны']]){
+      const option=button(label,()=>{
+        year=value;ui.raceYear=value;yearMenu.open=false;yearLabel.focus();refresh();
+      });
+      option.dataset.year=value;yearOptions.append(option);
     }
-    const region=select([['','Все страны'],['serbia','Сербия'],['abroad','За рубежом']],ui.raceRegion||'');
-    const discipline=select([['','Любой тип'],'Трейл','Шоссе'],ui.raceDiscipline||'');
+    yearMenu.addEventListener('keydown',e=>{
+      if(e.key==='Escape'&&yearMenu.open){yearMenu.open=false;yearLabel.focus();}
+    });
+    append(yearMenu,yearLabel,yearOptions);
+    const query=input('search',ui.raceQuery||'','Поиск старта');
+    const quick=el('div',null,'row catalog-quick race-quick');
+    quick.setAttribute('role','group');quick.setAttribute('aria-label','Фильтры стартов');
+    const countries=el('div',null,'row catalog-quick');
+    countries.setAttribute('role','group');countries.setAttribute('aria-label','География');
+    const controls=[];
+    for(const [container,key,value,label] of [
+      [quick,'raceRegion','serbia','Сербия'],
+      [quick,'raceDiscipline','Трейл','Трейл'],
+      [quick,'raceDiscipline','Шоссе','Шоссе'],
+      [countries,'raceRegion','abroad','За рубежом'],
+      [countries,'raceTeam',true,'Мы бежим']
+    ]){
+      const control=button(label,()=>{ui[key]=ui[key]===value?null:value;refresh();});
+      controls.push([control,key,value]);container.append(control);
+    }
     const list=el('div',null,'race-months');
     const monthFormat=new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'});
     const dateLabel=race=>{
@@ -183,12 +202,12 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     function card({race,region,discipline,significant,people}){
       const details=section('',race.id,[]);
       details.classList.add('race-card');
-      details.dataset.category=significant?'significant':region==='abroad'?'abroad':discipline==='Шоссе'?'road':discipline==='Трейл'?'trail':'';
+      details.dataset.category=region==='serbia'?'serbia':significant?'significant':region==='abroad'?'abroad':'';
+      if(race.featured)details.classList.add('race-featured');
       const summary=details.querySelector('summary'),body=details.querySelector('.fold-body');
       const tags=el('div',null,'row race-tags');
       if(discipline)tags.append(el('span',discipline,'chip'));
       if(significant)tags.append(el('span','Знаковый','chip race-significant'));
-      if(race.recommended)tags.append(el('span','Рекомендуем','chip'));
       if(people.length)tags.append(el('span','Участники · '+people.length,'chip emphasis'));
       append(summary,el('span',race.name,'race-name'),
         el('span',[dateLabel(race),race.place].filter(Boolean).join(' · '),'race-meta'),tags.childElementCount&&tags);
@@ -213,14 +232,17 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       return details;
     }
     function refresh(){
-      ui.raceYear=year.value;ui.raceQuery=query.value;
-      for(const control of scopes.children)control.setAttribute('aria-pressed',String((ui.raceScope||'')===control.dataset.scope));
+      ui.raceQuery=query.value;
+      yearLabel.textContent=year||'Все сезоны';
+      yearLabel.setAttribute('aria-label','Сезон · '+yearLabel.textContent);
+      for(const option of yearOptions.children)option.setAttribute('aria-pressed',String(option.dataset.year===year));
+      for(const [control,key,value] of controls)control.setAttribute('aria-pressed',String(ui[key]===value));
       const keyword=C.normalizeSearch(query.value),months=new Map();
       for(const entry of catalog){
         const {race,people,search}=entry;
-        if((year.value&&!race.date.startsWith(year.value))||!search.includes(keyword)
-          ||(ui.raceScope==='club'&&!race.recommended)||(ui.raceScope==='clients'&&!people.length)
-          ||(region.value&&entry.region!==region.value)||(discipline.value&&entry.discipline!==discipline.value))continue;
+        if((year&&!race.date.startsWith(year))||!search.includes(keyword)
+          ||(ui.raceTeam&&!people.length)||(ui.raceRegion&&entry.region!==ui.raceRegion)
+          ||(ui.raceDiscipline&&entry.discipline!==ui.raceDiscipline))continue;
         const key=race.date.slice(0,7);
         if(!months.has(key))months.set(key,[]);
         months.get(key).push(card(entry));
@@ -231,9 +253,7 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       }));
       if(!months.size)list.append(text('Стартов не найдено'));
     }
-    query.addEventListener('input',refresh);year.addEventListener('change',refresh);
-    region.addEventListener('change',()=>{ui.raceRegion=region.value;refresh();});
-    discipline.addEventListener('change',()=>{ui.raceDiscipline=discipline.value;refresh();});
+    query.addEventListener('input',refresh);
     const create=button('Добавить старт',()=>modal('Новый старт',form=>{
       const name=input('text'),date=input('date'),place=input('text');name.maxLength=120;place.maxLength=160;
       const region=select([['','Не указано'],['serbia','Сербия'],['abroad','За рубежом']],'');
@@ -242,11 +262,8 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       return ()=>commit(s=>C.defineRace(s,{name:name.value,date:date.value,place:place.value,region:region.value,discipline:discipline.value}));
     }),'subtle');
     query.setAttribute('aria-label','Поиск старта');
-    year.setAttribute('aria-label','Сезон');
-    region.setAttribute('aria-label','Страна');
-    discipline.setAttribute('aria-label','Тип покрытия');
     append(page,append(el('div',null,'page-title'),el('h1','Старты'),create),query,
-      scopes,append(el('div',null,'race-filter-head'),region,discipline,year),list);
+      append(el('div',null,'race-filter-box'),quick,append(el('div',null,'race-filter-head'),countries,yearMenu)),list);
     refresh();return page;
   }
   return {profile,training,telegramOptions,goals,races};

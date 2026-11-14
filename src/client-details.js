@@ -33,16 +33,25 @@ export function setProfile(client, values) {
 
 export function birthdayReminders(state, today = localDate(), days = 14) {
   const horizon = addDays(today,days), output = [];
+  const completed = new Set(state.events.filter(event=>event.type==='birthday-greeted').map(event=>event.clientId+'|'+event.day));
   for (const client of Object.values(state.clients)) {
     const birthday = client.profile?.birthday;
     if (!birthday || !birthdayValid(birthday) || client.mergedInto || !['Активный','На паузе'].includes(client.status) && client.role === 'Клиент') continue;
     const monthDay = birthday.slice(-5);
     for (let year = Number(today.slice(0,4)); year <= Number(horizon.slice(0,4)); year++) {
       const day = year + '-' + monthDay;
-      if (validDate(day) && today <= day && day <= horizon) output.push({ client, day });
+      if (validDate(day) && today <= day && day <= horizon && !completed.has(client.id+'|'+day)) output.push({ client, day });
     }
   }
   return output.sort((a,b) => a.day.localeCompare(b.day) || a.client.name.localeCompare(b.client.name,'ru'));
+}
+
+export function birthdayGreeting(client) {
+  const username = [client.telegram?.username,client.profile?.telegram,client.telegramHint]
+    .map(value=>String(value||'').trim().replace(/^@/,'')).find(telegramUsername);
+  const name = client.name.trim().split(/\s+/)[1] || client.name.trim();
+  return [username&&'@'+username,name+', с днём рождения! 🎉\n\nПусть в новом году будет больше любимых маршрутов, хорошей компании и пробежек в удовольствие!']
+    .filter(Boolean).join('\n');
 }
 
 export function telegramReminders(state, today = localDate()) {

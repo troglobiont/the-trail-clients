@@ -30,6 +30,11 @@ export function validateState(s){
   return s;
 }
 export function event(s,type,clientId,entityId,details={}){s.events.push({id:id('event'),type,clientId,entityId,at:stamp(),...details});}
+export function completeBirthday(s,clientId,day) {
+  const client=s.clients[clientId];
+  if(!client||client.mergedInto||!validDate(day)||client.profile?.birthday?.slice(-5)!==day.slice(-5))throw Error('День рождения не найден');
+  if(!s.events.some(e=>e.type==='birthday-greeted'&&e.clientId===clientId&&e.day===day))event(s,'birthday-greeted',clientId,clientId,{day});
+}
 const directorySort = new Intl.Collator('ru', { sensitivity: 'base' });
 export const clientRole = client => client.teamRole === 'Организатор' ? 'Организатор' : client.role;
 export const pauseKind = client => client.pause?.kind === 'planned' ? 'planned' : 'open';

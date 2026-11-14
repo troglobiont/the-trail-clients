@@ -11,7 +11,7 @@ import {applyLedger, LEDGER_FORMAT, parseLedgerImport} from './ledger-import.js'
 import {createCloudAPI} from './cloud-api.js';
 import {createCloudSync} from './cloud-sync.js';
 import {createClientDetailsUI} from './client-details-ui.js';
-import {birthdayReminders,telegramReminders,GOAL_TYPES} from './client-details.js';
+import {birthdayGreeting,birthdayReminders,telegramReminders,GOAL_TYPES} from './client-details.js';
 import {cloudConfig} from './cloud-config.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
@@ -21,7 +21,7 @@ const CATALOG_PAGE_SIZE = 12;
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
   packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7)});
 const ui={filters:defaultFilters(),catalogScope:'active',pauseFilter:null,catalogLimit:CATALOG_PAGE_SIZE,
-  contactOrder:false, recentlyCompleted:new Set(), taskFilter:'all',returnTo:'#clients',open:new Set(),drafts:{},sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
+  contactOrder:false, recentlyCompleted:new Set(), taskFilter:'all',returnTo:'#clients',open:new Set(),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
 const state=()=>store.state();
 function el(tag,text,className){const node=document.createElement(tag);if(text!==undefined&&text!==null)node.textContent=text;if(className)node.className=className;return node;}
 function append(parent,...children){parent.append(...children.filter(Boolean));return parent;}
@@ -55,14 +55,14 @@ const accountingUI=createAccountingUI({state,el,append,button,row,field,input,se
   activateClient:(s,id,day)=>C.editClient(s,id,{status:'Активный',engagement:null,pause:null},day),
   openClient(clientId){ui.open.add(clientId+'-account');openClient(clientId);}
 });
-function modal(title,build,{saveLabel='Сохранить',onSaved}={}){
+function modal(title,build,{saveLabel='Сохранить',saveClass='primary',onSaved}={}){
   dialog.textContent='';
   const form=el('form'),heading=el('h2',title),error=text('','form-error');
   heading.id='editor-title';error.setAttribute('role','alert');form.append(heading);
   let save;
   const saveControl=saveLabel&&button(saveLabel,async()=>{
     try{await save();dialog.close();onSaved?.();}catch(e){error.textContent=e.message;}
-  },'primary');
+  },saveClass);
   save=build(form,enabled=>{if(saveControl)saveControl.disabled=!enabled;error.textContent='';});
   const controls=row(button('Отмена',()=>dialog.close()),saveControl);
   form.addEventListener('submit',e=>{e.preventDefault();if(saveControl&&!saveControl.disabled)saveControl.click();});
@@ -325,14 +325,28 @@ function activeCatalogFilters(search) {
 }
 
 function filterControl(key,label,values) {
-  const control = select(values,ui.filters[key]);
-  control.addEventListener('change',()=>{
-    ui.filters[key] = control.value;
-    ui.catalogLimit = CATALOG_PAGE_SIZE;
-    if (key === 'paymentCurrency') document.getElementById('catalog-payment-month').hidden = control.value === 'all';
-    renderCatalogResults();
+  const options=values.map(item=>Array.isArray(item)?item:[item,item]);
+  const control=el('details',null,'catalog-control');
+  const choices=el('div',null,'catalog-control-options');
+  const summary=append(el('summary'),el('span',label,'catalog-control-label'),el('span'));
+  const selected=summary.lastElementChild;
+  control.setAttribute('name','client-filter-menu');
+  function refresh(){
+    selected.textContent=options.find(([value])=>ui.filters[key]===value)?.[1]||options[0][1];
+    for(const item of choices.children)item.setAttribute('aria-pressed',String(ui.filters[key]===item.dataset.value));
+  }
+  for(const [value,title] of options){
+    const choice=button(title,()=>{
+      ui.filters[key]=value;ui.catalogLimit=CATALOG_PAGE_SIZE;
+      if(key==='paymentCurrency')document.getElementById('catalog-payment-month').hidden=value==='all';
+      control.open=false;summary.focus();refresh();renderCatalogResults();
+    });
+    choice.dataset.value=value;choices.append(choice);
+  }
+  control.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&control.open){control.open=false;summary.focus();}
   });
-  return field(label,control);
+  refresh();return append(control,summary,choices);
 }
 
 function renderCatalogResults() {
@@ -376,12 +390,42 @@ function birthdayPeriods(days){
   return periods;
 }
 
+function editBirthdayGreeting(client,day){
+  const key=client.id+'|'+day;
+  const draft=el('textarea');draft.rows=6;draft.maxLength=4096;
+  draft.value=ui.birthdayDrafts.get(key)??birthdayGreeting(client);
+  draft.addEventListener('input',()=>ui.birthdayDrafts.set(key,draft.value));
+  modal('Поздравление · '+client.name,form=>{
+    const feedback=el('div',null,'small muted');feedback.setAttribute('role','status');
+    const copy=button('Скопировать',async()=>{
+      const value=draft.value.trim();
+      if(!value){feedback.textContent='Введи поздравление';return;}
+      try{
+        await navigator.clipboard.writeText(value);
+      }catch{
+        draft.focus();draft.select();
+        if(!document.execCommand?.('copy')){
+          feedback.textContent='Текст выделен. Скопируй его через меню.';
+          return;
+        }
+      }
+      feedback.textContent='Поздравление скопировано';
+    },'primary');
+    append(form,field('Текст поздравления',draft),copy,feedback);
+    return async()=>{
+      await commit(s=>C.completeBirthday(s,client.id,day));
+      ui.birthdayDrafts.delete(key);
+      message('Поздравление отмечено');
+    };
+  },{saveLabel:'Поздравил',saveClass:'subtle'});
+}
+
 function renderTodo(birthdayRoute=false){
   const page=el('div',null,'stack-lg');
   const today=C.localDate(),days=ui.birthdayDays||30;
   const filter=birthdayRoute?'birthdays':ui.taskFilter;
   const birthdayEntries=horizon=>birthdayReminders(state(),today,horizon).map(({client,day})=>({
-    name:client.name,due:day,birthday:true,open:()=>openClient(client.id,'profile')
+    name:client.name,due:day,birthday:true,open:()=>editBirthdayGreeting(client,day)
   }));
   const tasks=C.clientTasks(state()).map(t=>({
     name:state().clients[t.clientId].name,title:t.title,due:C.taskDate(t),
@@ -394,8 +438,7 @@ function renderTodo(birthdayRoute=false){
   const all=[...tasks,...payment,...birthdayEntries(14),...telegram];
   const entries=(filter==='birthdays'?birthdayEntries(days):filter==='mine'?tasks.filter(e=>!e.reply):all)
     .sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
-  const count=entries.length;
-  append(page,append(el('div',null,'page-title'),el('h1','ToDo'),text(count+' в списке')));
+  append(page,append(el('div',null,'page-title'),el('h1','ToDo')));
   if(!Object.keys(state().clients).length){page.append(emptyDatabase());return page;}
   const filters=el('div',null,'row catalog-quick todo-filters');
   filters.setAttribute('role','group');filters.setAttribute('aria-label','Фильтры ToDo');
@@ -604,7 +647,7 @@ function renderClient(clientId,targetType,targetId){
   }
   return page;
 }
-function eventLabel(type){return ({'pause-contact-completed':'Связь после паузы отмечена','telegram-opened':'Открыта переписка в Telegram','profile-edited':'Обновлены сведения о клиенте','training-edited':'Обновлены тренировочные данные','record-created':'Запись Сергея','goal-created':'Цель добавлена','goal-edited':'Цель изменена','goal-deleted':'Цель удалена','goal-restored':'Цель восстановлена','task-created':'Задача создана','task-edited':'Задача изменена','telegram-linked':'Переписка привязана','telegram-unlinked':'Переписка отвязана','task-closed':'Задача закрыта','task-reopened':'Задача возвращена','outbound':'Исходящее сообщение','task-scheduled':'Разговор назначен','client-edited':'Данные клиента изменены','client-created':'Клиент добавлен','client-movement':'Статус сотрудничества изменён','feature-created':'Особенность добавлена','feature-edited':'Особенность изменена','feature-archived':'Особенность снята с актуального','feature-restored':'Особенность снова актуальна','contact':'Контакт с клиентом','source-note':'Сведения от Сергея'})[type]||'Изменение';}
+function eventLabel(type){return ({'birthday-greeted':'День рождения · поздравил','pause-contact-completed':'Связь после паузы отмечена','telegram-opened':'Открыта переписка в Telegram','profile-edited':'Обновлены сведения о клиенте','training-edited':'Обновлены тренировочные данные','record-created':'Запись Сергея','goal-created':'Цель добавлена','goal-edited':'Цель изменена','goal-deleted':'Цель удалена','goal-restored':'Цель восстановлена','task-created':'Задача создана','task-edited':'Задача изменена','telegram-linked':'Переписка привязана','telegram-unlinked':'Переписка отвязана','task-closed':'Задача закрыта','task-reopened':'Задача возвращена','outbound':'Исходящее сообщение','task-scheduled':'Разговор назначен','client-edited':'Данные клиента изменены','client-created':'Клиент добавлен','client-movement':'Статус сотрудничества изменён','feature-created':'Особенность добавлена','feature-edited':'Особенность изменена','feature-archived':'Особенность снята с актуального','feature-restored':'Особенность снова актуальна','contact':'Контакт с клиентом','source-note':'Сведения от Сергея'})[type]||'Изменение';}
 function getDraft(clientId){return ui.drafts[clientId]||(ui.drafts[clientId]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'});}
 function saveDraftSoon(){clearTimeout(draftTimer);draftTimer=setTimeout(()=>run(()=>saveDrafts()),500);}
 async function saveDrafts(){clearTimeout(draftTimer);if(!store)return;await commit(s=>{s.settings.drafts=C.clone(ui.drafts);},false);}

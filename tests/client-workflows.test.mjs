@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as C from '../src/core.js';
 import * as A from '../src/accounting.js';
 import { cloudData } from '../src/cloud-state.js';
-import { birthdayReminders, raceCatalog, raceCategory, raceParticipants, telegramReminders } from '../src/client-details.js';
+import { birthdayGreeting, birthdayReminders, raceCatalog, raceCategory, raceParticipants, telegramReminders } from '../src/client-details.js';
 
 test('temporary online does not remove a client from the in-person list; archive and aliases preserve identity',()=>{
   const state=C.emptyState();
@@ -42,6 +42,22 @@ test('birthday crosses year boundary and opening Telegram does not count as conf
   assert.equal(telegramReminders(state,'2026-12-16').length,0);
   assert.equal(c.lastContact,null);
   assert.equal(state.events.at(-1).type,'telegram-opened');
+});
+
+test('birthday greeting uses the Telegram handle and completing it dismisses only this occurrence',()=>{
+  const state=C.emptyState();
+  const client=C.createClient(state,{name:'Тестова Вера',telegramHint:'@example_coach_test'});
+  C.saveProfile(state,client.id,{birthday:'11-16'});
+  assert.match(birthdayGreeting(client),/^@example_coach_test\nВера, с днём рождения!/);
+  C.setTelegramBinding(state,client.id,{peerId:'12345',username:'example_linked_test'});
+  assert.match(birthdayGreeting(client),/^@example_linked_test\n/);
+  assert.equal(birthdayReminders(state,'2026-11-14').length,1);
+  C.completeBirthday(state,client.id,'2026-11-16');
+  C.completeBirthday(state,client.id,'2026-11-16');
+  const restored=C.parseImport(C.exportState(state));
+  assert.equal(restored.events.filter(e=>e.type==='birthday-greeted').length,1);
+  assert.equal(birthdayReminders(restored,'2026-11-14',90).length,0);
+  assert.equal(birthdayReminders(restored,'2027-11-14').length,1);
 });
 
 test('race editions persist through backup and cloud without counting proposals or duplicate goals',()=>{
