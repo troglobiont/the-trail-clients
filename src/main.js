@@ -1,5 +1,5 @@
 import * as C from './core.js';
-import { CURRENCIES, PACKAGES, matchingTariffClients } from './accounting.js';
+import { CURRENCIES, PACKAGES, amountMinor, matchingTariffClients } from './accounting.js';
 import {createStore,browserAdapter} from './store.js';
 import {createUpdater} from './updates.js';
 import {parseConnection} from './connection.js';
@@ -20,7 +20,7 @@ const CATALOG_PAGE_SIZE = 12;
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
   packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7)});
 const ui={filters:defaultFilters(),catalogScope:'active',pauseFilter:null,catalogLimit:CATALOG_PAGE_SIZE,
-  taskFilter:'all',returnTo:'#clients',open:new Set(),drafts:{},sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
+  contactOrder:false, recentlyCompleted:new Set(), taskFilter:'all',returnTo:'#clients',open:new Set(),drafts:{},sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
 const state=()=>store.state();
 function el(tag,text,className){const node=document.createElement(tag);if(text!==undefined&&text!==null)node.textContent=text;if(className)node.className=className;return node;}
 function append(parent,...children){parent.append(...children.filter(Boolean));return parent;}
@@ -283,6 +283,13 @@ function activeCatalogFilters() {
     control.setAttribute('aria-pressed',String(ui.filters.quick === value));
     quick.append(control);
   }
+  const contactOrder=button('Давно без контакта',()=>{
+    ui.contactOrder=!ui.contactOrder;
+    ui.catalogLimit=CATALOG_PAGE_SIZE;
+    contactOrder.setAttribute('aria-pressed',String(ui.contactOrder));
+    renderCatalogResults();
+  });
+  contactOrder.setAttribute('aria-pressed',String(ui.contactOrder));
   const extra = el('div',null,'filters');
   const currencyOptions = [['all','Любая'],...CURRENCIES];
   for (const [key,label,values] of [
@@ -305,7 +312,7 @@ function activeCatalogFilters() {
     renderCatalogResults();
   });
   extra.append(monthField);
-  return append(el('div',null,'stack catalog-options'),quick,section('Фильтры','catalog-filters',[
+  return append(el('div',null,'stack catalog-options'),quick,append(el('div',null,'row catalog-quick'),contactOrder),section('Фильтры','catalog-filters',[
     extra,button('Сбросить фильтры',()=>{
       ui.filters = {...defaultFilters(),query:ui.filters.query};
       ui.catalogLimit = CATALOG_PAGE_SIZE;
@@ -332,13 +339,15 @@ function renderCatalogResults() {
   const tariffs = scope === 'active' ? matchingTariffClients(state(),ui.filters) : null;
   const clients = C.filterClients(state(),{ ...ui.filters,section:scope,pauseKind:ui.pauseFilter })
     .filter(c=>!tariffs || tariffs.has(c.id));
+  const byContact=scope==='active'&&ui.contactOrder;
+  if(byContact)clients.sort((a,b)=>(a.lastContact?.at||'').localeCompare(b.lastContact?.at||''));
   const accountingClients = accountingUI.activeClientIds();
   list.replaceChildren();
   for (const c of clients.slice(0,ui.catalogLimit)) {
     const item = button(c.name,()=>openClient(c.id),'client-directory-item');
     item.setAttribute('aria-label','Открыть клиента: '+c.name);
     const detail = scope === 'paused' ? c.pause?.returnWindow || (c.pause?.contactOn && 'Связаться ' + formatDate(c.pause.contactOn))
-      : scope === 'team' ? C.clientRole(c) : '';
+      : scope === 'team' ? C.clientRole(c) : byContact ? c.lastContact?.at ? 'Контакт '+formatDate(c.lastContact.at)+' '+c.lastContact.at.slice(0,4) : 'Контакт не записан' : '';
     if (detail) item.append(text(detail));
     const quick = accountingClients.has(c.id) && button('Учёт',()=>accountingUI.quickEntry(c.id),'directory-account');
     if (quick) quick.setAttribute('aria-label','Учёт · '+c.name);
@@ -402,7 +411,7 @@ function renderTodo(){
   const list=el('div',null,'stack');
   for(const item of entries.filter(e=>matches(ui.taskFilter,e))){
     const b=button('',item.open,'task-tile');
-    append(b,el('span',item.name,'task-client-name'),el('span',item.title,'task-title'),
+    append(b,el('span',item.name,'task-client-name'),item.payment&&el('span','◈ Оплата','chip payment-chip'),el('span',item.title,'task-title'),
       text((item.due?formatDate(item.due):'Без срока')+' · '+item.next));
     if(item.warning)b.append(text(item.warning.text,item.warning.level==='danger'?'danger-text small':'warning-text small'));
     list.append(b);
@@ -427,9 +436,19 @@ function editTask(t){
     });
   });
 }
+async function finishClientTask(t) {
+  await commit(s=>t.pauseContact?C.completePauseContact(s,t.clientId):C.completeTask(s,t.id,true),false);
+  if(!t.pauseContact)ui.recentlyCompleted.add(t.id);
+  render();
+}
 function task(t){
   const wrap=el('div',null,'task');
   wrap.id='task-'+t.id;wrap.tabIndex=-1;
+  if(t.phase==='done'){
+    wrap.classList.add('task-completed');
+    return append(wrap,el('div',t.title,'task-title'),row(el('span','Выполнено','chip'),
+      button('Вернуть в работу',()=>commit(s=>C.completeTask(s,t.id,false)),'subtle')));
+  }
   wrap.append(append(el('div',null,'task-heading'),el('div',t.title,'task-title'),button('Изменить',()=>editTask(t),'subtle')));
   wrap.append(text((t.due&&t.phase==='todo'?formatDate(t.due)+' · ':'')+taskStateLabel(t)));
   const goal=C.taskGoal(state(),t);
@@ -439,7 +458,7 @@ function task(t){
   if(t.lastSentAt)wrap.append(text('Последняя отметка: '+formatDate(t.lastSentAt,true)+' · проверка '+formatDate(t.checkOn)));
   if(t.needsReply){
     const controls=el('div',null,'task-actions'),ack=ui.sendAck[t.id]===t.lastSentAt&&t.checkOn>C.localDate(),label=ack?(t.outboundCount>1?'Я написал клиенту повторно, жду ответа':'Я написал клиенту, жду ответа'):(t.lastSentAt?'Написать клиенту повторно':'Написать клиенту');
-    controls.append(button(label,async()=>{const at=new Date().toISOString();await commit(s=>C.markSent(s,t.id,at),false);ui.sendAck[t.id]=state().tasks[t.id].lastSentAt;render();},ack?'sent':''),button('Закрыть задачу',()=>commit(s=>C.completeTask(s,t.id,true))));wrap.append(controls);
+    controls.append(button(label,async()=>{const at=new Date().toISOString();await commit(s=>C.markSent(s,t.id,at),false);ui.sendAck[t.id]=state().tasks[t.id].lastSentAt;render();},ack?'sent':''),button('Закрыть задачу',()=>finishClientTask(t)));wrap.append(controls);
     const warning=C.taskWarning(t);if(warning)wrap.append(text(warning.text,warning.level==='danger'?'danger-text small':'warning-text small'));
     const delay=input('number',t.waitDays);delay.min=1;delay.max=30;
     wrap.append(section('Настройки задачи',t.id+'-settings',[
@@ -449,7 +468,7 @@ function task(t){
     ]));
   }else{
     const checkbox=input('checkbox');checkbox.checked=false;
-    checkbox.addEventListener('change',()=>run(()=>commit(s=>t.pauseContact?C.completePauseContact(s,t.clientId):C.completeTask(s,t.id,true))));
+    checkbox.addEventListener('change',()=>run(()=>finishClientTask(t)));
     wrap.append(append(el('label',null,'checkbox'),checkbox,el('span','Выполнено')));
   }
   return wrap;
@@ -546,7 +565,8 @@ function renderClient(clientId,targetType,targetId){
     text(c.lastContact?'Последний контакт: '+formatDate(c.lastContact.at,!c.lastContact.dateOnly)+' · '+c.lastContact.channel:'Последний контакт пока не указан'));
   const followUp=pauseDetails(c);
   append(page,header,followUp);
-  const tasks=C.clientTasks(state(),clientId);
+  const tasks=[...C.clientTasks(state(),clientId),...Array.from(ui.recentlyCompleted,id=>state().tasks[id])
+    .filter(t=>t?.clientId===clientId&&t.phase==='done')];
   if(tasks.length)page.append(append(el('section',null,'panel action-panel'),el('h2','Действия по клиенту','block-heading'),...tasks.map(task)));
   page.append(renderFeatures(c));
   if(c.role==='Клиент')page.append(accountingUI.clientPanel(c));
@@ -651,6 +671,115 @@ function agentClient(c){
   return Object.fromEntries(keys.map(key=>[key,c[key]]));
 }
 async function submitRecord(c,d){const data={...d};const pending=state().records[d.pendingRecordId];const record=pending&&pending.text===data.text.trim()&&pending.kind===data.kind?pending:await commit(s=>C.saveRecord(s,c.id,data.text,data.kind),false);d.pendingRecordId=record.id;await saveDrafts();let result;if(state().settings.serviceURL&&state().settings.agentEnabled){try{const response=await service('/records/parse',{client:agentClient(state().clients[c.id]),goals:Object.values(state().goals).filter(g=>g.clientId===c.id&&!g.deletedAt),openTasks:C.clientTasks(state(),c.id).filter(t=>!t.pauseContact),record,timezone:C.TIMEZONE,waitDays:state().settings.waitDays,needsReply:data.needsReply});if(response.question){ui.recordResults[c.id]='Нужно уточнить: '+response.question;render();return;}result=await commit(s=>C.applyAgentResult(s,record.id,response,{goalType:data.goalType}),false);}catch(e){ui.recordResults[c.id]='Запись сохранена. Обработка не завершена: '+e.message;render();return;}}else result=await commit(s=>C.processManualRecord(s,record.id,{due:data.due||null,needsReply:data.needsReply,goalStatus:data.goalStatus,goalType:data.goalType}),false);ui.recordResults[c.id]=result.changes.length?result.changes.map(x=>(x.type==='task'?'Задача: ':x.type==='goal'?'Цель: ':'Особенность: ')+x.title).join('\n'):result.mode==='agent'?'Запись сохранена. Агент не выделил задач, целей или особенностей.':'Запись сохранена в истории';ui.drafts[c.id]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'};await saveDrafts();render();}
+const assistantKey='__assistant__';
+const assistantKind=(value)=>/оплати|получил[аи]?\s|вн[её]с|аванс/iu.test(value) ? 'payment'
+  : /пров[её]л|занятие прошло|записать занятие/iu.test(value) ? 'session'
+  : /цель|хочет/iu.test(value) ? 'goal' : /спросить|напомни|проверить|узнать|написать|поставь задачу/iu.test(value) ? 'task' : 'record';
+function assistantPeople(value) {
+  const words=value.toLowerCase().match(/[\p{L}]{3,}/gu)||[];
+  const clients=Object.values(state().clients).filter(c=>!c.mergedInto);
+  const candidates=clients.map(c=>{
+    const aliases=[c.name,...(c.aliases||[])].map(name=>name.split(/\s+/).map(C.normalizeSearch));
+    const score=Math.max(0,...aliases.map(parts=>parts.filter(part=>part.length>=3&&words.some(word=>C.normalizeSearch(word)===part)).length));
+    return {id:c.id,score};
+  });
+  const best=Math.max(0,...candidates.map(c=>c.score));
+  return best?candidates.filter(c=>c.score===best).map(c=>c.id):[];
+}
+function assistantAmount(value) {
+  const explicit=value.match(/(\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[,.](\d{1,2}))?\s*(тысяч\p{L}*|[кk](?!\p{L}))?\s*(RSD|RUB|EUR|USD|динар\p{L}*|дин|рубл\p{L}*|руб|евро|доллар\p{L}*|₽|€|[$])/iu);
+  if(!explicit)return {};
+  const [,integer,decimals,multiplier,unit]=explicit;
+  const amount=Number(integer.replace(/\s/g,''))+Number('0.'+(decimals||'0'));
+  const currency=/rsd|дин/i.test(unit)?'RSD':/rub|руб|₽/i.test(unit)?'RUB':/eur|евро|€/i.test(unit)?'EUR':'USD';
+  return { amount:amountMinor(amount*(multiplier?1000:1)),currency };
+}
+function renderAssistant(){
+  const d=getDraft(assistantKey),page=el('div',null,'stack-lg assistant-page');
+  const note=el('textarea');note.rows=5;note.maxLength=16000;note.value=d.text;
+  note.placeholder='Например: Стремовская оплатила персоналку в зале';
+  note.setAttribute('aria-label','Запись для ассистента');
+  const pending=ui.pendingVoice?.clientId===assistantKey;
+  const recording=ui.recordingClientId===assistantKey;
+  const busy=ui.voiceStartingClientId===assistantKey||ui.voiceSavingClientId===assistantKey||ui.busy.has('voice-'+assistantKey);
+  const voice=button(busy?'Обрабатываю…':pending?'Повторить распознавание':recording?'Остановить и распознать':'Надиктовать запись',
+    ()=>pending?transcribeVoice(ui.pendingVoice):recordVoice(assistantKey),recording?'primary recording':'subtle');
+  voice.disabled=busy;
+  const review=button('Продолжить',()=>reviewAssistant(d.text),'primary');
+  const refresh=()=>{review.disabled=!d.text.trim()||busy||recording;};
+  note.addEventListener('input',()=>{d.text=note.value;refresh();saveDraftSoon();});refresh();
+  return append(page,el('h1','Ассистент'),note,row(voice,review));
+}
+function reviewAssistant(value){
+  const candidates=assistantPeople(value);
+  const clients=C.filterClients(state());
+  const kinds={payment:'Принять оплату', session:'Записать занятие', task:'Поставить задачу',goal:'Добавить цель',record:'Сохранить запись'};
+  modal('Запись ассистента',form=>{
+    const client=select([['','Выбери клиента'],...clients.map(c=>[c.id,c.name])],candidates.length===1?candidates[0]:'');
+    const kind=select(Object.entries(kinds),assistantKind(value));
+    append(form,text(value),field('Клиент',client),field('Действие',kind));
+    return async()=>{
+      const c=state().clients[client.value];
+      if(!c||c.mergedInto)throw Error('Выбери клиента');
+      const type=kind.value;
+      requestAnimationFrame(()=>run(()=>type==='payment'||type==='session'?reviewAssistantFinance(c,type,value):previewAssistantRecord(c,type,value)));
+    };
+  },{saveLabel:'Проверить'});
+}
+function reviewAssistantFinance(client,type,value){
+  let choices=accountingUI.quickOptions(client.id).filter(option=>option.kind===type);
+  if(/персонал/iu.test(value))choices=choices.filter(option=>option.service.kind==='personal');
+  if(/в зал|зал[еуа]/iu.test(value))choices=choices.filter(option=>option.service.place==='Зал');
+  if(/на улиц/iu.test(value))choices=choices.filter(option=>option.service.place==='Улица');
+  if(!choices.length)throw Error('Для такого действия у клиента нет подходящего действующего тарифа');
+  const {amount,currency}=type==='payment'?assistantAmount(value):{};
+  const day=C.localDate();
+  const date=/вчера/iu.test(value)?C.addDays(day,-1):day;
+  if(currency) {
+    const matches=choices.filter(option=>option.service.currency===currency);
+    if(!matches.length)throw Error('Названная валюта отличается от тарифа. Открой «Распределить оплату» в учёте.');
+    choices=matches;
+  }
+  const open=option=>accountingUI.quickEntry(client.id,{...option,amount,date,onSaved:clearAssistantDraft});
+  if(choices.length===1){open(choices[0]);return;}
+  modal('Выбрать тариф',form=>{
+    for(const choice of choices){
+      const service=choice.service;
+      form.append(button([PACKAGES[service.package||service.kind],service.place,service.currency].filter(Boolean).join(' · '),()=>open(choice)));
+    }
+  },{saveLabel:false});
+}
+async function clearAssistantDraft(){
+  delete ui.drafts[assistantKey];await saveDrafts();render();
+}
+async function previewAssistantRecord(client,kind,value){
+  const haveAgent=state().settings.serviceURL;
+  const record={id:C.id('record'),clientId:client.id,text:value.trim(),kind};
+  let result;
+  if(haveAgent){
+    await ensureAgent(false);
+    result=await service('/records/parse',{client:agentClient(client),record,timezone:C.TIMEZONE,
+      goals:Object.values(state().goals).filter(g=>g.clientId===client.id&&!g.deletedAt),
+      openTasks:C.clientTasks(state(),client.id).filter(t=>!t.pauseContact),waitDays:state().settings.waitDays,needsReply:false});
+  }
+  if(result?.question)throw Error(result.question);
+  modal('Подтвердить запись',form=>{
+    const note=el('textarea');note.value=record.text;note.maxLength=16000;
+    append(form,text(client.name,'account-form-client'));
+    if(result?.changes?.length){
+      for(const change of result.changes)form.append(text([({task:'Задача',goal:'Цель',feature:'Особенность'})[change.type],change.title,change.due&&formatDate(change.due)].filter(Boolean).join(' · '),'record-result'));
+      form.append(text(record.text));
+    }else form.append(field('Текст записи',note));
+    return async()=>{
+      await commit(s=>{
+        const saved=C.saveRecord(s,client.id,note.value,kind);
+        if(result?.changes?.length)C.applyAgentResult(s,saved.id,result);
+        else C.processManualRecord(s,saved.id);
+      },false);
+      await clearAssistantDraft();message('Запись сохранена');
+    };
+  });
+}
 async function service(path,body){const base=state().settings.serviceURL;if(!base)throw Error('Подключи сервис в настройках');const address=new URL(path,base);if(address.protocol!=='https:')throw Error('Нужен HTTPS-адрес сервиса');if(window.TrailNative?.native){const res=await window.TrailNative.request(address.href,'POST',body);return JSON.parse(res.body);}throw Error('Подключение сервиса доступно в установленном Android-приложении');}
 async function recordVoice(clientId){
   if(ui.recorder){
@@ -781,7 +910,7 @@ async function bindTelegram(c){
   const status=await service('/telegram/status',{});
   if(!status.connected)throw Error('Сервис доступен, но личный аккаунт Telegram ещё не авторизован');
   modal('Переписка в Telegram',(form,setSaveEnabled)=>{
-    const query=input('search',c.telegram?.username?'@'+c.telegram.username:c.telegramHint||c.name,'Имя в Telegram или @username');
+    const query=input('search',c.telegram?.username?'@'+c.telegram.username:c.telegramHint||c.name,'Имя, @username или +381…');
     query.maxLength=120;query.enterKeyHint='search';query.autocomplete='off';
     const results=el('fieldset',null,'recipient-results'),legend=el('legend','Результаты поиска');
     const selection=text('Найди и выбери получателя. Сообщение при привязке не отправляется.');
@@ -791,7 +920,7 @@ async function bindTelegram(c){
     const picker=createRecipientSearch({search:value=>service('/telegram/search',{query:value}),onChange:({contacts,selected,busy,error,searched})=>{
       setSaveEnabled(!!selected&&!busy);
       find.disabled=busy;find.textContent=busy?'Ищу…':'Найти в Telegram';
-      selection.textContent=error||(busy?'Ищу…':selected?'Выбран: '+selected.displayName+(selected.username?' · @'+selected.username:''):contacts.length?'Нажми на нужного человека:':!searched?'Найди и выбери получателя. Сообщение при привязке не отправляется.':'Не найдено. Имя в карточке может отличаться от имени в Telegram. Попробуй имя из контактов или @username.');
+      selection.textContent=error||(busy?'Ищу…':selected?'Выбран: '+selected.displayName+(selected.username?' · @'+selected.username:''):contacts.length?'Нажми на нужного человека:':!searched?'Найди и выбери получателя. Сообщение при привязке не отправляется.':'Не найдено. Имя в карточке может отличаться от имени в Telegram. Попробуй имя из переписки, @username или номер с кодом страны.');
       selection.className=error?'danger-text small':selected?'recipient-confirmation':'muted small';
       if(renderedContacts!==contacts){
         renderedContacts=contacts;results.replaceChildren(legend);results.hidden=!contacts.length;
@@ -810,6 +939,10 @@ async function bindTelegram(c){
     query.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();find.click();}});
     dialog.addEventListener('close',()=>picker.dispose(),{once:true});
     append(form,text('Твой аккаунт: '+status.account.displayName+(status.account.username?' · @'+status.account.username:'')),field('Получатель',query),find,selection,results);
+    const phones=[...new Set([c.profile?.phone,c.profile?.secondPhone].filter(Boolean))];
+    if(phones.length)form.append(row(...phones.map((phone,index)=>button(phones.length===1?'Искать по номеру':'Искать по номеру '+(index+1),()=>{
+      query.value=phone;picker.setQuery(phone);return picker.find();
+    },'subtle'))));
     if(c.telegram)form.append(text('Текущий получатель: '+(c.telegram.displayName||'ID '+c.telegram.peerId)));
     return async()=>{
       const selected=picker.selected();
@@ -955,7 +1088,7 @@ function renderSettings(){
     }),text('Агент и голос работают через твой Mac. Способ обработки указан в проверке ниже. При выключенном AI записи, цели и задачи сохраняются локально.'),
     agentConnectionCheck(),connectionCodePanel(),telegramConnectionCheck());
   if(ui.pendingVoice)services.append(text('Есть сохранённая голосовая запись для '+(state().clients[ui.pendingVoice.clientId]?.name||'клиента')),
-    row(button('Открыть запись',()=>openClient(ui.pendingVoice.clientId)),button('Удалить аудиочерновик',async()=>{
+    row(button('Открыть запись',()=>ui.pendingVoice.clientId===assistantKey?navigate('#assistant'):openClient(ui.pendingVoice.clientId)),button('Удалить аудиочерновик',async()=>{
       if(window.TrailNative?.native)await window.TrailNative.clearVoice();ui.pendingVoice=null;render();
     })));
   return append(page,el('h1','Настройки'),update,
@@ -972,9 +1105,11 @@ function render(){
   if(!store)return;
   applyAppearance();const hash=location.hash||'#todo';
   if(ui.focusRoute!==hash)ui.focusRoute=null;
+  const openCard=hash.startsWith('#client/')?hash.split('/')[1]:null;
+  if(ui.openCard!==openCard){ui.recentlyCompleted.clear();ui.openCard=openCard;}
   const activeTab=hash.startsWith('#client/')?(ui.returnTo?.startsWith('#clients')?'#clients':ui.returnTo):hash.startsWith('#clients/')?'#clients':hash;
   root.replaceChildren();
-  document.querySelectorAll('.app-nav a').forEach(a=>a.setAttribute('aria-current',a.hash===activeTab?'page':'false'));
+  document.querySelectorAll('.app-nav a, .gear-link').forEach(a=>a.setAttribute('aria-current',a.hash===activeTab?'page':'false'));
   if(hash.startsWith('#client/')){
     const [,id,type,target]=hash.split('/');
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
@@ -984,8 +1119,9 @@ function render(){
     const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();
   }else if(hash==='#account')root.append(accountingUI.page());
   else if(hash==='#races')root.append(detailsUI.races());
+  else if(hash==='#assistant')root.append(renderAssistant());
   else if(hash==='#settings'){root.append(renderSettings());renderUpdate();renderCloudPanel();}
   else root.append(renderTodo());
 }
-async function start(){try{store=await createStore(window.TrailNative?.native?window.TrailNative.adapter:browserAdapter());applyAppearance();ui.drafts=C.clone(state().settings.drafts||{});if(window.TrailNative?.native){try{ui.pendingVoice=await window.TrailNative.loadVoice();}catch{message('Голосовой черновик не удалось прочитать. База клиентов доступна.',true);}}updater=createUpdater({version:VERSION,bridge:window.TrailNative,flush:async()=>{await saveDrafts();await store.flush();},onChange:u=>{renderUpdate();const link=document.querySelector('.app-nav a[href="#settings"]');if(link)link.textContent=u.status==='available'?'Настройки · обновление':'Настройки';}});if(!location.hash)history.replaceState(null,'','#todo');window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});await refreshMicrophonePermission();render();document.getElementById('save-status').textContent='На устройстве';await window.TrailNative?.ready();startCloud();if(window.TrailNative?.native)setTimeout(()=>updater.check(),1500);}catch(e){root.textContent='';append(root,el('h1','Не удалось открыть базу'),text(e.message,'danger-text'),text('Не удаляй приложение: данные могут оставаться на устройстве.'),button('Повторить',()=>location.reload()));}}
+async function start(){try{store=await createStore(window.TrailNative?.native?window.TrailNative.adapter:browserAdapter());applyAppearance();ui.drafts=C.clone(state().settings.drafts||{});if(window.TrailNative?.native){try{ui.pendingVoice=await window.TrailNative.loadVoice();}catch{message('Голосовой черновик не удалось прочитать. База клиентов доступна.',true);}}updater=createUpdater({version:VERSION,bridge:window.TrailNative,flush:async()=>{await saveDrafts();await store.flush();},onChange:u=>{renderUpdate();const link=document.querySelector('.gear-link');if(link){link.classList.toggle('has-update',u.status==='available');link.setAttribute('aria-label',u.status==='available'?'Настройки · доступно обновление':'Настройки');}}});if(!location.hash)history.replaceState(null,'','#todo');window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});await refreshMicrophonePermission();render();document.getElementById('save-status').textContent='На устройстве';await window.TrailNative?.ready();startCloud();if(window.TrailNative?.native)setTimeout(()=>updater.check(),1500);}catch(e){root.textContent='';append(root,el('h1','Не удалось открыть базу'),text(e.message,'danger-text'),text('Не удаляй приложение: данные могут оставаться на устройстве.'),button('Повторить',()=>location.reload()));}}
 start();

@@ -1,3 +1,4 @@
+import { PACKAGES } from './accounting.js';
 import { validDate } from './model-utils.js';
 
 export const LEDGER_FORMAT = 'the-trail-ledger-import';
@@ -30,6 +31,12 @@ function validateLedger(ledger, owners) {
         || !string(row.name, 180) || !string(row.detail, 420) || !amounts(row.values) || !sourceLink(row.link)
         || (row.date !== '' && !validDate(row.date)) || !Array.isArray(row.owners) || row.owners.length > 10
         || row.owners.some(id => !key(id) || !owners.has(id))) throw Error('Некорректная строка истории учёта');
+    if (row.package && !Object.hasOwn(PACKAGES,row.package)) throw Error('Некорректный пакет оплаты');
+    for (const [currency, parts] of Object.entries(row.packageParts||{})) {
+      if (!currencies.includes(currency) || !parts || typeof parts!=='object' || Array.isArray(parts)
+        || Object.entries(parts).some(([pkg,value])=>!Object.hasOwn(PACKAGES,pkg)||!Number.isSafeInteger(value)||value<=0)
+        || Object.values(parts).reduce((sum,value)=>sum+value,0)!==row.values[currency]) throw Error('Некорректное распределение оплаты');
+    }
     ids.add(row.id);
   }
   return ledger;

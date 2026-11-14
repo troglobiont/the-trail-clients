@@ -205,7 +205,7 @@ button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opa
 .account-label{min-width:0;overflow-wrap:anywhere}
 .account-label small{display:block;color:var(--muted);font-weight:400}
 .account-value{text-align:right;font-weight:650;font-variant-numeric:tabular-nums;max-width:15ch;overflow-wrap:anywhere}
-.account-total{font-size:25px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.account-total{font-size:25px;font-variant-numeric:tabular-nums}
 .account-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .account-fields label{min-width:0}
 .account-allocation{border-top:1px solid var(--line);padding-top:10px}
@@ -259,3 +259,14 @@ input.account-month{width:auto;max-width:100%}
   .app-nav{grid-template-columns:repeat(5,minmax(0,1fr))}
   .app-nav a{padding-inline:1px;font-size:12px}
 }
+
+.header-controls{display:flex;align-items:center;gap:8px}
+.gear-link{position:relative;display:grid;place-items:center;flex:none;min-width:44px;min-height:44px;border-radius:12px;color:var(--ink);text-decoration:none;font-size:25px}
+.gear-link[aria-current=page]{background:var(--soft)}
+.gear-link.has-update::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent);position:absolute;top:6px;right:6px}
+.app-nav .nav-assistant{align-self:center;justify-self:center;display:grid;place-items:center;width:44px;height:44px;min-height:44px;padding:0;border-radius:50%;background:var(--soft);color:var(--ink);font-size:20px}
+.app-nav .nav-assistant[aria-current=page]{background:var(--accent);color:var(--panel)}
+.task-completed{opacity:.78}
+.payment-chip{align-self:flex-start;color:var(--ink);background:var(--soft)}
+.account-currency-line{display:block}
+.money-amount{white-space:nowrap;overflow-wrap:normal;word-break:normal}

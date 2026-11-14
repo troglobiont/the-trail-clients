@@ -13,7 +13,7 @@ export function createRecipientSearch({search,onChange}){
       const request=++generation;
       state={contacts:[],selected:null,busy:true,error:'',searched:true};publish();
       try{
-        if(query.length<2||query.length>120)throw Error('Введи имя из Telegram или @username');
+        if(query.length<2||query.length>120)throw Error('Введи имя, @username или телефон с кодом страны');
         const result=await search(query);
         if(request!==generation)return;
         if(!Array.isArray(result.contacts)||result.contacts.length>10)throw Error('Не удалось проверить список контактов');

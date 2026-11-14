@@ -1,6 +1,8 @@
+import clubCalendar from './data/club-races-2027.json' with { type: 'json' };
 import { addDays, localDate, validDate } from './model-utils.js';
 
-export const GOAL_TYPES = { race:'Старт', activity:'Активность и привычки', weight:'Вес', social:'Общение', camp:'Кемп', other:'Другое' };
+export const GOAL_TYPES = { race:'Старт', regularity:'Активность и привычки', fitness:'Здоровье и физическая форма', community:'Клуб и совместные тренировки', other:'Другое' };
+export const goalType = value => ({ activity:'regularity', weight:'fitness', social:'community', camp:'community' }[value] || value);
 export const RACE_STAGES = { choosing:'Подбираем старт', selected:'Старт выбран', registered:'Зарегистрирован' };
 const optional = (v, limit) => typeof v === 'string' && v.length <= limit;
 const idKey = value => typeof value === 'string' && /^race-[\p{L}\p{N}-]{1,130}$/u.test(value);
@@ -70,38 +72,67 @@ export function setTraining(client, values) {
   client.training = data;
 }
 
-// A race definition is a durable event, so it uses the existing sync and backup format.
-export function raceCatalog(state) {
-  const races = new Map();
-  for (const event of state.events) if (event.type === 'race-defined' && event.race) races.set(event.race.id,event.race);
+const raceSlug = value => String(value || '').normalize('NFD').toLowerCase()
+  .replace(/\p{M}+/gu,'').replace(/[^\p{L}\p{N}]+/gu,'-').replace(/^-|-$/g,'');
+const clubRaces = clubCalendar.map(([date,endDate,name,place,discipline,distances,url,note]) => ({
+  id:'race-club-'+date.slice(0,4)+'-'+raceSlug(name), name, place, date, endDate:endDate||null,
+  discipline, distances:distances ? distances.replace(/ км$/,'').split('; ').map(d=>d+' км') : [],
+  url, note, recommended:true
+}));
+const raceDatesMatch = (a,b) => a.date.length===7 || b.date.length===7
+  ? a.date.slice(0,7)===b.date.slice(0,7)
+  : a.date<=(b.endDate||b.date) && b.date<=(a.endDate||a.date);
+export function sameRace(a,b) {
+  return raceSlug(a.name)===raceSlug(b.name) && raceDatesMatch(a,b)
+    && (!a.place || !b.place || raceSlug(a.place)===raceSlug(b.place));
+}
+
+export function raceCatalog(state,{ includeRecommended=false }={}) {
+  const races = new Map(includeRecommended ? clubRaces.map(race=>[race.id,race]) : []);
+  for (const event of state.events) {
+    if (event.type !== 'race-defined' || !event.race) continue;
+    const race = event.race;
+    const club = includeRecommended && clubRaces.find(r=>r.id===race.id||sameRace(r,race));
+    if (club) {
+      const entry = races.get(club.id);
+      races.set(club.id,{...entry, aliases:[...new Set([...(entry.aliases||[]),race.id])], distances:race.distances||entry.distances});
+    } else races.set(race.id,race);
+  }
   return [...races.values()].sort((a,b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name,'ru'));
+}
+
+export function raceById(state,id) {
+  return raceCatalog(state,{includeRecommended:true}).find(r=>r.id===id||r.aliases?.includes(id));
 }
 
 export function raceDefinition(values) {
   const name = String(values.name || '').trim().replace(/\s+/g,' ');
+  const place = String(values.place || '').trim().replace(/\s+/g,' ');
   const date = values.date;
-  const slug = name.normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,'-').replace(/^-|-$/g,'');
-  if (!slug || name.length > 120 || !validDate(date)) throw Error('Укажи название и дату старта');
-  return { id:'race-' + date + '-' + slug.slice(0,115), name, date };
+  const slug = raceSlug(name);
+  if (!slug || name.length > 120 || place.length > 160 || !validDate(date)) throw Error('Укажи название и дату старта');
+  return { id:'race-' + date + '-' + [slug,raceSlug(place)].filter(Boolean).join('-').slice(0,115), name, date, ...(place ? {place} : {}) };
 }
 
 export function raceGoal(state, values) {
-  const type = values.type || '';
+  const type = goalType(values.type) || '';
   if (type && !Object.hasOwn(GOAL_TYPES,type)) throw Error('Проверь тип цели');
   if (type !== 'race') return { type:type || null, raceStage:null, raceId:null, distance:null };
   const raceStage = values.raceStage || 'choosing', raceId = values.raceId || null;
   const distance = String(values.distance || '').trim();
   if (!Object.hasOwn(RACE_STAGES,raceStage) || distance.length > 45) throw Error('Проверь параметры старта');
-  if (raceId && (!idKey(raceId) || !raceCatalog(state).some(r => r.id === raceId))) throw Error('Выбери старт из списка');
+  if (raceId && (!idKey(raceId) || !raceById(state,raceId))) throw Error('Выбери старт из списка');
   if (!raceId && raceStage !== 'choosing') throw Error('Выбери конкретный старт');
-  return { type, raceStage, raceId, distance:distance || null };
+  return { type, raceStage, raceId:raceId ? raceById(state,raceId).id : null, distance:distance || null };
 }
 
 export function raceParticipants(state, raceId, distance = '') {
+  const race = raceById(state,raceId);
+  const keys = new Set([raceId,race?.id,...(race?.aliases||[])].filter(Boolean));
   const byClient = new Map();
   for (const goal of Object.values(state.goals)) {
     const client = state.clients[goal.clientId];
-    if (!client || client.mergedInto || goal.deletedAt || goal.raceId !== raceId
+    if (!client || client.mergedInto || goal.deletedAt || !keys.has(goal.raceId)
         || !['selected','registered'].includes(goal.raceStage)
         || !['Желание клиента','Согласовано'].includes(goal.status)
         || distance && goal.distance !== distance) continue;

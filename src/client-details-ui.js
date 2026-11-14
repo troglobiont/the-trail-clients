@@ -1,5 +1,5 @@
 import * as C from './core.js';
-import { GOAL_TYPES, RACE_STAGES, raceCatalog, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
+import { GOAL_TYPES, RACE_STAGES, goalType, raceById, raceCatalog, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
 
 export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message}) {
   const trainingFields = [
@@ -103,27 +103,27 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     modal('Редактировать цель',form=>{
       const title=input('text',goal.title),status=select(C.GOAL_STATUSES,goal.status);
       title.maxLength=500;
-      const type=select([['','Без типа'],...Object.entries(GOAL_TYPES)],goal.type||'');
+      const type=select([['','Без типа'],...Object.entries(GOAL_TYPES)],goalType(goal.type)||'');
       const stage=select(Object.entries(RACE_STAGES),goal.raceStage||'choosing');
-      const race=select([['','Не выбран'],...raceCatalog(state()).map(r=>[r.id,r.name+' · '+r.date])],goal.raceId||'');
+      const race=select([['','Не выбран'],...raceCatalog(state(),{includeRecommended:true}).map(r=>[r.id,r.name+' · '+r.date])],raceById(state(),goal.raceId)?.id||'');
       const distance=input('text',goal.distance||'','Например, 10 км');distance.maxLength=45;
-      const name=input('text','','Название старта'),date=input('date');name.maxLength=120;
-      const newRace=section('Добавить новый старт',goal.id+'-new-race',[field('Название',name),field('Дата старта',date)]);
+      const name=input('text','','Название старта'),date=input('date'),place=input('text');name.maxLength=120;place.maxLength=160;
+      const newRace=section('Добавить новый старт',goal.id+'-new-race',[field('Название',name),field('Дата старта',date),field('Место',place)]);
       const raceFields=append(el('div',null,'stack'),field('Этап',stage),field('Старт',race),field('Дистанция',distance),newRace);
       function refresh(){raceFields.hidden=type.value!=='race';}
       type.addEventListener('change',refresh);refresh();
       append(form,field('Цель',title),field('Статус',status),field('Тип',type),raceFields);
       return ()=>commit(s=>{
-        const raceId=type.value==='race'&&(name.value.trim()||date.value)?C.defineRace(s,{name:name.value,date:date.value}).id:race.value;
+        const raceId=type.value==='race'&&(name.value.trim()||date.value)?C.defineRace(s,{name:name.value,date:date.value,place:place.value}).id:race.value;
         C.editGoal(s,goal.id,title.value,status.value,{type:type.value,raceStage:stage.value,raceId,distance:distance.value});
       });
     });
   }
   function goalRow(g) {
-    const race=g.raceId&&raceCatalog(state()).find(r=>r.id===g.raceId);
-    const wrap=append(el('div',null,'goal'),el('div',g.title),row(...[GOAL_TYPES[g.type],g.status,RACE_STAGES[g.raceStage]].filter(Boolean).map(label=>el('span',label,'chip'))));
+    const race=g.raceId&&raceById(state(),g.raceId);
+    const wrap=append(el('div',null,'goal'),el('div',g.title),row(...[GOAL_TYPES[goalType(g.type)],g.status,RACE_STAGES[g.raceStage]].filter(Boolean).map(label=>el('span',label,'chip'))));
     wrap.id='goal-'+g.id;wrap.tabIndex=-1;
-    if(race||g.distance)wrap.append(text([race?.name,race?.date,g.distance].filter(Boolean).join(' · ')));
+    if(race||g.distance||g.sourceEventDate)wrap.append(text([race?.name,g.sourceEventDate||race?.date,g.distance,g.source==='TrainingPeaks'?'TrainingPeaks':null].filter(Boolean).join(' · ')));
     const controls=el('div',null,'goal-controls');
     if(g.deletedAt)controls.append(button('Восстановить',()=>commit(s=>C.deleteGoal(s,g.id,false))));
     else controls.append(button('Изменить',()=>editGoal(g),'subtle'),button('Удалить',async()=>{
@@ -135,12 +135,12 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     const all=Object.values(state().goals).filter(g=>g.clientId===c.id);
     const current=all.filter(g=>!g.deletedAt),removed=all.filter(g=>g.deletedAt);
     const results=el('div',null,'stack'),filter=el('div',null,'row catalog-quick');
-    const keys=[['','Все'],...Object.entries(GOAL_TYPES).filter(([key])=>key==='race'||current.some(g=>g.type===key))];
+    const keys=[['','Все'],...Object.entries(GOAL_TYPES).filter(([key])=>key==='race'||current.some(g=>goalType(g.type)===key))];
     let choice=ui.goalFilters?.[c.id]||'';
     if(!keys.some(([key])=>key===choice))choice='';
     function update(){
       for(const control of filter.children)control.setAttribute('aria-pressed',String(control.dataset.filter===choice));
-      const selected=current.filter(g=>!choice||g.type===choice);
+      const selected=current.filter(g=>!choice||goalType(g.type)===choice);
       results.replaceChildren(...(selected.length?selected.map(goalRow):[text('Целей пока нет')]));
     }
     for(const [key,label] of keys){
@@ -154,22 +154,31 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     ]);
   }
   function races() {
-    const page=el('div',null,'stack-lg'),catalog=raceCatalog(state());
-    const distancesFor=r=>[...new Set([...(r.distances||[]),...Object.values(state().goals).filter(g=>!g.deletedAt&&g.raceId===r.id&&g.distance).map(g=>g.distance)])];
+    const page=el('div',null,'stack-lg'),catalog=raceCatalog(state(),{includeRecommended:true});
+    const distancesFor=r=>[...new Set([...(r.distances||[]),...Object.values(state().goals).filter(g=>!g.deletedAt&&(g.raceId===r.id||r.aliases?.includes(g.raceId))&&g.distance).map(g=>g.distance)])];
     const allDistances=[...new Set(catalog.flatMap(distancesFor))].sort();
     const years=[...new Set(catalog.map(r=>r.date.slice(0,4)))].sort();
     const year=select([['','Все сезоны'],...years],ui.raceYear||''),distance=select([['','Все дистанции'],...allDistances],ui.raceDistance||'');
     const query=input('search',ui.raceQuery||'','Поиск старта');
+    const clubOnly=button('Клуб рекомендует',()=>{ui.raceClubOnly=!ui.raceClubOnly;refresh();});
+    const dateLabel=r=>r.date.length===7
+      ? new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'}).format(new Date(r.date+'-01T12:00:00Z'))+' · дата уточняется'
+      : [formatDate(r.date),r.endDate&&r.endDate!==r.date&&formatDate(r.endDate)].filter(Boolean).join(' – ')+' '+r.date.slice(0,4);
     const list=el('div',null,'stack');
     const refresh=()=>{
       ui.raceYear=year.value;ui.raceDistance=distance.value;ui.raceQuery=query.value;
-      const found=catalog.filter(r=>(!year.value||r.date.startsWith(year.value))&&C.normalizeSearch(r.name).includes(C.normalizeSearch(query.value))
+      clubOnly.setAttribute('aria-pressed',String(!!ui.raceClubOnly));
+      const found=catalog.filter(r=>(!ui.raceClubOnly||r.recommended)&&(!year.value||r.date.startsWith(year.value))&&C.normalizeSearch([r.name,r.place].filter(Boolean).join(' ')).includes(C.normalizeSearch(query.value))
         &&(!distance.value||distancesFor(r).includes(distance.value)));
       list.replaceChildren(...(found.length?found.map(r=>{
         const entries=raceParticipants(state(),r.id,distance.value);
         const registered=entries.filter(g=>g.raceStage==='registered').length;
         const distances=distancesFor(r);
-        return section(r.name+' · '+formatDate(r.date)+' '+r.date.slice(0,4)+' · '+entries.length+' чел.',r.id,[
+        const link=r.url&&el('a','Сайт организатора','subtle');
+        if(link){link.href=r.url;link.target='_blank';link.rel='noopener noreferrer';}
+        return section(r.name+' · '+dateLabel(r)+' · '+entries.length+' чел.',r.id,[
+          r.recommended&&el('span','Клуб рекомендует','chip emphasis'), r.place&&text(r.place),
+          r.note&&text(r.note),link,
           text('Выбрали · '+(entries.length-registered)+' / Зарегистрированы · '+registered),
           distances.length&&text('Дистанции: '+distances.join(', ')),
           button('Настроить дистанции',()=>modal('Дистанции',form=>{
@@ -184,12 +193,12 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     };
     for(const control of [query,year,distance])control.addEventListener(control===query?'input':'change',refresh);
     const create=button('Добавить старт',()=>modal('Новый старт',form=>{
-      const name=input('text'),date=input('date');name.maxLength=120;
-      append(form,field('Название',name),field('Дата',date));
-      return ()=>commit(s=>C.defineRace(s,{name:name.value,date:date.value}));
+      const name=input('text'),date=input('date'),place=input('text');name.maxLength=120;place.maxLength=160;
+      append(form,field('Название',name),field('Дата',date),field('Место',place));
+      return ()=>commit(s=>C.defineRace(s,{name:name.value,date:date.value,place:place.value}));
     }),'subtle');
     query.setAttribute('aria-label','Поиск старта');
-    append(page,append(el('div',null,'page-title'),el('h1','Старты'),create),query,row(field('Сезон',year),field('Дистанция',distance)),list);
+    append(page,append(el('div',null,'page-title'),el('h1','Старты'),create),query,row(clubOnly),row(field('Сезон',year),field('Дистанция',distance)),list);
     refresh();return page;
   }
   return {profile,training,telegramOptions,goals,races};

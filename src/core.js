@@ -2,7 +2,7 @@ import { addDays, id, localDate, validDate } from './model-utils.js';
 import { mergeAccounting, validateAccounting } from './accounting.js';
 import { nameKey, validateStoredLedger } from './ledger-import.js';
 import { validateCloudState } from './cloud-state.js';
-import { raceCatalog, raceDefinition, raceGoal, setProfile, setTraining } from './client-details.js';
+import { raceById, raceCatalog, raceDefinition, raceGoal, sameRace, setProfile, setTraining } from './client-details.js';
 export { TIMEZONE, id, localDate, validDate, addDays } from './model-utils.js';
 
 export const SCHEMA=1;
@@ -124,12 +124,12 @@ export function setTelegramBinding(s,clientId,binding){
 export function addGoal(s,clientId,title,status='Желание клиента',sourceRecordId=null){title=String(title).trim();if(!s.clients[clientId]||!title||title.length>500||!GOAL_STATUSES.includes(status))throw Error('Проверь цель');const existing=Object.values(s.goals).find(g=>g.clientId===clientId&&!g.deletedAt&&normalizeSearch(g.title)===normalizeSearch(title));if(existing){if(existing.status!==status){existing.status=status;existing.updatedAt=stamp();event(s,'goal-edited',clientId,existing.id,{sourceRecordId});}return existing;}const g={id:id('goal'),clientId,title,status,sourceRecordId,createdAt:stamp(),updatedAt:stamp(),deletedAt:null};s.goals[g.id]=g;event(s,'goal-created',clientId,g.id,{sourceRecordId});return g;}
 export function defineRace(s,values){
   const race=raceDefinition(values);
-  const existing=raceCatalog(s).find(r=>r.id===race.id);
+  const existing=raceCatalog(s,{includeRecommended:true}).find(r=>r.id===race.id||sameRace(r,race));
   if(existing)return existing;
   event(s,'race-defined',null,race.id,{race});return race;
 }
 export function setRaceDistances(s,raceId,distances) {
-  const race=raceCatalog(s).find(r=>r.id===raceId);
+  const race=raceById(s,raceId);
   if(!race)throw Error('Старт не найден');
   const clean=[...new Set(distances.map(value=>String(value).trim()).filter(Boolean))];
   if(clean.length>20||clean.some(value=>value.length>45))throw Error('Проверь список дистанций');

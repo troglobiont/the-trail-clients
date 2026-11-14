@@ -35,7 +35,7 @@ export function amountMinor(value) {
 export function money(value, currency) {
   const units = (value / 100).toLocaleString('ru-RU', { maximumFractionDigits: 2 });
   const symbols = { RUB: '₽', EUR: '€', USD: '$', RSD: 'RSD' };
-  return `${units} ${symbols[currency]}`;
+  return `${units}\u00a0${symbols[currency]}`;
 }
 
 export const accounting = state => state.accounting ?? EMPTY;
@@ -235,6 +235,16 @@ export function serviceBalance(state, serviceId, today = localDate()) {
   return { received, used, balance: credit + received - used };
 }
 
+export function personalBalances(state, through = localDate()) {
+  const result = { advance:{}, debt:{} };
+  for (const service of Object.values(accounting(state).services)) {
+    if (service.kind !== 'personal') continue;
+    const { balance } = serviceBalance(state,service.id,through);
+    if (balance) addTotal(balance > 0 ? result.advance : result.debt,service.currency,Math.abs(balance));
+  }
+  return result;
+}
+
 function addTotal(totals, currency, amount) {
   totals[currency] = (totals[currency] ?? 0) + amount;
 }
@@ -328,7 +338,10 @@ export function combinedSummary(state, month) {
       : row.block==='belgrade' ? 'unclassified-belgrade' : 'unclassified';
     addTotal(result.receipts,currency,amount);
     addTotal(result.blocks[row.block]??={},currency,amount);
-    addTotal(result.services[packageId]??={},currency,amount);
+    const splits = row.packageParts?.[currency];
+    if (splits && Object.values(splits).reduce((sum,value)=>sum+value,0)===amount) {
+      for (const [service, part] of Object.entries(splits)) addTotal(result.services[service]??={},currency,part);
+    } else addTotal(result.services[packageId]??={},currency,amount);
     if (row.block !== 'online') addTotal(result.localBalance,currency,amount);
     result.imported.receipts++;
   }

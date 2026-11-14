@@ -264,10 +264,13 @@ def telegram_status(_payload):
 def telegram_search(payload):
     query = payload.get("query")
     if not isinstance(query, str) or not 2 <= len(query.strip()) <= 120:
-        raise ValueError("Введите имя или @username")
+        raise ValueError("Введите имя, @username или телефон с кодом страны")
     query = query.strip()
     if query.startswith("@") and not re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{4,31}", query):
         raise ValueError("Проверьте @username")
+    phone = re.sub(r"[ ()-]", "", query) if query.startswith("+") else None
+    if phone and not re.fullmatch(r"\+[1-9][0-9]{6,14}", phone):
+        raise ValueError("Проверьте номер с кодом страны")
     # Explicit, coach-confirmed name aliases only; never infer a nickname match.
     aliases = json.loads(os.environ.get("TELEGRAM_CONTACT_ALIASES", "{}"))
     if not isinstance(aliases, dict):
@@ -277,7 +280,17 @@ def telegram_search(payload):
     if alias_id and not re.fullmatch(r"[1-9][0-9]{0,18}", alias_id):
         raise ValueError("Некорректный получатель в справочнике")
     async def search(client, functions, types):
-        if query.startswith("@"):
+        if phone:
+            from telethon import errors
+
+            try:
+                resolved = await client(functions.contacts.ResolvePhoneRequest(phone))
+            except errors.RPCError as error:
+                if error.message in {"PHONE_NOT_OCCUPIED", "PHONE_NUMBER_INVALID", "PRIVACY_RESTRICTED"}:
+                    return {"contacts": []}
+                raise
+            users = [user for user in resolved.users if user.id == getattr(resolved.peer, "user_id", None)]
+        elif query.startswith("@"):
             try:
                 entity = await client.get_entity(query)
             except ValueError:
@@ -294,6 +307,16 @@ def telegram_search(payload):
                 entity = await client.get_entity(int(alias_id))
                 if isinstance(entity, types.User):
                     users.insert(0, entity)
+            if not users:
+                async for dialog in client.iter_dialogs(limit=200):
+                    person = dialog.entity
+                    if not isinstance(person, types.User):
+                        continue
+                    label = " ".join(filter(None, [getattr(person, key, None) for key in ("first_name", "last_name", "username")])).casefold()
+                    if all(word in label for word in words) and person.id not in {user.id for user in users}:
+                        users.append(person)
+                    if len(users) >= 10:
+                        break
         contacts = []
         for user in users:
             contact = telegram_user(user)

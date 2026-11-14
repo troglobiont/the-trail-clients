@@ -71,6 +71,22 @@ class ServiceTests(unittest.TestCase):
             result = telegram_search({'query': 'тренер тестовый'})
             self.assertEqual(result, {'contacts': [{'peerId':'101','displayName':'Тренер Тестовый','username':'test_coach'}]})
 
+    def test_contact_search_falls_back_to_existing_private_dialogs(self):
+        class User(SimpleNamespace):
+            pass
+        class Client:
+            async def __call__(self, _request):
+                return SimpleNamespace(users=[])
+            async def iter_dialogs(self, limit):
+                yield SimpleNamespace(entity=User(id=101, first_name='Личный', last_name='Контакт', username=None))
+                yield SimpleNamespace(entity=SimpleNamespace(id=103, title='Личный контакт'))
+        functions = SimpleNamespace(contacts=SimpleNamespace(GetContactsRequest=lambda **kw: kw))
+        def operation(fn):
+            return asyncio.run(fn(Client(), functions, SimpleNamespace(User=User)))
+        with patch('server.service.telegram_operation', operation):
+            self.assertEqual(telegram_search({'query':'личный контакт'}),
+                {'contacts':[{'peerId':'101','displayName':'Личный Контакт','username':None}]})
+
     def test_username_resolution_excludes_groups_and_invalid_queries_never_connect(self):
         class User(SimpleNamespace):
             pass
