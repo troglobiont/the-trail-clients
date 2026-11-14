@@ -106,7 +106,7 @@ export function raceCategory(race) {
   const name = raceSlug(race.name);
   const inSerbia = /\b(?:serbia|beograd|belgrade|novi-sad)\b/.test(raceSlug(location))
     || /сербия|белград|нови-сад/i.test(location) || /belgrade|beograd|белград/.test(name);
-  const abroad = /хорватия|черногория|босния|испания|франция/i.test(location)
+  const abroad = /хорватия|черногория|босния|испания|франция|таиланд|тайланд|croatia|montenegro|bosnia|spain|france|thailand/i.test(location)
     || /(?:utmb-nice|antalya|kackar|barcelona)/.test(name);
   const region = race.region || (inSerbia ? 'serbia' : abroad ? 'abroad' : '');
   const discipline = race.discipline || (/trail|utmb|тре[ий]л/.test(name) ? 'Трейл' : /marathon|maraton|марафон/.test(name) ? 'Шоссе' : '');

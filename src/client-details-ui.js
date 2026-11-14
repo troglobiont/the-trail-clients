@@ -177,15 +177,14 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     const query=input('search',ui.raceQuery||'','Поиск старта');
     const quick=el('div',null,'row catalog-quick race-quick');
     quick.setAttribute('role','group');quick.setAttribute('aria-label','Фильтры стартов');
-    const countries=el('div',null,'row catalog-quick');
-    countries.setAttribute('role','group');countries.setAttribute('aria-label','География');
+    const secondary=el('div',null,'row catalog-quick');
     const controls=[];
     for(const [container,key,value,label] of [
       [quick,'raceRegion','serbia','Сербия'],
       [quick,'raceDiscipline','Трейл','Трейл'],
       [quick,'raceDiscipline','Шоссе','Шоссе'],
-      [countries,'raceRegion','abroad','За рубежом'],
-      [countries,'raceTeam',true,'Мы бежим']
+      [quick,'raceRegion','abroad','Не Сербия'],
+      [secondary,'raceTeam',true,'Мы бежим']
     ]){
       const control=button(label,()=>{ui[key]=ui[key]===value?null:value;refresh();});
       controls.push([control,key,value]);container.append(control);
@@ -263,7 +262,7 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     }),'subtle');
     query.setAttribute('aria-label','Поиск старта');
     append(page,append(el('div',null,'page-title'),el('h1','Старты'),create),query,
-      append(el('div',null,'race-filter-box'),quick,append(el('div',null,'race-filter-head'),countries,yearMenu)),list);
+      append(el('div',null,'race-filter-box'),quick,append(el('div',null,'race-filter-head'),secondary,yearMenu)),list);
     refresh();return page;
   }
   return {profile,training,telegramOptions,goals,races};

@@ -293,6 +293,7 @@ input.account-month{width:auto;max-width:100%}
 .race-filter-head{display:flex;align-items:flex-start;gap:6px}
 .race-filter-box .row{flex-wrap:nowrap}
 .race-filter-box .catalog-quick button{white-space:nowrap;padding-inline:clamp(7px,2.5vw,12px)}
+.race-filter-box .race-quick button{padding-inline:clamp(4px,2vw,12px)}
 .race-year{position:relative}
 .race-year>summary{display:flex;align-items:center;min-height:44px;padding:5px 24px 5px 10px;font-size:13px;white-space:nowrap}
 .race-year[open]>summary{margin:0}
