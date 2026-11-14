@@ -134,8 +134,11 @@ function prepareOperation(state, values, operationId) {
   const operation = { ...values, id: operationId, voided: prior?.voided ?? false };
   checkOperation(book, operation);
   if (operation.date > localDate()) throw Error('Укажи дату фактической операции');
-  if (operation.kind === 'session' && (prior?.serviceId !== operation.serviceId || prior?.date !== operation.date)
-      && !activeService(book.services[operation.serviceId], operation.date)) throw Error('На эту дату услуга не действовала');
+  if (operation.kind === 'session' && (prior?.serviceId !== operation.serviceId || prior?.date !== operation.date)) {
+    const service = book.services[operation.serviceId];
+    if (service.oneOff ? Object.values(book.operations).some(o=>o.kind==='session' && o.serviceId===service.id && o.id!==operationId)
+      : !activeService(service,operation.date)) throw Error(service.oneOff ? 'Разовое занятие уже записано' : 'На эту дату услуга не действовала');
+  }
   return operation;
 }
 
@@ -145,14 +148,41 @@ export function saveOperation(state, values, operationId = id('operation')) {
   return operation;
 }
 
-export function savePaidSession(state, values, received) {
+export function savePaidSession(state, values, received, paymentDate = values.date) {
   const session = prepareOperation(state, { ...values, kind: 'session' }, id('operation'));
   const payment = prepareOperation(state, {
-    kind: 'payment', date: session.date, amount: received, currency: session.currency, note: '', payer: '',
+    kind: 'payment', date: paymentDate, amount: received, currency: session.currency, note: '', payer: '',
     sessionId: session.id, allocations: [{ serviceId: session.serviceId, month: null, part: received, credit: received }]
   }, id('operation'));
   Object.assign(writable(state).operations, { [session.id]: session, [payment.id]: payment });
   return [session, payment];
+}
+
+export function savePersonalVisit(state, { clientId, serviceId, oneOff, place, currency, rate, date, payment, paymentOnly = false }) {
+  const book = accounting(state);
+  const draft = { ...state, accounting:{ ...book, services:{ ...book.services }, operations:{ ...book.operations } } };
+  const client = state.clients[clientId];
+  if (!client || client.role !== 'Клиент' || client.mergedInto) throw Error('Выбери действующую карточку клиента');
+  let service = book.services[serviceId];
+  if (serviceId) {
+    if (service?.clientId !== clientId || service.kind !== 'personal' || service.currency !== currency) {
+      throw Error('Условия услуги изменились. Выбери тариф заново');
+    }
+  } else {
+    if (!oneOff && clientServices(state, clientId).some(s=>s.kind === 'personal' && !s.oneOff
+        && s.place === place && (!s.endsOn || s.endsOn >= date))) {
+      throw Error('На эту дату уже есть тариф для этого места. Выбери его из списка');
+    }
+    service = saveService(draft, { clientId, kind:'personal', package:'personal', block:'personal', startsOn:date,
+      endsOn:oneOff ? date : null, ...(oneOff ? { oneOff:true } : {}), currency, rate, day:null, reminder:false, place });
+  }
+  const values = { serviceId:service.id, date, place, currency, amount:rate, note:'' };
+  if (paymentOnly && (!payment || oneOff)) throw Error('Укажи полученную оплату');
+  const operations = paymentOnly ? [saveOperation(draft,{kind:'payment', date:payment.date, currency, amount:payment.amount, payer:'', note:'',
+    allocations:[{serviceId:service.id, month:null, part:payment.amount, credit:payment.amount}]})]
+    : payment ? savePaidSession(draft,values,payment.amount,payment.date) : [saveOperation(draft,{ ...values, kind:'session' })];
+  state.accounting = draft.accounting;
+  return operations;
 }
 
 export function setVoided(state, operationId, voided) {
@@ -198,7 +228,7 @@ export function matchingTariffClients(state, { packageFilter, tariffCurrency, pa
     return key === packageFilter;
   };
   const tariffs = packageFilter !== 'all' || tariffCurrency !== 'all'
-    ? new Set(Object.values(services).filter(s => activeService(s, today) && matchesPackage(s)
+    ? new Set(Object.values(services).filter(s => !s.oneOff && activeService(s, today) && matchesPackage(s)
       && (tariffCurrency === 'all' || s.currency === tariffCurrency)).map(s => s.clientId)) : null;
   if (paymentCurrency === 'all') return tariffs;
 

@@ -1,6 +1,6 @@
 import * as C from './core.js';
-import { assistantKind, suggestAssistantClients } from './assistant.js';
-import { CURRENCIES, PACKAGES, amountMinor, matchingTariffClients } from './accounting.js';
+import { assistantKind, mentionsCompletedSession, suggestAssistantClients } from './assistant.js';
+import { CURRENCIES, PACKAGES, activeService, amountMinor, clientServices, matchingTariffClients, serviceBalance } from './accounting.js';
 import {createStore,browserAdapter} from './store.js';
 import {createUpdater} from './updates.js';
 import {parseConnection} from './connection.js';
@@ -209,7 +209,6 @@ function renderCatalog(scope) {
   if (scope !== 'active') page.append(button('← К активным клиентам',()=>navigate('#clients'),'back subtle'));
   page.append(append(el('div',null,'page-title'),el('h1',catalogViews[scope]),
     scope === 'active' && Object.keys(state().clients).length && button('Добавить клиента',()=>editClient(),'subtle')));
-  if (scope === 'active') page.append(row(button('Дни рождения',()=>navigate('#clients/birthdays'),'subtle')));
   if (!Object.keys(state().clients).length) {
     page.append(emptyDatabase());
     return page;
@@ -223,8 +222,7 @@ function renderCatalog(scope) {
     ui.catalogLimit = CATALOG_PAGE_SIZE;
     renderCatalogResults();
   });
-  page.append(search);
-  if (scope === 'active') page.append(activeCatalogFilters());
+  page.append(scope === 'active' ? activeCatalogFilters(search) : search);
   if (scope === 'paused') page.append(pauseFilters());
   const list = el('div',null,'client-directory');
   list.id = 'client-tiles';
@@ -269,28 +267,30 @@ function pauseFilters() {
   return filters;
 }
 
-function activeCatalogFilters() {
-  const quick = el('div',null,'row catalog-quick');
+function activeCatalogFilters(search) {
+  const quick = el('div',null,'row catalog-quick catalog-shortcuts');
   quick.setAttribute('role','group');
   quick.setAttribute('aria-label','Быстрые фильтры');
   for (const [value,label] of [['Дистанционно','Онлайн'],['Очно','Очно'],['gym','Зал']]) {
     const control = button(label,()=>{
       ui.filters.quick = ui.filters.quick === value ? 'all' : value;
       ui.catalogLimit = CATALOG_PAGE_SIZE;
-      for (const b of quick.children) b.setAttribute('aria-pressed',String(b.dataset.quick === ui.filters.quick));
+      for (const b of quick.querySelectorAll('[data-quick]')) b.setAttribute('aria-pressed',String(b.dataset.quick === ui.filters.quick));
       renderCatalogResults();
     });
     control.dataset.quick = value;
     control.setAttribute('aria-pressed',String(ui.filters.quick === value));
     quick.append(control);
   }
-  const contactOrder=button('Давно без контакта',()=>{
+  const contactOrder=button('Пинг',()=>{
     ui.contactOrder=!ui.contactOrder;
     ui.catalogLimit=CATALOG_PAGE_SIZE;
     contactOrder.setAttribute('aria-pressed',String(ui.contactOrder));
     renderCatalogResults();
   });
+  contactOrder.setAttribute('aria-label','Пинг: давно без контакта');
   contactOrder.setAttribute('aria-pressed',String(ui.contactOrder));
+  quick.append(contactOrder);
   const extra = el('div',null,'filters');
   const currencyOptions = [['all','Любая'],...CURRENCIES];
   for (const [key,label,values] of [
@@ -313,13 +313,25 @@ function activeCatalogFilters() {
     renderCatalogResults();
   });
   extra.append(monthField);
-  return append(el('div',null,'stack catalog-options'),quick,append(el('div',null,'row catalog-quick'),contactOrder),section('Фильтры','catalog-filters',[
+  const advanced = append(el('div',null,'stack catalog-advanced'),
     extra,button('Сбросить фильтры',()=>{
       ui.filters = {...defaultFilters(),query:ui.filters.query};
+      ui.contactOrder = false;
       ui.catalogLimit = CATALOG_PAGE_SIZE;
       render();
     },'subtle')
-  ]));
+  );
+  advanced.id='catalog-filters';
+  advanced.hidden=!ui.open.has(advanced.id);
+  const toggle=button('Фильтры',()=>{
+    advanced.hidden=!advanced.hidden;
+    if(advanced.hidden)ui.open.delete(advanced.id);
+    else ui.open.add(advanced.id);
+    toggle.setAttribute('aria-expanded',String(!advanced.hidden));
+  });
+  toggle.setAttribute('aria-controls',advanced.id);
+  toggle.setAttribute('aria-expanded',String(!advanced.hidden));
+  return append(el('div',null,'stack catalog-options'),append(el('div',null,'catalog-search'),search,toggle),quick,advanced);
 }
 
 function filterControl(key,label,values) {
@@ -382,7 +394,7 @@ function renderBirthdays(){
     list.append(append(el('div',null,'directory-row'),entry));
   }
   return append(el('div',null,'stack catalog-page'),
-    button('← К клиентам',()=>navigate('#clients'),'back subtle'),
+    button('← К ToDo',()=>navigate('#todo'),'back subtle'),
     el('h1','Дни рождения'),periods,
     birthdays.length?list:text('На ближайшие '+days+' дней нет записанных дней рождения.'));
 }
@@ -401,7 +413,9 @@ function renderTodo(){
     name:client.name,title:'Давно не открывал переписку',due:day,next:'Проверить Telegram',reminder:true,open:()=>openClient(client.id,'telegram')
   }));
   const entries=[...tasks,...payment,...birthday,...telegram].sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
-  append(page,append(el('div',null,'page-title'),el('h1','ToDo'),text(entries.length+' в списке')));
+  const birthdays=button('DR',()=>navigate('#todo/birthdays'),'subtle');
+  birthdays.setAttribute('aria-label','DR — Дни рождения');
+  append(page,append(el('div',null,'page-title'),el('h1','ToDo'),row(text(entries.length+' в списке'),birthdays)));
   if(!Object.keys(state().clients).length){page.append(emptyDatabase());return page;}
   const filters=el('div',null,'row catalog-quick');
   const matches=(value,e)=>value==='all'||(value==='reply'?e.reply:value==='reminders'?e.reminder:!e.reminder&&!e.reply);
@@ -417,8 +431,7 @@ function renderTodo(){
     if(item.warning)b.append(text(item.warning.text,item.warning.level==='danger'?'danger-text small':'warning-text small'));
     list.append(b);
   }
-  append(page,filters,row(button('Дни рождения',()=>navigate('#clients/birthdays'),'subtle')),
-    list.children.length?list:text('Открытых задач в этом разделе нет.'));
+  append(page,filters,list.children.length?list:text('Открытых задач в этом разделе нет.'));
   return page;
 }
 function editTask(t){
@@ -559,7 +572,7 @@ function renderClient(clientId,targetType,targetId){
   const c=state().clients[clientId];
   if(!c||c.mergedInto){navigate('#clients');return el('div');}
   const page=el('div',null,'stack-lg client-page');
-  const backLabel={'#todo':'← К ToDo','#account':'← К учёту','#races':'← К стартам','#clients/birthdays':'← К дням рождения'}[ui.returnTo]||'← К списку клиентов';
+  const backLabel={'#todo':'← К ToDo','#account':'← К учёту','#races':'← К стартам','#todo/birthdays':'← К дням рождения'}[ui.returnTo]||'← К списку клиентов';
   page.append(button(backLabel,()=>navigate(ui.returnTo),'back subtle'));
   const header=el('header',null,'stack client-header');
   append(header,append(el('div',null,'page-title'),el('h1',c.name),button('Изменить',()=>editClient(c.id),'subtle')),chips(c),
@@ -722,25 +735,36 @@ function reviewAssistant(value){
   },{saveLabel:'Проверить'});
 }
 function reviewAssistantFinance(client,type,value){
-  let choices=accountingUI.quickOptions(client.id).filter(option=>option.kind===type);
-  if(/персонал/iu.test(value))choices=choices.filter(option=>option.service.kind==='personal');
-  if(/в зал|зал[еуа]/iu.test(value))choices=choices.filter(option=>option.service.place==='Зал');
-  if(/на улиц/iu.test(value))choices=choices.filter(option=>option.service.place==='Улица');
-  if(!choices.length)throw Error('Для такого действия у клиента нет подходящего действующего тарифа');
-  const {amount,currency}=type==='payment'?assistantAmount(value):{};
+  const place=/в\s+зал(?:е|у)?(?!\p{L})/iu.test(value)?'Зал':/на\s+улиц[еу](?!\p{L})/iu.test(value)?'Улица':null;
+  const personal=type==='session'||!!place||/персонал|индивидуальн/iu.test(value);
+  const {amount,currency}=assistantAmount(value);
   const day=C.localDate();
   const date=/вчера/iu.test(value)?C.addDays(day,-1):day;
-  if(currency) {
-    const matches=choices.filter(option=>option.service.currency===currency);
-    if(!matches.length)throw Error('Названная валюта отличается от тарифа. Открой «Распределить оплату» в учёте.');
-    choices=matches;
+  const services=clientServices(state(),client.id).filter(s=>(!personal||s.kind==='personal')&&(!place||s.place===place));
+  const matchingCurrency=s=>!currency||s.currency===currency;
+  const eligible=services.filter(s=>!s.oneOff&&activeService(s,date));
+  const visit=options=>accountingUI.assistantVisit({clientId:client.id,transcript:value,day:date,place,amount,currency,
+    draftKey:assistantKey,onSaved:()=>{delete ui.drafts[assistantKey];render();},...options});
+  if(type==='session'||(personal&&mentionsCompletedSession(value))) {
+    visit({services:eligible.filter(matchingCurrency),checkPayment:/оплат|получил|деньги/iu.test(value)});
+    return;
   }
+  const payable=services.filter(s=>s.kind==='personal'&&serviceBalance(state(),s.id).balance<0);
+  const choices=accountingUI.quickOptions(client.id,[...new Set([...eligible,...payable])]).filter(option=>option.kind===type);
+  if(!choices.length&&personal) {
+    visit({services:[],checkPayment:true,paymentOnly:true});
+    return;
+  }
+  if(!choices.length)throw Error('Для такого действия у клиента нет подходящего действующего тарифа');
+  const matches=choices.filter(option=>matchingCurrency(option.service));
+  if(!matches.length)throw Error('Названная валюта отличается от тарифа. Открой «Распределить оплату» в учёте.');
   const open=option=>accountingUI.quickEntry(client.id,{...option,amount,date,onSaved:clearAssistantDraft});
-  if(choices.length===1){open(choices[0]);return;}
+  if(matches.length===1){open(matches[0]);return;}
   modal('Выбрать тариф',form=>{
-    for(const choice of choices){
+    for(const choice of matches){
       const service=choice.service;
-      form.append(button([PACKAGES[service.package||service.kind],service.place,service.currency].filter(Boolean).join(' · '),()=>open(choice)));
+      form.append(button([service.oneOff?'Разовое занятие · '+formatDate(service.startsOn):PACKAGES[service.package||service.kind],
+        service.place,service.currency].filter(Boolean).join(' · '),()=>open(choice)));
     }
   },{saveLabel:false});
 }
@@ -1102,14 +1126,16 @@ function render(){
   if(ui.focusRoute!==hash)ui.focusRoute=null;
   const openCard=hash.startsWith('#client/')?hash.split('/')[1]:null;
   if(ui.openCard!==openCard){ui.recentlyCompleted.clear();ui.openCard=openCard;}
-  const activeTab=hash.startsWith('#client/')?(ui.returnTo?.startsWith('#clients')?'#clients':ui.returnTo):hash.startsWith('#clients/')?'#clients':hash;
+  const birthdayRoute=route=>['#todo/birthdays','#clients/birthdays'].includes(route);
+  const sectionTab=route=>birthdayRoute(route)?'#todo':route.startsWith('#clients/')?'#clients':route;
+  const activeTab=sectionTab(hash.startsWith('#client/')?ui.returnTo:hash);
   root.replaceChildren();
   document.querySelectorAll('.app-nav a, .gear-link').forEach(a=>a.setAttribute('aria-current',a.hash===activeTab?'page':'false'));
   if(hash.startsWith('#client/')){
     const [,id,type,target]=hash.split('/');
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
     root.append(renderClient(id,type,target));
-  }else if(hash==='#clients/birthdays')root.append(renderBirthdays());
+  }else if(birthdayRoute(hash))root.append(renderBirthdays());
   else if(hash==='#clients'||hash.startsWith('#clients/')){
     const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();
   }else if(hash==='#account')root.append(accountingUI.page());

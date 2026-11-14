@@ -95,6 +95,13 @@ main{max-width:920px;margin:0 auto;padding:24px 20px calc(110px + env(safe-area-
 .directory-account{min-height:44px;font-size:13px;color:var(--muted);padding-inline:10px}
 .catalog-page .fold summary{min-height:44px;padding-block:10px}
 .catalog-options{gap:6px}
+.catalog-search{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center}
+.catalog-search input{min-width:0}
+.catalog-search button{border-color:var(--line);white-space:nowrap;padding-inline:10px;font-size:13px}
+.catalog-search button[aria-expanded=true]{background:var(--soft)}
+.catalog-shortcuts{flex-wrap:nowrap;gap:4px}
+.catalog-shortcuts button{padding-inline:clamp(5px,2vw,12px);white-space:nowrap}
+.catalog-advanced{padding-block:6px}
 .catalog-sections{display:grid;margin-top:12px;border-top:1px solid var(--line)}
 button.catalog-section-link{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:12px;text-align:left;border:0;border-bottom:1px solid var(--line);border-radius:0;padding:10px 6px;min-height:46px}
 .task-client-name{font-size:14px;font-weight:400;color:var(--muted)}

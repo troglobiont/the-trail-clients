@@ -18,6 +18,34 @@ function payment(state, date, currency, amount, allocations) {
 
 const credit = (service, month, part, credited = part) => ({ serviceId: service.id, month, part, credit: credited });
 
+test('a one-off visit leaves a payable balance without creating a recurring tariff', () => {
+  const state=emptyState(), client=createClient(state,{name:'Тестовый клиент'},'2024-10-01');
+  const [session]=A.savePersonalVisit(state,{clientId:client.id,oneOff:true,place:'Зал',currency:'RSD',rate:400000,date:'2024-10-10'});
+  const [service]=A.clientServices(state,client.id);
+  assert.equal(service.oneOff,true);
+  assert.equal(service.endsOn,session.date);
+  assert.equal(A.serviceBalance(state,service.id).balance,-400000);
+  assert.deepEqual([...A.matchingTariffClients(state,{packageFilter:'personal',tariffCurrency:'all',paymentCurrency:'all'},session.date)],[]);
+  payment(state,'2024-10-11','RSD',400000,[credit(service,null,400000)]);
+  assert.equal(A.serviceBalance(state,service.id).balance,0);
+  assert.doesNotThrow(()=>parseImport(exportState(state)));
+});
+
+test('assistant commits a new tariff and dated operations together', () => {
+  const state=emptyState(), client=createClient(state,{name:'Тестовый клиент'},'2024-10-01');
+  const visit={clientId:client.id,oneOff:false,place:'Зал',currency:'RSD',rate:400000,date:'2024-10-10'};
+  assert.throws(()=>A.savePersonalVisit(state,{...visit,payment:{amount:0,date:'2024-10-12'}}));
+  assert.equal(A.clientServices(state,client.id).length,0);
+  assert.equal(A.operations(state).length,0);
+  const [session, receipt]=A.savePersonalVisit(state,{...visit,payment:{amount:400000,date:'2024-10-12'}});
+  assert.equal(A.clientServices(state,client.id)[0].endsOn,null);
+  assert.equal(session.date,'2024-10-10');
+  assert.equal(receipt.date,'2024-10-12');
+  assert.equal(receipt.sessionId,session.id);
+  assert.throws(()=>A.savePersonalVisit(state,visit),/уже есть тариф/);
+  assert.equal(A.operations(state).length,2);
+});
+
 test('tariff currency is matched on the selected package independently of actual receipt currency', () => {
   const s = emptyState();
   const first = createClient(s,{name:'Первый'},'2024-10-01');

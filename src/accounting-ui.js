@@ -57,9 +57,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   }
 
   const activeServices = () => Object.values(book().services).filter(s =>
-    state().clients[s.clientId].status === 'Активный' && A.activeService(s, today()));
+    !s.oneOff && state().clients[s.clientId].status === 'Активный' && A.activeService(s, today()));
   const activeClientIds = () => new Set(activeServices().map(s => s.clientId));
-  const serviceCaption = s => isMonthly(s) ? serviceTitle(s) : serviceTitle(s) + ' · ' + s.place;
+  const serviceCaption = s => isMonthly(s) ? serviceTitle(s) : (s.oneOff ? 'Разовое занятие' : serviceTitle(s)) + ' · ' + s.place;
   const importedPayment = (s, period) => ledgerRows(state(), { clientId:s.clientId, period })
     .some(entry => entry.block === s.block && ['payment','shared','review'].includes(entry.kind));
 
@@ -223,6 +223,91 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return control;
   }
 
+  function assistantVisit({ clientId, transcript, day, place, amount, currency, services, checkPayment, paymentOnly, draftKey, onSaved }) {
+    modal(paymentOnly?'Записать оплату за персональную тренировку':'Записать персональное занятие', (form, setSaveEnabled) => {
+      const missing = !services.length;
+      const selected = select(services.map(s=>[s.id, serviceCaption(s)+' · '+A.money(s.rate,s.currency)]),services[0]?.id);
+      const date = dateInput(day);
+      const location = select(A.PLACES,place||services[0]?.place||'Зал');
+      const rate = moneyInput();
+      const moneyUnit = select(currencyOptions,currency||'RSD');
+      const rateLabel = el('span','Стоимость занятия');
+      const paid = select([['','Выбери статус'],['pending','К оплате'],['received','Оплачено']],checkPayment?'':'pending');
+      const dateLabel = el('span','Дата занятия');
+      const paidField = field('Статус оплаты',paid);
+      const receivedOn = dateInput();
+      const received = moneyInput(amount);
+      const receivedLabel = el('span');
+      const moneyFields = append(el('div',null,'stack'),field('Дата получения',receivedOn),append(el('label'),receivedLabel,received));
+      const body = el('div',null,'stack');
+      const actions = row();
+      const warning = missing && text('У клиента нет подходящего тарифа на персональную тренировку'+(place?' · '+place:''),'warning-text small');
+      let mode = missing ? '' : 'existing';
+      let receivedEdited = amount != null;
+      const sync = () => {
+        const unit = selected.value ? findService(selected.value)?.currency : moneyUnit.value;
+        const onlyPayment = paymentOnly && mode==='tariff';
+        dateLabel.textContent = onlyPayment ? 'Тариф действует с' : 'Дата занятия';
+        rateLabel.textContent = (onlyPayment ? 'Ставка за занятие, ' : 'Стоимость занятия, ')+unit;
+        receivedLabel.textContent = 'Получено, '+unit;
+        paidField.hidden = onlyPayment;
+        moneyFields.hidden = !onlyPayment && paid.value !== 'received';
+        if (!receivedEdited) received.value = rate.value;
+        setSaveEnabled(!!mode&&(onlyPayment||!!paid.value));
+      };
+      function establishMode(next) {
+        mode = next;
+        for (const control of actions.children) control.setAttribute('aria-pressed',String(control.dataset.mode===mode));
+        body.hidden = false;
+        sync();
+      }
+      if (missing) for (const [key,label] of [['once','Разовое занятие'],['tariff','Добавить тариф']]) {
+        const control=button(label,()=>establishMode(key));
+        control.dataset.mode=key;
+        control.setAttribute('aria-pressed','false');
+        actions.append(control);
+      }
+      actions.classList.add('catalog-quick');
+      const updateService = () => {
+        const service=findService(selected.value);
+        if (service) {
+          location.value=place||service.place;
+          rate.value=String(service.rate/100);
+        } else {
+          const rates = new Set(activeServices().filter(s=>s.kind==='personal'&&s.place===location.value&&s.currency===moneyUnit.value).map(s=>s.rate));
+          const suggested=amount ?? (rates.size===1?[...rates][0]:null);
+          rate.value=suggested==null?'':String(suggested/100);
+        }
+        sync();
+      };
+      selected.addEventListener('change',updateService);
+      rate.addEventListener('input',sync);
+      moneyUnit.addEventListener('change',sync);
+      paid.addEventListener('change',sync);
+      received.addEventListener('input',()=>{receivedEdited=true;});
+      append(body,!missing&&field('Тариф',selected),append(el('label'),dateLabel,date),field('Место',location),
+        append(el('div',null,'account-fields'),append(el('label'),rateLabel,rate),missing&&field('Валюта',moneyUnit)),
+        paidField,moneyFields);
+      body.hidden=missing;
+      const context=[place,formatDate(day)].filter(Boolean).join(' · ');
+      append(form,text(clientName(clientId),'account-form-client'),text(transcript),text(context),warning,missing&&actions,body);
+      updateService();
+      return async () => {
+        const sessionDate=recordedDate(date);
+        const onlyPayment=paymentOnly&&mode==='tariff';
+        const payment=onlyPayment||paid.value==='received'?{amount:A.amountMinor(received.value),date:recordedDate(receivedOn)}:null;
+        const values={clientId,serviceId:selected.value||null,oneOff:mode==='once',place:location.value,
+          currency:selected.value ? findService(selected.value)?.currency : moneyUnit.value,
+          rate:A.amountMinor(rate.value),date:sessionDate,payment,paymentOnly:onlyPayment};
+        await commit(s=>{
+          A.savePersonalVisit(s,values);
+          delete s.settings.drafts?.[draftKey];
+        });
+        message(onlyPayment?'Тариф и оплата записаны':payment?'Занятие и оплата записаны':'Занятие записано');
+      };
+    }, {onSaved});
+  }
+
   function memo(label, value = '') {
     const control = input('text', value);
     control.maxLength = 300;
@@ -306,7 +391,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   }
 
   function resumeClient(client) {
-    const previous = A.clientServices(state(), client.id).sort((a,b) => Number(isMonthly(b)) - Number(isMonthly(a)) || b.startsOn.localeCompare(a.startsOn));
+    const previous = A.clientServices(state(), client.id).filter(s=>!s.oneOff)
+      .sort((a,b) => Number(isMonthly(b)) - Number(isMonthly(a)) || b.startsOn.localeCompare(a.startsOn));
     editService(client.id, previous[0] || client.priorTariff, { resume:true });
   }
 
@@ -317,7 +403,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
 
   function serviceOptions(list, showClient) {
     return [['', 'Выбрать услугу'], ...list.map(s => [s.id,
-      `${showClient ? clientName(s.clientId) + ' · ' : ''}${serviceTitle(s)} · с ${formatDate(s.startsOn)}${s.endsOn ? ' · завершена ' + formatDate(s.endsOn) : ''}`])];
+      `${showClient ? clientName(s.clientId) + ' · ' : ''}${s.oneOff ? serviceCaption(s)+' · '+formatDate(s.startsOn)
+        : serviceTitle(s)+' · с '+formatDate(s.startsOn)+(s.endsOn?' · завершена '+formatDate(s.endsOn):'')}`])];
   }
 
   function noService(clientId) {
@@ -416,7 +503,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   }
 
   function editSession({ clientId, serviceId, existing, fromAccount = false } = {}) {
-    const list = choices(clientId, true);
+    const list = choices(clientId, true).filter(service=>!service.oneOff||service.id===existing?.serviceId);
     if (!list.length) {
       if (clientId) return message('Добавь услугу «Персональные занятия» в карточке клиента', false, { label: 'Добавить', run: () => editService(clientId) });
       return noService();
@@ -614,7 +701,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
 
   function clientPanel(client) {
     const services = A.clientServices(state(), client.id);
-    const active = services.filter(s => client.status === 'Активный' && A.activeService(s, today()));
+    const active = services.filter(s => !s.oneOff && client.status === 'Активный' && A.activeService(s, today()));
+    const unpaidVisits = services.filter(s=>s.oneOff).map(s=>({service:s,debt:-A.serviceBalance(state(),s.id).balance})).filter(x=>x.debt>0);
     const history = A.operations(state(), { clientId: client.id, includeVoided: true });
     const imported = ledgerRows(state(), { clientId: client.id });
     const tariffLine = s => line(serviceTitle(s), [isMonthly(s) ? 'Оплата ' + s.day + '-го' : s.place,
@@ -655,10 +743,12 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const actionButton = (action, style) => button(action.label + (active.length > 1 ? ' · ' + serviceCaption(action.service) : ''),
       () => quickEntry(client.id, action), style);
     const journal = clientHistory(history, client.id);
-    const previous = services.filter(s => !active.includes(s));
+    const previous = services.filter(s => !s.oneOff && !active.includes(s));
     const panel=section('Оплаты и занятия', `${client.id}-account`, [
       client.billingNote && text(client.billingNote),
-      ...active.map(currentStatus), !active.length && !client.billingNote && text(services.length ? 'Нет действующих услуг' : 'Тарифы пока не заданы'),
+      ...active.map(currentStatus), !active.length && !client.billingNote && text(previous.length ? 'Нет действующих услуг' : 'Тарифы пока не заданы'),
+      ...unpaidVisits.map(({service,debt})=>line(serviceCaption(service),formatDate(history.find(s=>s.kind==='session'&&s.serviceId===service.id)?.date||service.startsOn)+' · К оплате',
+        A.money(debt,service.currency),()=>editPayment({clientId:client.id,serviceId:service.id,suggested:debt}))),
       primary && actionButton(primary, 'primary account-main-action'),
       actions.length > 1 && section('Другие действия', `${client.id}-account-actions`, actions.slice(1).map(action => actionButton(action, 'account-extra-action'))),
       section('Тарифы' + (active.length ? ' · ' + active.length : ''), `${client.id}-tariffs`, [
@@ -707,5 +797,5 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       })));
   }
 
-  return { page, clientPanel, remindersPanel, todoItems, settingsPanel, quickEntry, quickOptions, activeClientIds, resumeClient };
+  return { page, clientPanel, remindersPanel, todoItems, settingsPanel, quickEntry, quickOptions, assistantVisit, activeClientIds, resumeClient };
 }

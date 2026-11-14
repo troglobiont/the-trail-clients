@@ -24,6 +24,9 @@ test('assistant retains multiple clients when it only recognizes their shared na
 
 test('assistant distinguishes a requested payment follow-up from a reported receipt', () => {
   assert.equal(assistantKind('Стрежевской нужно оплатить персональную тренировку на улице'),'task');
+  assert.equal(assistantKind('Провёл Стрижевской вчера персональное занятие в зале, нужно оплатить'),'session');
+  assert.equal(assistantKind('Чтобы Стрижевская оплатила персональное занятие в зале, провёл его вчера'),'session');
+  assert.equal(assistantKind('Чтобы Стрижевская оплатила занятие в зале'),'task');
   assert.equal(assistantKind('Напомни Иванову оплатить тренировку'),'task');
   assert.equal(assistantKind('Стрежевская оплатила персоналку в зале'),'payment');
   assert.equal(assistantKind('Стрежевская ещё не оплатила тренировку'),'record');

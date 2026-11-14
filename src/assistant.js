@@ -62,9 +62,16 @@ export function suggestAssistantClients(transcript, clients) {
   };
 }
 
+export function mentionsCompletedSession(value) {
+  return /(?:^|[^\p{L}])(?:пров[её]л[аи]?|прошл[оаи]|состоял[оа]сь)(?!\p{L})/iu.test(value)
+      && /занят|трениров|персонал/iu.test(value)
+      && !/не\s+(?:пров[её]л|прошл|состоял)/iu.test(value);
+}
+
 export function assistantKind(value) {
+  if (mentionsCompletedSession(value) && !/спросить|напомни|проверить|узнать|написать|попросить|поставь задачу/iu.test(value)) return 'session';
   if (/спросить|напомни|проверить|узнать|написать|попросить|поставь задачу/iu.test(value)
-    || /(?:нужно|надо|необходимо|долж\p{L}*|предстоит)\s+оплатить/iu.test(value)) return 'task';
+    || /(?:нужно|надо|необходимо|долж\p{L}*|предстоит)\s+оплатить|чтобы[^.!?]{0,70}оплатил\p{L}*/iu.test(value)) return 'task';
   if (/не\s+оплатил\p{L}*/iu.test(value)) return 'record';
   if (/оплатил\p{L}*|получил[аи]?\s|вн[её]с|аванс|(?:запиши|зафиксируй)\s+оплату/iu.test(value)) return 'payment';
   if (/пров[её]л|занятие прошло|записать занятие/iu.test(value)) return 'session';
