@@ -95,10 +95,6 @@ main{max-width:920px;margin:0 auto;padding:24px 20px calc(110px + env(safe-area-
 .directory-account{min-height:44px;font-size:13px;color:var(--muted);padding-inline:10px}
 .catalog-page .fold summary{min-height:44px;padding-block:10px}
 .catalog-options{gap:6px}
-.catalog-search{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;align-items:center}
-.catalog-search input{min-width:0}
-.catalog-search button{border-color:var(--line);white-space:nowrap;padding-inline:10px;font-size:13px}
-.catalog-search button[aria-expanded=true]{background:var(--soft)}
 .catalog-shortcuts{flex-wrap:nowrap;gap:4px}
 .catalog-shortcuts button{padding-inline:clamp(5px,2vw,12px);white-space:nowrap}
 .catalog-advanced{padding-block:6px}
@@ -275,5 +271,39 @@ input.account-month{width:auto;max-width:100%}
 .app-nav .nav-assistant[aria-current=page]{background:var(--accent);color:var(--panel)}
 .task-completed{opacity:.78}
 .payment-chip{align-self:flex-start;color:var(--ink);background:var(--soft)}
+.todo-filters{flex-wrap:nowrap}
+.todo-filters button{white-space:nowrap;padding-inline:clamp(7px,3vw,13px)}
+.task-tile-top{display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;width:100%}
+.birthday-tile{border-inline-start:3px solid var(--warn)}
+.birthday-chip{color:var(--warn);font-weight:600}
+.race-page{gap:10px}
+.race-page .page-title{margin-bottom:0}
+.race-filter-head{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.race-filter-head select{width:auto;max-width:100%;min-height:40px;padding:5px 6px;font-size:13px}
+.race-months{display:grid;gap:18px}
+.race-month{display:grid;gap:6px}
+.race-month-title{margin:0 0 3px;text-transform:capitalize;color:var(--muted);font-size:14px;font-weight:650}
+.race-card{--race-mark:var(--line);border:1px solid var(--line);border-inline-start:3px solid var(--race-mark);border-radius:12px;background:var(--panel);min-width:0}
+.race-card[data-category=trail]{--race-mark:#688966}
+.race-card[data-category=road]{--race-mark:#647fb2}
+.race-card[data-category=abroad]{--race-mark:#af8650}
+.race-card[data-category=significant]{--race-mark:#ae6a82}
+.race-card>summary{display:grid;position:relative;gap:3px;list-style:none;padding:10px 34px 10px 12px;margin:0}
+.race-card>summary::-webkit-details-marker{display:none}
+.race-card>summary::after{content:"";position:absolute;right:15px;top:19px;width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg)}
+.race-card[open]>summary::after{transform:rotate(225deg)}
+.race-name{color:var(--text);font-size:16px;font-weight:650;overflow-wrap:anywhere}
+.race-meta{font-size:13px;overflow-wrap:anywhere}
+.race-tags{gap:4px;margin-top:2px}
+.race-tags .chip{padding:1px 6px}
+.race-significant{color:var(--danger)}
+.race-card .fold-body{border-top:1px solid var(--line);margin:0 12px;padding:11px 0;gap:12px}
+.race-detail h3{margin:0 0 5px;font-size:13px;color:var(--muted)}
+.race-distances{gap:5px}
+.race-distances .chip{white-space:nowrap;color:var(--text)}
+.race-person{display:grid;justify-items:start;text-align:left;padding:5px 0;width:100%}
+.race-person+.race-person{border-top:1px solid var(--line);border-radius:0}
+.race-source{color:var(--ink);width:fit-content;padding-block:5px}
+.race-note{overflow-wrap:anywhere}
 .account-currency-line{display:block}
 .money-amount{white-space:nowrap;overflow-wrap:normal;word-break:normal}

@@ -1,5 +1,5 @@
 import * as C from './core.js';
-import { GOAL_TYPES, RACE_STAGES, goalType, raceById, raceCatalog, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
+import { GOAL_TYPES, RACE_STAGES, goalType, raceById, raceCatalog, raceCategory, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
 
 export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message}) {
   const trainingFields = [
@@ -154,51 +154,99 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     ]);
   }
   function races() {
-    const page=el('div',null,'stack-lg'),catalog=raceCatalog(state(),{includeRecommended:true});
-    const distancesFor=r=>[...new Set([...(r.distances||[]),...Object.values(state().goals).filter(g=>!g.deletedAt&&(g.raceId===r.id||r.aliases?.includes(g.raceId))&&g.distance).map(g=>g.distance)])];
-    const allDistances=[...new Set(catalog.flatMap(distancesFor))].sort();
-    const years=[...new Set(catalog.map(r=>r.date.slice(0,4)))].sort();
-    const year=select([['','Все сезоны'],...years],ui.raceYear||''),distance=select([['','Все дистанции'],...allDistances],ui.raceDistance||'');
+    const page=el('div',null,'race-page stack'),current=state();
+    const catalog=raceCatalog(current,{includeRecommended:true}).map(race=>({
+      race, ...raceCategory(race), people:raceParticipants(current,race),
+      search:C.normalizeSearch([race.name,race.place].filter(Boolean).join(' '))
+    }));
+    const years=[...new Set(catalog.map(({race})=>race.date.slice(0,4)))].sort().reverse();
+    const calendarYear=catalog.find(({race})=>race.id.startsWith('race-club-'))?.race.date.slice(0,4);
+    const year=select([['','Все сезоны'],...years],ui.raceYear??calendarYear??'');
     const query=input('search',ui.raceQuery||'','Поиск старта');
-    const clubOnly=button('Клуб рекомендует',()=>{ui.raceClubOnly=!ui.raceClubOnly;refresh();});
-    const dateLabel=r=>r.date.length===7
-      ? new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'}).format(new Date(r.date+'-01T12:00:00Z'))+' · дата уточняется'
-      : [formatDate(r.date),r.endDate&&r.endDate!==r.date&&formatDate(r.endDate)].filter(Boolean).join(' – ')+' '+r.date.slice(0,4);
-    const list=el('div',null,'stack');
-    const refresh=()=>{
-      ui.raceYear=year.value;ui.raceDistance=distance.value;ui.raceQuery=query.value;
-      clubOnly.setAttribute('aria-pressed',String(!!ui.raceClubOnly));
-      const found=catalog.filter(r=>(!ui.raceClubOnly||r.recommended)&&(!year.value||r.date.startsWith(year.value))&&C.normalizeSearch([r.name,r.place].filter(Boolean).join(' ')).includes(C.normalizeSearch(query.value))
-        &&(!distance.value||distancesFor(r).includes(distance.value)));
-      list.replaceChildren(...(found.length?found.map(r=>{
-        const entries=raceParticipants(state(),r.id,distance.value);
-        const registered=entries.filter(g=>g.raceStage==='registered').length;
-        const distances=distancesFor(r);
-        const link=r.url&&el('a','Сайт организатора','subtle');
-        if(link){link.href=r.url;link.target='_blank';link.rel='noopener noreferrer';}
-        return section(r.name+' · '+dateLabel(r)+' · '+entries.length+' чел.',r.id,[
-          r.recommended&&el('span','Клуб рекомендует','chip emphasis'), r.place&&text(r.place),
-          r.note&&text(r.note),link,
-          text('Выбрали · '+(entries.length-registered)+' / Зарегистрированы · '+registered),
-          distances.length&&text('Дистанции: '+distances.join(', ')),
-          button('Настроить дистанции',()=>modal('Дистанции',form=>{
-            const control=el('textarea');control.value=(r.distances||[]).join('\n');
-            form.append(field('По одной дистанции на строку',control));
-            return ()=>commit(s=>C.setRaceDistances(s,r.id,control.value.split('\n')));
-          }),'subtle'),
-          ...entries.map(g=>button(state().clients[g.clientId].name+' · '+[g.distance,RACE_STAGES[g.raceStage]].filter(Boolean).join(' · '),()=>openClient(g.clientId,'goal',g.id),'subtle')),
-          !entries.length&&text('Пока никто не подтвердил участие. Добавь этот старт в цели клиента.')
-        ]);
-      }):[text('Стартов не найдено')]));
+    const scopes=el('div',null,'row catalog-quick');
+    scopes.setAttribute('role','group');scopes.setAttribute('aria-label','Подборка');
+    for(const [value,label] of [['','Все'],['club','Рекомендуем'],['clients','Бегут клиенты']]){
+      const control=button(label,()=>{ui.raceScope=value;refresh();});
+      control.dataset.scope=value;scopes.append(control);
+    }
+    const region=select([['','Все страны'],['serbia','Сербия'],['abroad','За рубежом']],ui.raceRegion||'');
+    const discipline=select([['','Любой тип'],'Трейл','Шоссе'],ui.raceDiscipline||'');
+    const list=el('div',null,'race-months');
+    const monthFormat=new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'});
+    const dateLabel=race=>{
+      if(race.date.length===7)return 'Дата уточняется';
+      if(!race.endDate||race.date===race.endDate)return formatDate(race.date);
+      return race.date.slice(0,7)===race.endDate.slice(0,7)
+        ? race.date.slice(-2).replace(/^0/,'')+'–'+formatDate(race.endDate)
+        : formatDate(race.date)+' – '+formatDate(race.endDate);
     };
-    for(const control of [query,year,distance])control.addEventListener(control===query?'input':'change',refresh);
+    function card({race,region,discipline,significant,people}){
+      const details=section('',race.id,[]);
+      details.classList.add('race-card');
+      details.dataset.category=significant?'significant':region==='abroad'?'abroad':discipline==='Шоссе'?'road':discipline==='Трейл'?'trail':'';
+      const summary=details.querySelector('summary'),body=details.querySelector('.fold-body');
+      const tags=el('div',null,'row race-tags');
+      if(discipline)tags.append(el('span',discipline,'chip'));
+      if(significant)tags.append(el('span','Знаковый','chip race-significant'));
+      if(race.recommended)tags.append(el('span','Рекомендуем','chip'));
+      if(people.length)tags.append(el('span','Участники · '+people.length,'chip emphasis'));
+      append(summary,el('span',race.name,'race-name'),
+        el('span',[dateLabel(race),race.place].filter(Boolean).join(' · '),'race-meta'),tags.childElementCount&&tags);
+      if(race.distances?.length){
+        body.append(append(el('div',null,'race-detail'),el('h3',race.distanceYear?'Дистанции '+race.distanceYear:'Дистанции'),
+          append(el('div',null,'row race-distances'),...race.distances.map(distance=>el('span',distance,'chip')))));
+      }
+      const entrants=append(el('div',null,'race-detail'),el('h3','Участники'));
+      for(const goal of people){
+        const label=goal.raceStage==='registered'?'Есть регистрация':'Планирует';
+        const person=button('',()=>openClient(goal.clientId,'goal',goal.id),'race-person');
+        append(person,el('span',current.clients[goal.clientId].name),text([goal.distance,label].filter(Boolean).join(' · ')));
+        entrants.append(person);
+      }
+      if(!people.length)entrants.append(text('Пока без участников'));
+      body.append(entrants);
+      if(race.url&&/^https?:\/\//i.test(race.url)){
+        const source=link('Источник · сайт старта ↗',race.url,'inline-link race-source');
+        source.target='_blank';source.rel='noopener noreferrer';body.append(source);
+      }
+      if(race.note)body.append(text(race.note,'race-note'));
+      return details;
+    }
+    function refresh(){
+      ui.raceYear=year.value;ui.raceQuery=query.value;
+      for(const control of scopes.children)control.setAttribute('aria-pressed',String((ui.raceScope||'')===control.dataset.scope));
+      const keyword=C.normalizeSearch(query.value),months=new Map();
+      for(const entry of catalog){
+        const {race,people,search}=entry;
+        if((year.value&&!race.date.startsWith(year.value))||!search.includes(keyword)
+          ||(ui.raceScope==='club'&&!race.recommended)||(ui.raceScope==='clients'&&!people.length)
+          ||(region.value&&entry.region!==region.value)||(discipline.value&&entry.discipline!==discipline.value))continue;
+        const key=race.date.slice(0,7);
+        if(!months.has(key))months.set(key,[]);
+        months.get(key).push(card(entry));
+      }
+      list.replaceChildren(...[...months].map(([month,rows])=>{
+        const label=monthFormat.format(new Date(month+'-01T12:00:00Z')).replace(/ г\.$/,'');
+        return append(el('section',null,'race-month'),el('h2',label,'race-month-title'),...rows);
+      }));
+      if(!months.size)list.append(text('Стартов не найдено'));
+    }
+    query.addEventListener('input',refresh);year.addEventListener('change',refresh);
+    region.addEventListener('change',()=>{ui.raceRegion=region.value;refresh();});
+    discipline.addEventListener('change',()=>{ui.raceDiscipline=discipline.value;refresh();});
     const create=button('Добавить старт',()=>modal('Новый старт',form=>{
       const name=input('text'),date=input('date'),place=input('text');name.maxLength=120;place.maxLength=160;
-      append(form,field('Название',name),field('Дата',date),field('Место',place));
-      return ()=>commit(s=>C.defineRace(s,{name:name.value,date:date.value,place:place.value}));
+      const region=select([['','Не указано'],['serbia','Сербия'],['abroad','За рубежом']],'');
+      const discipline=select([['','Не указано'],'Трейл','Шоссе'],'');
+      append(form,field('Название',name),field('Дата',date),field('Место',place),field('Страна',region),field('Тип',discipline));
+      return ()=>commit(s=>C.defineRace(s,{name:name.value,date:date.value,place:place.value,region:region.value,discipline:discipline.value}));
     }),'subtle');
     query.setAttribute('aria-label','Поиск старта');
-    append(page,append(el('div',null,'page-title'),el('h1','Старты'),create),query,row(clubOnly),row(field('Сезон',year),field('Дистанция',distance)),list);
+    year.setAttribute('aria-label','Сезон');
+    region.setAttribute('aria-label','Страна');
+    discipline.setAttribute('aria-label','Тип покрытия');
+    append(page,append(el('div',null,'page-title'),el('h1','Старты'),create),query,
+      scopes,append(el('div',null,'race-filter-head'),region,discipline,year),list);
     refresh();return page;
   }
   return {profile,training,telegramOptions,goals,races};

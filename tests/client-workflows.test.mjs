@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as C from '../src/core.js';
 import * as A from '../src/accounting.js';
 import { cloudData } from '../src/cloud-state.js';
-import { birthdayReminders, raceCatalog, raceParticipants, telegramReminders } from '../src/client-details.js';
+import { birthdayReminders, raceCatalog, raceCategory, raceParticipants, telegramReminders } from '../src/client-details.js';
 
 test('temporary online does not remove a client from the in-person list; archive and aliases preserve identity',()=>{
   const state=C.emptyState();
@@ -60,6 +60,24 @@ test('race editions persist through backup and cloud without counting proposals 
   assert.equal(raceParticipants(state,race.id,'21 км').length,0);
   assert.deepEqual(raceCatalog(C.parseImport(C.exportState(state)))[0].distances,['10 км','21 км']);
   assert.ok(Object.values(cloudData(state).events).some(e=>e.type==='race-defined'));
+});
+
+test('updated club calendar retains existing goal links and groups Mont-Blanc distances under one edition',()=>{
+  const state=C.emptyState();
+  const c=C.createClient(state,{name:'Тестовый Клиент'});
+  const selected={id:'race-2027-08-27-occ-2027',name:'OCC 2027',date:'2027-08-27'};
+  const goal=C.addGoal(state,c.id,'Бежать OCC','Согласовано');
+  state.events.push({type:'race-defined',race:selected});
+  Object.assign(goal,{type:'race',raceStage:'selected',raceId:selected.id,distance:'55 км'});
+  const calendar=raceCatalog(state,{includeRecommended:true});
+  const montBlanc=calendar.find(r=>r.id==='race-club-2027-utmb-mont-blanc');
+  assert.ok(montBlanc.aliases.includes(selected.id));
+  assert.equal(raceParticipants(state,montBlanc)[0].id,goal.id);
+  assert.equal(montBlanc.recommended,false);
+  assert.deepEqual(raceCategory(montBlanc),{region:'abroad',discipline:'Трейл',significant:true});
+  const avala=calendar.find(r=>r.name==='Avala Trail');
+  C.setRaceDistances(state,avala.id,['20 км']);
+  assert.deepEqual(raceCatalog(state,{includeRecommended:true}).find(r=>r.id===avala.id).distances,['7,5 км','12 км','18 км','20 км']);
 });
 
 test('unified cash totals exclude duplicates and uncertain rows, while sessions and expenses remain distinct',()=>{

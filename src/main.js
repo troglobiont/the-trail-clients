@@ -321,17 +321,7 @@ function activeCatalogFilters(search) {
       render();
     },'subtle')
   );
-  advanced.id='catalog-filters';
-  advanced.hidden=!ui.open.has(advanced.id);
-  const toggle=button('Фильтры',()=>{
-    advanced.hidden=!advanced.hidden;
-    if(advanced.hidden)ui.open.delete(advanced.id);
-    else ui.open.add(advanced.id);
-    toggle.setAttribute('aria-expanded',String(!advanced.hidden));
-  });
-  toggle.setAttribute('aria-controls',advanced.id);
-  toggle.setAttribute('aria-expanded',String(!advanced.hidden));
-  return append(el('div',null,'stack catalog-options'),append(el('div',null,'catalog-search'),search,toggle),quick,advanced);
+  return append(el('div',null,'stack catalog-options'),search,quick,section('Фильтры','catalog-filters',[advanced]));
 }
 
 function filterControl(key,label,values) {
@@ -374,64 +364,66 @@ function renderCatalogResults() {
 }
 function emptyDatabase(){return append(el('div',null,'empty'),el('h2','Твоя клиентская база'),el('p','Импортируй подготовленный файл или добавь первого клиента. База хранится на этом устройстве.'),row(button('Импортировать базу',()=>importDatabase(),'primary'),button('Добавить клиента',()=>editClient())));}
 function taskStateLabel(t){if(!t.needsReply)return 'Моё действие';if(t.phase==='todo')return 'Нужно написать клиенту';return (t.checkOn<=C.localDate()?'Проверить переписку':'Жду ответа клиента')+' · '+formatDate(t.checkOn);}
-function renderBirthdays(){
-  const today=C.localDate();
-  const days=ui.birthdayDays||30;
-  const birthdays=birthdayReminders(state(),today,days);
+function birthdayPeriods(days){
   const periods=el('div',null,'row catalog-quick');
   periods.setAttribute('role','group');
-  periods.setAttribute('aria-label','Период');
+  periods.setAttribute('aria-label','Период дней рождения');
   for(const count of [30,90]){
     const control=button(count+' дней',()=>{ui.birthdayDays=count;render();});
     control.setAttribute('aria-pressed',String(count===days));
     periods.append(control);
   }
-  const list=el('div',null,'client-directory');
-  for(const {client,day} of birthdays){
-    const dayLabel=day===today?'Сегодня · '+formatDate(day):formatDate(day);
-    const entry=button(client.name,()=>openClient(client.id,'profile'),'client-directory-item');
-    entry.append(text(dayLabel));
-    list.append(append(el('div',null,'directory-row'),entry));
-  }
-  return append(el('div',null,'stack catalog-page'),
-    button('← К ToDo',()=>navigate('#todo'),'back subtle'),
-    el('h1','Дни рождения'),periods,
-    birthdays.length?list:text('На ближайшие '+days+' дней нет записанных дней рождения.'));
+  return periods;
 }
 
-function renderTodo(){
+function renderTodo(birthdayRoute=false){
   const page=el('div',null,'stack-lg');
+  const today=C.localDate(),days=ui.birthdayDays||30;
+  const filter=birthdayRoute?'birthdays':ui.taskFilter;
+  const birthdayEntries=horizon=>birthdayReminders(state(),today,horizon).map(({client,day})=>({
+    name:client.name,due:day,birthday:true,open:()=>openClient(client.id,'profile')
+  }));
   const tasks=C.clientTasks(state()).map(t=>({
     name:state().clients[t.clientId].name,title:t.title,due:C.taskDate(t),
     next:taskStateLabel(t),reply:t.needsReply,warning:C.taskWarning(t),open:()=>openClient(t.clientId,'task',t.id)
   }));
   const payment=accountingUI.todoItems();
-  const birthday=birthdayReminders(state()).map(({client,day})=>({
-    name:client.name,title:'День рождения',due:day,next:'Можно поздравить',reminder:true,open:()=>openClient(client.id,'profile')
-  }));
   const telegram=telegramReminders(state()).map(({client,day})=>({
     name:client.name,title:'Давно не открывал переписку',due:day,next:'Проверить Telegram',reminder:true,open:()=>openClient(client.id,'telegram')
   }));
-  const entries=[...tasks,...payment,...birthday,...telegram].sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
-  const birthdays=button('DR',()=>navigate('#todo/birthdays'),'subtle');
-  birthdays.setAttribute('aria-label','DR — Дни рождения');
-  append(page,append(el('div',null,'page-title'),el('h1','ToDo'),row(text(entries.length+' в списке'),birthdays)));
+  const all=[...tasks,...payment,...birthdayEntries(14),...telegram];
+  const entries=(filter==='birthdays'?birthdayEntries(days):filter==='mine'?tasks.filter(e=>!e.reply):all)
+    .sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
+  const count=entries.length;
+  append(page,append(el('div',null,'page-title'),el('h1','ToDo'),text(count+' в списке')));
   if(!Object.keys(state().clients).length){page.append(emptyDatabase());return page;}
-  const filters=el('div',null,'row catalog-quick');
-  const matches=(value,e)=>value==='all'||(value==='reply'?e.reply:value==='reminders'?e.reminder:!e.reminder&&!e.reply);
-  for(const [value,label] of [['all','Все'],['mine','Мои действия'],['reply','Нужен ответ'],['reminders','Напоминания']]){
-    const b=button(label+' · '+entries.filter(e=>matches(value,e)).length,()=>{ui.taskFilter=value;render();});
-    b.setAttribute('aria-pressed',String(ui.taskFilter===value));filters.append(b);
+  const filters=el('div',null,'row catalog-quick todo-filters');
+  filters.setAttribute('role','group');filters.setAttribute('aria-label','Фильтры ToDo');
+  for(const [value,label] of [['all','Все'],['mine','Мои действия'],['birthdays','ДР']]){
+    const b=button(label,()=>{
+      if(value==='birthdays'){
+        if(location.hash!=='#todo/birthdays')navigate('#todo/birthdays');
+        return;
+      }
+      ui.taskFilter=value;
+      if(birthdayRoute)navigate('#todo');
+      else render();
+    });
+    if(value==='birthdays')b.setAttribute('aria-label','ДР · Дни рождения');
+    b.setAttribute('aria-pressed',String(filter===value));filters.append(b);
   }
   const list=el('div',null,'stack');
-  for(const item of entries.filter(e=>matches(ui.taskFilter,e))){
-    const b=button('',item.open,'task-tile');
-    append(b,el('span',item.name,'task-client-name'),item.payment&&el('span','◈ Оплата','chip payment-chip'),el('span',item.title,'task-title'),
-      text((item.due?formatDate(item.due):'Без срока')+' · '+item.next));
+  for(const item of entries){
+    const b=button('',item.open,item.birthday?'task-tile birthday-tile':'task-tile');
+    const due=item.due===today?'Сегодня':item.due?formatDate(item.due):'Без срока';
+    append(b,append(el('span',null,'task-tile-top'),el('span',item.name,'task-client-name'),
+      item.payment&&el('span','◈ Оплата','chip payment-chip'),item.birthday&&el('span','🎂 День рождения','chip birthday-chip')),
+      !item.birthday&&el('span',item.title,'task-title'),text([due,item.next].filter(Boolean).join(' · ')));
     if(item.warning)b.append(text(item.warning.text,item.warning.level==='danger'?'danger-text small':'warning-text small'));
     list.append(b);
   }
-  append(page,filters,list.children.length?list:text('Открытых задач в этом разделе нет.'));
+  append(page,filters,filter==='birthdays'&&birthdayPeriods(days),
+    list.children.length?list:text(filter==='birthdays'?'На ближайшие '+days+' дней нет дней рождения.':'Открытых задач в этом разделе нет.'));
   return page;
 }
 function editTask(t){
@@ -1135,7 +1127,7 @@ function render(){
     const [,id,type,target]=hash.split('/');
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
     root.append(renderClient(id,type,target));
-  }else if(birthdayRoute(hash))root.append(renderBirthdays());
+  }else if(birthdayRoute(hash))root.append(renderTodo(true));
   else if(hash==='#clients'||hash.startsWith('#clients/')){
     const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();
   }else if(hash==='#account')root.append(accountingUI.page());

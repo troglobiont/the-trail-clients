@@ -74,10 +74,9 @@ export function setTraining(client, values) {
 
 const raceSlug = value => String(value || '').normalize('NFD').toLowerCase()
   .replace(/\p{M}+/gu,'').replace(/[^\p{L}\p{N}]+/gu,'-').replace(/^-|-$/g,'');
-const clubRaces = clubCalendar.map(([date,endDate,name,place,discipline,distances,url,note]) => ({
-  id:'race-club-'+date.slice(0,4)+'-'+raceSlug(name), name, place, date, endDate:endDate||null,
-  discipline, distances:distances ? distances.replace(/ км$/,'').split('; ').map(d=>d+' км') : [],
-  url, note, recommended:true
+const clubRaces = clubCalendar.map(race => ({
+  ...race, id:'race-club-'+race.date.slice(0,4)+'-'+raceSlug(race.name),
+  recommended:race.recommended!==false, distances:race.distances||[]
 }));
 const raceDatesMatch = (a,b) => a.date.length===7 || b.date.length===7
   ? a.date.slice(0,7)===b.date.slice(0,7)
@@ -87,18 +86,38 @@ export function sameRace(a,b) {
     && (!a.place || !b.place || raceSlug(a.place)===raceSlug(b.place));
 }
 
+function sameClubEdition(club,race) {
+  // OCC, CCC and TDS are distances at the same Mont-Blanc event.
+  const name = /^\s*(?:OCC|CCC|TDS)(?:\s+20\d{2})?\s*$/i.test(race.name) ? 'UTMB Mont-Blanc' : race.name;
+  return sameRace(club,{...race,name});
+}
+
+export function raceCategory(race) {
+  const location = race.place || '';
+  const name = raceSlug(race.name);
+  const inSerbia = /\b(?:serbia|beograd|belgrade|novi-sad)\b/.test(raceSlug(location))
+    || /сербия|белград|нови-сад/i.test(location) || /belgrade|beograd|белград/.test(name);
+  const abroad = /хорватия|черногория|босния|испания|франция/i.test(location)
+    || /(?:utmb-nice|antalya|kackar|barcelona)/.test(name);
+  const region = race.region || (inSerbia ? 'serbia' : abroad ? 'abroad' : '');
+  const discipline = race.discipline || (/trail|utmb|тре[ий]л/.test(name) ? 'Трейл' : /marathon|maraton|марафон/.test(name) ? 'Шоссе' : '');
+  return {region,discipline,significant:!!race.significant || /(?:^|-)utmb(?:-|$)/.test(name)};
+}
+
 export function raceCatalog(state,{ includeRecommended=false }={}) {
   const races = new Map(includeRecommended ? clubRaces.map(race=>[race.id,race]) : []);
   for (const event of state.events) {
     if (event.type !== 'race-defined' || !event.race) continue;
     const race = event.race;
-    const club = includeRecommended && clubRaces.find(r=>r.id===race.id||sameRace(r,race));
+    const club = includeRecommended && clubRaces.find(r=>r.id===race.id||sameClubEdition(r,race));
     if (club) {
       const entry = races.get(club.id);
-      races.set(club.id,{...entry, aliases:[...new Set([...(entry.aliases||[]),race.id])], distances:race.distances||entry.distances});
+      const knownDistances = [...new Set([...entry.distances,...(race.distances||[])])];
+      races.set(club.id,{...entry, aliases:[...new Set([...(entry.aliases||[]),race.id])], distances:knownDistances});
     } else races.set(race.id,race);
   }
-  return [...races.values()].sort((a,b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name,'ru'));
+  const sortDate = race => race.date.length===7 ? race.date+'-99' : race.date;
+  return [...races.values()].sort((a,b) => sortDate(a).localeCompare(sortDate(b)) || a.name.localeCompare(b.name,'ru'));
 }
 
 export function raceById(state,id) {
@@ -111,7 +130,9 @@ export function raceDefinition(values) {
   const date = values.date;
   const slug = raceSlug(name);
   if (!slug || name.length > 120 || place.length > 160 || !validDate(date)) throw Error('Укажи название и дату старта');
-  return { id:'race-' + date + '-' + [slug,raceSlug(place)].filter(Boolean).join('-').slice(0,115), name, date, ...(place ? {place} : {}) };
+  const { region,discipline } = values;
+  return { id:'race-' + date + '-' + [slug,raceSlug(place)].filter(Boolean).join('-').slice(0,115), name, date, ...(place ? {place} : {}),
+    ...(['serbia','abroad'].includes(region) && {region}), ...(['Трейл','Шоссе'].includes(discipline) && {discipline}) };
 }
 
 export function raceGoal(state, values) {
@@ -126,9 +147,9 @@ export function raceGoal(state, values) {
   return { type, raceStage, raceId:raceId ? raceById(state,raceId).id : null, distance:distance || null };
 }
 
-export function raceParticipants(state, raceId, distance = '') {
-  const race = raceById(state,raceId);
-  const keys = new Set([raceId,race?.id,...(race?.aliases||[])].filter(Boolean));
+export function raceParticipants(state, reference, distance = '') {
+  const race = typeof reference === 'string' ? raceById(state,reference) : reference;
+  const keys = new Set([typeof reference==='string'&&reference,race?.id,...(race?.aliases||[])].filter(Boolean));
   const byClient = new Map();
   for (const goal of Object.values(state.goals)) {
     const client = state.clients[goal.clientId];
