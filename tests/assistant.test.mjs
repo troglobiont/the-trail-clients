@@ -3,29 +3,28 @@ import { test } from 'node:test';
 import { assistantKind, suggestAssistantClients } from '../src/assistant.js';
 
 const clients = [
-  { id:'polina', name:'Стримовская Полина', aliases:['Polina Strimovskaia'] },
-  { id:'another', name:'Иванова Полина' },
-  { id:'merged', name:'Тремовская Полина', mergedInto:'polina' }
+  { id:'vera', name:'Стрижевская Вера', aliases:['Vera Strizhevskaia'] },
+  { id:'another', name:'Иванова Вера' },
+  { id:'merged', name:'Трижевская Вера', mergedInto:'vera' }
 ];
 
 test('assistant proposes the card for a split or misspelled surname and asks for a choice', () => {
-  for (const text of ['С Тремовской нужно связаться', 'Стремовской нужно оплатить занятие', 'Тримовская оплатила занятие']) {
-    assert.deepEqual(suggestAssistantClients(text, clients), { selected:'', suggestions:['polina'] });
+  for (const text of ['С Трижевской нужно связаться', 'Стрежевской нужно оплатить занятие', 'Трижевская оплатила занятие']) {
+    assert.deepEqual(suggestAssistantClients(text, clients), { selected:'', suggestions:['vera'] });
   }
-  assert.deepEqual(suggestAssistantClients('Спросить Стримовскую о тренировке',clients), { selected:'polina', suggestions:['polina'] });
-  assert.equal(suggestAssistantClients('Strimovskaia Polina',clients).selected,'polina');
+  assert.deepEqual(suggestAssistantClients('Спросить Стрижевскую о тренировке',clients), { selected:'vera', suggestions:['vera'] });
+  assert.equal(suggestAssistantClients('Strizhevskaia Vera',clients).selected,'vera');
 });
 
 test('assistant retains multiple clients when it only recognizes their shared name', () => {
   assert.deepEqual(suggestAssistantClients('Спросить о самочувствии',clients), { selected:'', suggestions:[] });
-  assert.deepEqual(suggestAssistantClients('Спросить Полину',clients), { selected:'', suggestions:['polina','another'] });
-  assert.deepEqual(suggestAssistantClients('Спросить Полина',clients), { selected:'', suggestions:['polina','another'] });
-  assert.equal(suggestAssistantClients('Полина Стримовская',clients).selected,'polina');
+  assert.deepEqual(suggestAssistantClients('Спросить Вера',clients), { selected:'', suggestions:['vera','another'] });
+  assert.equal(suggestAssistantClients('Вера Стрижевская',clients).selected,'vera');
 });
 
 test('assistant distinguishes a requested payment follow-up from a reported receipt', () => {
-  assert.equal(assistantKind('Стремовской нужно оплатить персональную тренировку на улице'),'task');
+  assert.equal(assistantKind('Стрежевской нужно оплатить персональную тренировку на улице'),'task');
   assert.equal(assistantKind('Напомни Иванову оплатить тренировку'),'task');
-  assert.equal(assistantKind('Стремовская оплатила персоналку в зале'),'payment');
-  assert.equal(assistantKind('Стремовская ещё не оплатила тренировку'),'record');
+  assert.equal(assistantKind('Стрежевская оплатила персоналку в зале'),'payment');
+  assert.equal(assistantKind('Стрежевская ещё не оплатила тренировку'),'record');
 });
