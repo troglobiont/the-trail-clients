@@ -295,12 +295,16 @@ input.account-month{width:auto;max-width:100%}
 .race-filter-box .catalog-quick button{white-space:nowrap;padding-inline:clamp(7px,2.5vw,12px)}
 .race-filter-box .race-quick button{padding-inline:clamp(4px,2vw,12px)}
 .race-year{position:relative}
+.race-year[open]{z-index:3}
 .race-year>summary{display:flex;align-items:center;min-height:44px;padding:5px 24px 5px 10px;font-size:13px;white-space:nowrap}
 .race-year[open]>summary{margin:0}
 .race-year-options{position:absolute;inset-inline-end:0;top:calc(100% + 4px);min-width:110px;z-index:2;box-shadow:0 4px 12px #0002}
 .race-months{display:grid;gap:18px}
-.race-month{display:grid;gap:6px}
-.race-month-title{margin:0 0 3px;text-transform:capitalize;color:var(--muted);font-size:14px;font-weight:650}
+.race-month{display:grid;gap:6px;min-width:0}
+.race-month-title{position:sticky;top:env(safe-area-inset-top,0px);z-index:1;align-self:start;margin:0;background:var(--bg);padding:8px 0;text-transform:capitalize;color:var(--muted);font-size:14px;font-weight:650}
+.race-view-toggle{justify-self:start;min-height:44px;padding:5px 4px;line-height:1.4;font-size:14px;color:var(--muted)}
+.race-view-toggle::before{content:"";display:inline-block;border:4px solid transparent;border-inline-start-color:currentColor;margin-inline-end:5px;transform-origin:25% 50%}
+.race-view-toggle[aria-pressed=true]::before{transform:rotate(90deg)}
 .race-card{--race-mark:var(--line);border:1px solid var(--line);border-inline-start:3px solid var(--race-mark);border-radius:12px;background:var(--panel);min-width:0}
 .race-card[data-category=serbia]{--race-mark:#688966}
 .race-card[data-category=abroad]{--race-mark:#af8650}
@@ -309,6 +313,21 @@ input.account-month{width:auto;max-width:100%}
 .race-card>summary::-webkit-details-marker{display:none}
 .race-card>summary::after{content:"";position:absolute;right:15px;top:19px;width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg)}
 .race-card[open]>summary::after{transform:rotate(225deg)}
+.race-overview{display:grid;gap:3px;min-width:0}
+.race-compact-summary,.race-overview.race-compact-overview{display:none}
+.race-view-compact{gap:12px}
+.race-view-compact .race-month{gap:0}
+.race-view-compact .race-card{border-width:0 0 1px;border-radius:0;background:transparent}
+.race-view-compact .race-card>summary{min-height:44px;padding:6px 26px 6px 2px;align-content:center;scroll-margin-top:44px}
+.race-view-compact .race-card>summary::after{right:8px;top:18px}
+.race-view-compact .race-compact-summary{display:grid;grid-template-columns:minmax(44px,max-content) minmax(0,1fr);align-items:baseline;gap:8px;min-width:0}
+.race-view-compact .race-overview.race-detail-summary{display:none}
+.race-view-compact .race-overview.race-compact-overview{display:grid}
+.race-view-compact .race-card .fold-body{border-inline-start:3px solid var(--race-mark);border-top:0;margin:0 0 8px;padding:8px 10px;background:var(--panel);border-radius:8px}
+.race-compact-date{border-inline-start:2px solid var(--race-mark);padding-inline-start:6px;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.race-compact-summary .race-short-name{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:15px;font-weight:500}
+.race-featured .race-compact-summary .race-short-name{font-weight:800}
+.race-compact-summary .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .race-name{color:var(--text);font-size:16px;font-weight:650;overflow-wrap:anywhere}
 .race-featured .race-name{font-weight:800}
 .race-meta{font-size:13px;overflow-wrap:anywhere}

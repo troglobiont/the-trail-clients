@@ -155,10 +155,14 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
   }
   function races() {
     const page=el('div',null,'race-page stack'),current=state();
-    const catalog=raceCatalog(current,{includeRecommended:true}).map(race=>({
-      race, ...raceCategory(race), people:raceParticipants(current,race),
-      search:C.normalizeSearch([race.name,race.place].filter(Boolean).join(' '))
-    }));
+    const catalog=raceCatalog(current,{includeRecommended:true}).map(race=>{
+      const shortName=race.shortName || (/mitja marat[oó].*barcelona|barcelona.*half marathon/i.test(race.name)
+        ? 'Барселона · полумарафон' : race.name);
+      return {
+        race,shortName,...raceCategory(race),people:raceParticipants(current,race),
+        search:[race.name,race.place,shortName].map(C.normalizeSearch).join(' ')
+      };
+    });
     const years=[...new Set(['2026','2027',...catalog.map(({race})=>race.date.slice(0,4))])].sort().reverse();
     const yearMenu=el('details',null,'race-year');
     const yearLabel=el('summary');
@@ -190,6 +194,16 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       controls.push([control,key,value]);container.append(control);
     }
     const list=el('div',null,'race-months');
+    const view=button('Подробнее',()=>{
+      ui.raceDetailed=!ui.raceDetailed;
+      setView();
+    },'race-view-toggle');
+    list.id='race-calendar';
+    view.setAttribute('aria-controls',list.id);
+    function setView(){
+      view.setAttribute('aria-pressed',String(!!ui.raceDetailed));
+      list.classList.toggle('race-view-compact',!ui.raceDetailed);
+    }
     const monthFormat=new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric',timeZone:'UTC'});
     const dateLabel=race=>{
       if(race.date.length===7)return 'Дата уточняется';
@@ -198,18 +212,36 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
         ? race.date.slice(-2).replace(/^0/,'')+'–'+formatDate(race.endDate)
         : formatDate(race.date)+' – '+formatDate(race.endDate);
     };
-    function card({race,region,discipline,significant,people}){
+    function compactDate(race){
+      if(race.date.length===7)return '—';
+      const first=Number(race.date.slice(-2));
+      if(!race.endDate||race.date===race.endDate)return String(first);
+      const last=Number(race.endDate.slice(-2));
+      return race.date.slice(0,7)===race.endDate.slice(0,7)
+        ? first+'–'+last : first+'/'+Number(race.date.slice(5,7))+'–'+last+'/'+Number(race.endDate.slice(5,7));
+    }
+    function card({race,shortName,region,discipline,significant,people}){
       const details=section('',race.id,[]);
       details.classList.add('race-card');
       details.dataset.category=region==='serbia'?'serbia':significant?'significant':region==='abroad'?'abroad':'';
       if(race.featured)details.classList.add('race-featured');
       const summary=details.querySelector('summary'),body=details.querySelector('.fold-body');
-      const tags=el('div',null,'row race-tags');
-      if(discipline)tags.append(el('span',discipline,'chip'));
-      if(significant)tags.append(el('span','Знаковый','chip race-significant'));
-      if(people.length)tags.append(el('span','Участники · '+people.length,'chip emphasis'));
-      append(summary,el('span',race.name,'race-name'),
-        el('span',[dateLabel(race),race.place].filter(Boolean).join(' · '),'race-meta'),tags.childElementCount&&tags);
+      const meta=[dateLabel(race),race.place].filter(Boolean).join(' · ');
+      function overview(className){
+        const tags=el('span',null,'row race-tags');
+        if(discipline)tags.append(el('span',discipline,'chip'));
+        if(significant)tags.append(el('span','Знаковый','chip race-significant'));
+        if(people.length)tags.append(el('span','Участники · '+people.length,'chip emphasis'));
+        return append(el('span',null,'race-overview '+className),
+          el('span',race.name,'race-name'),el('span',meta,'race-meta'),tags.childElementCount&&tags);
+      }
+      const day=el('span',compactDate(race),'race-compact-date');
+      day.setAttribute('aria-hidden','true');
+      const short=el('span',shortName,'race-name race-short-name');
+      short.title=race.name;
+      append(summary,append(el('span',null,'race-compact-summary'),day,short,el('span',dateLabel(race),'visually-hidden')),
+        overview('race-detail-summary'));
+      body.append(overview('race-compact-overview'));
       if(race.distances?.length){
         body.append(append(el('div',null,'race-detail'),el('h3',race.distanceYear?'Дистанции '+race.distanceYear:'Дистанции'),
           append(el('div',null,'row race-distances'),...race.distances.map(distance=>el('span',distance,'chip')))));
@@ -236,10 +268,10 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       yearLabel.setAttribute('aria-label','Сезон · '+yearLabel.textContent);
       for(const option of yearOptions.children)option.setAttribute('aria-pressed',String(option.dataset.year===year));
       for(const [control,key,value] of controls)control.setAttribute('aria-pressed',String(ui[key]===value));
-      const keyword=C.normalizeSearch(query.value),months=new Map();
+      const keywords=query.value.split(/\s+/).map(C.normalizeSearch).filter(Boolean),months=new Map();
       for(const entry of catalog){
         const {race,people,search}=entry;
-        if((year&&!race.date.startsWith(year))||!search.includes(keyword)
+        if((year&&!race.date.startsWith(year))||!keywords.every(keyword=>search.includes(keyword))
           ||(ui.raceTeam&&!people.length)||(ui.raceRegion&&entry.region!==ui.raceRegion)
           ||(ui.raceDiscipline&&entry.discipline!==ui.raceDiscipline))continue;
         const key=race.date.slice(0,7);
@@ -262,8 +294,8 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     }),'subtle');
     query.setAttribute('aria-label','Поиск старта');
     append(page,append(el('div',null,'page-title'),el('h1','Старты'),create),query,
-      append(el('div',null,'race-filter-box'),quick,append(el('div',null,'race-filter-head'),secondary,yearMenu)),list);
-    refresh();return page;
+      append(el('div',null,'race-filter-box'),quick,append(el('div',null,'race-filter-head'),secondary,yearMenu)),view,list);
+    setView();refresh();return page;
   }
   return {profile,training,telegramOptions,goals,races};
 }
