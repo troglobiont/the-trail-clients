@@ -17,6 +17,8 @@ const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,cloud,noticeTimer,draftTimer;
 const catalogViews = { active:'Клиенты', occasional:'Разовые', paused:'На паузе', archive:'Архив', team:'Команда', pending:'До старта' };
+const planBasisLabel = basis => basis === 'С нуля' ? 'Вне когорты' : basis;
+const planBasisOptions = C.BASES.map(basis=>[basis,planBasisLabel(basis)]);
 const CATALOG_PAGE_SIZE = 12;
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
   packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7)});
@@ -44,7 +46,7 @@ function clientStatus(c) {
   if (c.status === 'На паузе') return 'На паузе · ' + C.PAUSE_KINDS[C.pauseKind(c)].toLowerCase();
   return c.status;
 }
-function chips(c){const list=el('span',null,'row');for(const value of c.role==='Клиент'?[clientStatus(c),c.format,'Основа: '+c.basis]:[C.clientRole(c)])list.append(el('span',value,'chip'));if(c.level==='Премиум')list.append(el('span','Премиум','chip emphasis'));if(['gym','outside'].includes(c.personal))list.append(el('span',c.personal==='gym'?'Персональный зал с Сергеем':'Персонально с Сергеем · улица','chip emphasis'));return list;}
+function chips(c){const list=el('span',null,'row');for(const value of c.role==='Клиент'?[clientStatus(c),c.format,'Основа: '+planBasisLabel(c.basis)]:[C.clientRole(c)])list.append(el('span',value,'chip'));if(c.level==='Премиум')list.append(el('span','Премиум','chip emphasis'));if(['gym','outside'].includes(c.personal))list.append(el('span',c.personal==='gym'?'Персональный зал с Сергеем':'Персонально с Сергеем · улица','chip emphasis'));return list;}
 function formatDate(iso,withTime=false){if(!iso)return '';return new Intl.DateTimeFormat('ru-RU',{timeZone:C.TIMEZONE,day:'numeric',month:'short',...(withTime?{hour:'2-digit',minute:'2-digit'}:{})}).format(new Date(iso.length===10?iso+'T12:00:00Z':iso));}
 function section(title,key,children){const d=el('details',null,'fold'),summary=el('summary',title);d.open=ui.open.has(key);d.addEventListener('toggle',()=>{if(d.open)ui.open.add(key);else ui.open.delete(key);});append(d,summary,append(el('div',null,'fold-body stack'),...children));return d;}
 function navigate(hash){location.hash=hash;}
@@ -159,7 +161,7 @@ function editClient(clientId=null) {
     append(classification,field('Роль',role),statusField,pauseFields);
     const controls = {
       format:select(['Очно','Дистанционно','Уточнить'],c?.format||'Уточнить'),
-      basis:select(C.BASES,c?.basis||'Сейчас плана нет'),
+      basis:select(planBasisOptions,c?.basis||'Сейчас плана нет'),
       level:select(['Обычное','Премиум'],c?.level||'Обычное'),
       group:select(['Да','Нет','Уточнить'],c?.group||'Уточнить'),
       personal:select([['none','Нет'],['gym','В зале'],['outside','На улице'],['unknown','Нужно уточнить']],c?.personal||'unknown'),
@@ -298,7 +300,7 @@ function activeCatalogFilters(search) {
     ['tariffCurrency','Валюта тарифа',currencyOptions],
     ['paymentCurrency','Валюта поступления',currencyOptions],
     ['format','Формат сейчас',[['all','Любой'],['Очно','Очно'],['Дистанционно','Онлайн'],['Уточнить','Нужно уточнить']]],
-    ['basis','Основа плана',[['all','Любая'],...C.BASES]],
+    ['basis','Основа плана',[['all','Любая'],...planBasisOptions]],
     ['level','Ведение',[['all','Любое'],'Обычное','Премиум']],
     ['personal','Персональные с Сергеем',[['all','Любые'],['gym','В зале'],['outside','На улице'],['none','Нет'],['unknown','Нужно уточнить']]]
   ]) extra.append(filterControl(key,label,values));
