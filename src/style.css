@@ -193,6 +193,8 @@ dialog{width:min(560px,calc(100% - 28px));max-height:85vh;max-height:85dvh;overf
 dialog::backdrop{background:#0007}
 dialog form{display:grid;gap:16px}
 .profile-birthday{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.journal-entry{padding:12px;background:var(--soft);border-radius:10px;overflow-wrap:anywhere}
+.journal-entry .journal-task{text-align:left;justify-self:start;padding-block:4px}
 progress{width:100%;height:12px;accent-color:var(--ink)}
 [hidden]{display:none!important}
 .record-result{padding:12px;background:var(--soft);border-radius:10px}

@@ -51,7 +51,7 @@ function formatDate(iso,withTime=false){if(!iso)return '';return new Intl.DateTi
 function section(title,key,children){const d=el('details',null,'fold'),summary=el('summary',title);d.open=ui.open.has(key);d.addEventListener('toggle',()=>{if(d.open)ui.open.add(key);else ui.open.delete(key);});append(d,summary,append(el('div',null,'fold-body stack'),...children));return d;}
 function navigate(hash){location.hash=hash;}
 function openClient(clientId,type,target){ui.returnTo=location.hash.startsWith('#client/')?ui.returnTo:location.hash||'#todo';navigate('#client/'+clientId+(type?'/'+type+(target?'/'+target:''):''));}
-const detailsUI=createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message});
+const detailsUI=createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard});
 const accountingUI=createAccountingUI({state,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,navigate,message,importLedger:()=>importDatabase(true),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   activateClient:(s,id,day)=>C.editClient(s,id,{status:'Активный',engagement:null,pause:null},day),
@@ -630,7 +630,7 @@ function renderClient(clientId,targetType,targetId){
   telegram.id='telegram-client-panel';telegram.tabIndex=-1;
   const profile=section('О клиенте',c.id+'-profile',detailsUI.profile(c));
   profile.id='profile-client-panel';profile.tabIndex=-1;
-  reference.append(telegram,profile,section('Тренировочные данные · пульсовые зоны',c.id+'-zones',detailsUI.training(c)));
+  reference.append(telegram,profile,detailsUI.journal(c),section('Тренировочные данные · пульсовые зоны',c.id+'-zones',detailsUI.training(c)));
   reference.append(detailsUI.goals(c,()=>{
     const draft=getDraft(c.id);draft.kind='goal';
     const form=document.getElementById('compose');

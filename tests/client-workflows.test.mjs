@@ -88,6 +88,21 @@ test('new client contacts require a valid birthday without a year and preserve o
   assert.equal(client.profile.birthday,'2000-02-29');
 });
 
+test('training journal keeps notes and their tasks linked through edits, cloud and backup',()=>{
+  const state=C.emptyState();
+  const c=C.createClient(state,{name:'Тестовый Клиент'});
+  const note={day:'2026-11-10',title:'Пороговый тест',text:'Рабочая оценка 182',journalStatus:'candidate'};
+  const entry=C.saveJournalEntry(state,c.id,note);
+  const task=C.createTask(state,c.id,'Сверить пульсовые зоны',{sourceRecordId:entry.id});
+  C.saveJournalEntry(state,c.id,{...note,journalStatus:'review'},entry.id);
+  assert.throws(()=>C.saveJournalEntry(state,c.id,{...note,journalStatus:'unknown'},entry.id),/статус/);
+  const restored=C.parseImport(C.exportState(state));
+  assert.equal(restored.records[entry.id].journalStatus,'review');
+  assert.equal(cloudData(restored).records[entry.id].text,note.text);
+  assert.equal(C.openTasks(restored)[0].sourceRecordId,entry.id);
+  assert.equal(restored.tasks[task.id].due,null);
+});
+
 test('race editions persist through backup and cloud without counting proposals or duplicate goals',()=>{
   const state=C.emptyState();
   const c=C.createClient(state,{name:'Тестовый Клиент'});

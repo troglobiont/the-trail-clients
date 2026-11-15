@@ -11,6 +11,11 @@ export const PAUSE_KINDS={ planned:'С ориентиром', open:'Без ср�
 export const BASES=['Beginners','Middle','Hard','Simple','Online','Gym','С нуля','Сейчас плана нет'];
 export const GOAL_STATUSES=['Желание клиента','Согласовано','Предложение тренера','Рабочая цель тренера'];
 export const TEMPLATES=['Привет! Как дела?','Привет! Как самочувствие?','Привет! Как прошла тренировка?'];
+export const JOURNAL_STATUSES={
+  candidate:'Предварительная оценка', review:'На сверке', retest:'Нужен повтор',
+  retained:'Настройки сохранены', updated:'Настройки обновлены',
+  skipped:'Тест не выполнен', missing:'Запись теста не найдена'
+};
 const stamp=()=>new Date().toISOString();
 export function emptyState(){return {schemaVersion:SCHEMA,revision:0,clients:{},goals:{},tasks:{},records:{},events:[],settings:{waitDays:2},createdAt:stamp(),updatedAt:stamp()};}
 export function clone(value){return JSON.parse(JSON.stringify(value));}
@@ -22,7 +27,11 @@ export function validateState(s){
   for(const [key,c] of Object.entries(s.clients))if(!c||c.id!==key||typeof c.name!=='string'||!c.name.trim()||c.name.length>180||!['Клиент','Тренер'].includes(c.role)||c.role==='Клиент'&&!STATUSES.includes(c.status)||!Array.isArray(c.features)||!Array.isArray(c.rules))throw Error('Некорректная карточка клиента');
   for(const [key,g] of Object.entries(s.goals))if(!g||g.id!==key||!s.clients[g.clientId]||typeof g.title!=='string'||!g.title.trim()||g.title.length>500||!GOAL_STATUSES.includes(g.status))throw Error('Некорректная цель');
   for(const [key,t] of Object.entries(s.tasks))if(!t||t.id!==key||!s.clients[t.clientId]||typeof t.title!=='string'||!t.title.trim()||!['todo','waiting','done'].includes(t.phase)||!['current','discussion'].includes(t.lane)||!Number.isInteger(t.waitDays)||t.waitDays<1||t.waitDays>30||!Number.isInteger(t.outboundCount)||t.outboundCount<0||t.due!==null&&!validDate(t.due)||t.checkOn!==null&&!validDate(t.checkOn))throw Error('Некорректная задача');
-  for(const [key,r] of Object.entries(s.records))if(!r||r.id!==key||!s.clients[r.clientId]||typeof r.text!=='string'||r.text.length>16000)throw Error('Некорректная запись');
+  for(const [key,r] of Object.entries(s.records)){
+    if(!r||r.id!==key||!s.clients[r.clientId]||typeof r.text!=='string'||r.text.length>16000)throw Error('Некорректная запись');
+    if(r.kind==='journal'&&(!validDate(r.day)||typeof r.title!=='string'||!r.title.trim()||r.title.length>140
+      ||!r.text.trim()||r.text.length>4000||r.journalStatus&&!Object.hasOwn(JOURNAL_STATUSES,r.journalStatus)))throw Error('Некорректная запись журнала');
+  }
   for(const e of s.events)if(e?.type==='client-movement'&&(!Object.prototype.hasOwnProperty.call(s.clients,e.clientId)||!validDate(e.day)||typeof e.at!=='string'||!STATUSES.includes(e.status)||![null,'new','returned','paused','ended'].includes(e.movement)))throw Error('Некорректная запись движения клиентов');
   validateAccounting(s);
   validateStoredLedger(s);
@@ -194,6 +203,18 @@ export function taskDate(t){return t.phase==='waiting'?t.checkOn:t.due;}
 export function openTasks(s,{filter='all',clientId=null,lane='current'}={}){return Object.values(s.tasks).filter(t=>t.phase!=='done'&&(lane==='all'||t.lane===lane)&&(!clientId||t.clientId===clientId)&&(filter==='all'||(filter==='reply')===t.needsReply)).sort((a,b)=>(taskDate(a)||'9999').localeCompare(taskDate(b)||'9999')||a.createdAt.localeCompare(b.createdAt));}
 export function taskWarning(t,today=localDate()){if(t.phase!=='waiting'||!t.checkOn||t.checkOn>today)return null;if(t.outboundCount>=3)return {level:'danger',text:'Задача остаётся открытой после нескольких сообщений · проверь переписку'};if(t.outboundCount>=2)return {level:'warning',text:'Повторная проверка переписки'};return null;}
 export function saveRecord(s,clientId,text,kind='record',recordId=id('record')){if(!s.clients[clientId]||!text?.trim()||text.length>16000)throw Error('Введи запись');if(s.records[recordId])return s.records[recordId];const r={id:recordId,clientId,text:text.trim(),kind,createdAt:stamp(),status:'saved',result:null};s.records[r.id]=r;event(s,'record-created',clientId,r.id);return r;}
+export function saveJournalEntry(s,clientId,values,recordId=id('record')){
+  const client=s.clients[clientId], existing=s.records[recordId];
+  if(!client||client.mergedInto||existing&&(existing.clientId!==clientId||existing.kind!=='journal'))throw Error('Запись журнала не найдена');
+  const title=values.title.trim(), text=values.text.trim(), day=values.day, journalStatus=values.journalStatus||null;
+  if(!validDate(day))throw Error('Укажи дату записи');
+  if(!title||title.length>140)throw Error('Укажи тему записи');
+  if(!text||text.length>4000)throw Error('Введи текст записи');
+  if(journalStatus&&!Object.hasOwn(JOURNAL_STATUSES,journalStatus))throw Error('Проверь статус записи');
+  const entry={...existing,id:recordId,clientId,kind:'journal',day,title,text,journalStatus,createdAt:existing?.createdAt||stamp()};
+  s.records[recordId]=entry;
+  return entry;
+}
 export function addFeature(s,clientId,text,kind='Сейчас',sourceRecordId=null){const c=s.clients[clientId];if(!c||!text?.trim())throw Error('Введи особенность');if(c.features.some(f=>f.active!==false&&normalizeSearch(f.text)===normalizeSearch(text)))return;const f={id:id('feature'),kind,text:text.trim(),active:true,sourceRecordId,createdAt:stamp()};c.features.push(f);event(s,'feature-created',clientId,f.id);return f;}
 export function editFeature(s, clientId, featureId, text, kind) {
   const feature = s.clients[clientId]?.features.find(f => f.id === featureId);

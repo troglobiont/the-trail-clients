@@ -1,7 +1,7 @@
 import * as C from './core.js';
 import { GOAL_TYPES, RACE_STAGES, REQUIRED_PROFILE_FIELDS, goalType, normalizeClientCity, raceById, raceCatalog, raceCategory, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
 
-export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message}) {
+export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard}) {
   const trainingFields = [
     ['height','Рост, см',30,300,.1],['weight','Вес, кг',10,500,.1],['maxHr','Максимальный пульс',30,250,1],
     ['restHr','Пульс в покое',20,160,1],['lthr','Рабочий LTHR',30,250,1]
@@ -109,6 +109,47 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     }else out.push(text('Зоны пока не внесены.'));
     if(data.lthr)out.push(text('Записанный LTHR не меняет сохранённые зоны.'));
     return out;
+  }
+  function editJournal(c,entry) {
+    modal(entry?'Изменить запись':'Запись в журнале',form=>{
+      const day=input('date',entry?.day||C.localDate());
+      const title=input('text',entry?.title||'');
+      const note=el('textarea');
+      const status=select([['','Без статуса'],...Object.entries(C.JOURNAL_STATUSES)],entry?.journalStatus||'');
+      title.maxLength=140;note.maxLength=4000;note.rows=4;note.value=entry?.text||'';
+      append(form,field('Дата',day),field('Тема',title),field('Статус',status),field('Запись',note));
+      return ()=>commit(s=>C.saveJournalEntry(s,c.id,{title:title.value,text:note.value,day:day.value,journalStatus:status.value},entry?.id));
+    });
+  }
+  function addJournalTask(c,entry) {
+    modal('Задача по записи',form=>{
+      const action=input('text'),due=input('date');
+      const reply=input('checkbox');
+      action.maxLength=1000;
+      append(form,field('Что сделать',action),field('Срок',due),
+        append(el('label',null,'checkbox'),reply,el('span','Нужен ответ клиента')));
+      return async()=>{
+        const task=await commit(s=>C.createTask(s,c.id,action.value,{due:due.value,needsReply:reply.checked,sourceRecordId:entry.id}));
+        focusCard('task',task.id);
+      };
+    });
+  }
+  function journal(c) {
+    const entries=Object.values(state().records).filter(r=>r.clientId===c.id&&r.kind==='journal')
+      .sort((a,b)=>b.day.localeCompare(a.day)||b.createdAt.localeCompare(a.createdAt));
+    const tasks=Object.values(state().tasks).filter(t=>t.clientId===c.id&&t.sourceRecordId);
+    const items=entries.map(entry=>{
+      const status=C.JOURNAL_STATUSES[entry.journalStatus];
+      const linked=tasks.filter(t=>t.sourceRecordId===entry.id).map(t=>t.phase==='done'
+        ? text('Выполнено · '+t.title)
+        : button(t.title,()=>focusCard('task',t.id),'subtle journal-task'));
+      return append(el('article',null,'journal-entry stack'),row(text(formatDate(entry.day)+' '+entry.day.slice(0,4)),status&&el('span',status,'chip')),
+        el('h3',entry.title),el('div',entry.text,'feature-copy'),
+        linked.length&&append(el('div',null,'stack'),text('Задачи'),...linked),
+        row(button('Изменить',()=>editJournal(c,entry),'subtle'),button('+ Задача',()=>addJournalTask(c,entry),'subtle')));
+    });
+    return section('Журнал',c.id+'-journal',[button('+ Запись',()=>editJournal(c),'subtle'),
+      ...(items.length?items:[text('Записей пока нет')])]);
   }
   async function openTelegram(c) {
     const binding=c.telegram;
@@ -333,5 +374,5 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       append(el('div',null,'race-filter-box'),quick,append(el('div',null,'race-filter-head'),secondary,yearMenu)),view,list);
     setView();refresh();return page;
   }
-  return {profile,profileEditor,training,telegramOptions,goals,races};
+  return {profile,profileEditor,training,journal,telegramOptions,goals,races};
 }
