@@ -1,5 +1,5 @@
 import * as C from './core.js';
-import { GOAL_TYPES, RACE_STAGES, goalType, raceById, raceCatalog, raceCategory, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
+import { GOAL_TYPES, RACE_STAGES, REQUIRED_PROFILE_FIELDS, goalType, normalizeClientCity, raceById, raceCatalog, raceCategory, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
 
 export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message}) {
   const trainingFields = [
@@ -8,34 +8,70 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
   ];
   const trainingStatuses = [['','Не указан'],['candidate','Результат теста, проверить'],['working','Рабочий'],['confirmed','Подтверждён']];
   const profileFields = [
-    ['phone','Основной местный телефон','tel','+381…'],['secondPhone','Дополнительный телефон','tel','+7…'],
+    ['phone','Основной местный телефон','tel',''],['secondPhone','Дополнительный телефон','tel',''],
     ['email','Email','email',''],['telegram','Telegram','text','@…'],['instagram','Instagram','text','@…'],
     ['city','Основной город','text',''],['profession','Профессия','text','']
   ];
   function link(label,href,className='inline-link') {
     const a=el('a',label,className);a.href=href;return a;
   }
+  function profileEditor(data = {}) {
+    const element=el('div',null,'stack');
+    const controls={};
+    for(const [key,label,type,placeholder] of profileFields){
+      const control=input(type,key==='city'?normalizeClientCity(data[key]):data[key]||'',placeholder);
+      controls[key]=control;
+      if(type==='tel'){
+        const withPrefix=()=>{
+          const value='+'+control.value.trimStart().replace(/\+/g,'');
+          if(control.value!==value)control.value=value;
+        };
+        control.addEventListener('focus',withPrefix);
+        control.addEventListener('input',withPrefix);
+        control.addEventListener('blur',()=>{
+          if(control.value.trim()==='+')control.value='';
+        });
+      }
+      element.append(field(label,control));
+    }
+    const stored=data.birthday||'';
+    const day=input('number',stored.slice(-2)),month=input('number',stored.slice(-5,-3)),year=input('number',stored.length===10?stored.slice(0,4):'');
+    day.min=1;day.max=31;month.min=1;month.max=12;year.min=1900;year.max=Number(C.localDate().slice(0,4));
+    const dateFields=append(el('div',null,'profile-birthday'),field('День',day),field('Месяц',month),field('Год',year));
+    append(element,el('h3','День рождения'),dateFields);
+    return {
+      element,
+      requireFields(required){
+        for(const key of REQUIRED_PROFILE_FIELDS)controls[key].required=required;
+        day.required=month.required=required;
+      },
+      values(){
+        const hasDate=day.value||month.value||year.value;
+        if(hasDate&&(!day.value||!month.value))throw Error('Укажи день и месяц рождения');
+        if([day,month,year].some(control=>control.validity.badInput||control.validity.rangeOverflow
+          ||control.validity.rangeUnderflow||control.validity.stepMismatch))throw Error('Проверь дату рождения');
+        const birthday=hasDate?[year.value,month.value.padStart(2,'0'),day.value.padStart(2,'0')].filter(Boolean).join('-'):'';
+        return {...Object.fromEntries(Object.entries(controls).map(([key,control])=>[key,control.value])),birthday};
+      }
+    };
+  }
   function editProfile(c) {
     modal('О клиенте',form=>{
-      const entries=profileFields.map(([key,label,type,placeholder])=>[key,field(label,input(type,c.profile?.[key]||'',placeholder))]);
-      for (const [,entry] of entries) form.append(entry);
-      const stored=c.profile?.birthday||'';
-      const day=input('number',stored.slice(-2)),month=input('number',stored.slice(-5,-3)),year=input('number',stored.length===10?stored.slice(0,4):'');
-      day.min=1;day.max=31;month.min=1;month.max=12;year.min=1900;year.max=Number(C.localDate().slice(0,4));
-      append(form,el('h3','День рождения'),row(field('День',day),field('Месяц',month),field('Год · необязательно',year)));
+      const editor=profileEditor(c.profile);
+      const required=c.role==='Клиент';
+      editor.requireFields(required);
+      form.append(editor.element);
       return ()=>{
-        const date=[year.value,month.value,day.value].filter(Boolean);
-        if (date.length && (!day.value || !month.value || year.value && year.value.length!==4)) throw Error('Укажи день и месяц');
-        const pad=v=>v.padStart(2,'0');
-        const birthday=date.length ? (year.value?year.value+'-':'')+pad(month.value)+'-'+pad(day.value) : '';
-        return commit(s=>C.saveProfile(s,c.id,{...Object.fromEntries(entries.map(([key,f])=>[key,f.querySelector('input').value])),birthday}));
+        const values=editor.values();
+        return commit(s=>C.saveProfile(s,c.id,values,{required}));
       };
     });
   }
   function profile(c) {
     const data=c.profile||{};
     const items=profileFields.map(([key,label])=>{
-      const value=key==='telegram'&&c.telegram?.username?'@'+c.telegram.username:data[key]||(key==='telegram'?c.telegramHint:null);
+      const value=key==='city'?normalizeClientCity(data.city)
+        :key==='telegram'&&c.telegram?.username?'@'+c.telegram.username:data[key]||(key==='telegram'?c.telegramHint:null);
       if(!value)return null;
       const href=key==='phone'||key==='secondPhone'?'tel:'+value.replace(/[^+\d]/g,''):key==='email'?'mailto:'+value:null;
       return append(el('div',null,'detail-line'),text(label),href?link(value,href):el('div',value));
@@ -297,5 +333,5 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       append(el('div',null,'race-filter-box'),quick,append(el('div',null,'race-filter-head'),secondary,yearMenu)),view,list);
     setView();refresh();return page;
   }
-  return {profile,training,telegramOptions,goals,races};
+  return {profile,profileEditor,training,telegramOptions,goals,races};
 }

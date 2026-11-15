@@ -60,6 +60,34 @@ test('birthday greeting uses the Telegram handle and completing it dismisses onl
   assert.equal(birthdayReminders(restored,'2027-11-14').length,1);
 });
 
+test('new client contacts require a valid birthday without a year and preserve optional fields',()=>{
+  const state=C.emptyState();
+  const profile={phone:'+381 64 123 4567',secondPhone:'+',email:'coach@example.test',
+    city:'Beograd',profession:'Инженер',birthday:'02-29'};
+  for(const [field,value,error] of [
+    ['phone','+',/основной местный телефон/],
+    ['secondPhone','+381',/дополнительный телефон/],
+    ['email','',/email/],
+    ['city',' ',/основной город/],
+    ['profession',' ',/профессию/],
+    ['birthday','',/день и месяц/],
+    ['birthday','2025-02-29',/дату рождения/]
+  ]){
+    assert.throws(()=>C.createClient(state,{name:'Тестовый Клиент',profile:{...profile,[field]:value}}),error);
+  }
+  assert.deepEqual(state.clients,{});
+  assert.deepEqual(state.events,[]);
+  const client=C.createClient(state,{name:'Тестовый Клиент',profile});
+  const {secondPhone,...expected}=profile;
+  assert.deepEqual(client.profile,{...expected,city:'Белград'});
+  C.saveProfile(state,client.id,{...profile,city:' БЕОГРАД '},{required:true});
+  assert.equal(client.profile.city,'Белград');
+  C.saveProfile(state,client.id,{...profile,city:'  BELGRADE ',secondPhone:'+7 999 123 4567',birthday:'2000-02-29'},{required:true});
+  assert.equal(client.profile.city,'Белград');
+  assert.equal(client.profile.secondPhone,'+7 999 123 4567');
+  assert.equal(client.profile.birthday,'2000-02-29');
+});
+
 test('race editions persist through backup and cloud without counting proposals or duplicate goals',()=>{
   const state=C.emptyState();
   const c=C.createClient(state,{name:'Тестовый Клиент'});

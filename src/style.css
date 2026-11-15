@@ -192,6 +192,7 @@ button.feature-add{background:var(--soft);border-color:var(--line);font-size:14p
 dialog{width:min(560px,calc(100% - 28px));max-height:85vh;max-height:85dvh;overflow:auto;padding:22px;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:16px}
 dialog::backdrop{background:#0007}
 dialog form{display:grid;gap:16px}
+.profile-birthday{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 progress{width:100%;height:12px;accent-color:var(--ink)}
 [hidden]{display:none!important}
 .record-result{padding:12px;background:var(--soft);border-radius:10px}

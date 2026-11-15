@@ -18,16 +18,41 @@ export function birthdayValid(birthday) {
     || /^\d{4}-\d{2}-\d{2}$/.test(birthday) && validDate(birthday);
 }
 
-export function setProfile(client, values) {
+export const REQUIRED_PROFILE_FIELDS = new Set(['phone', 'email', 'city', 'profession']);
+
+export function normalizeClientCity(value) {
+  const city = String(value || '').trim().replace(/\s+/g, ' ').normalize('NFC');
+  return /^(?:белград|београд|beograd|belgrade?)$/iu.test(city) ? 'Белград' : city;
+}
+
+export function setProfile(client, values, { required = false } = {}) {
   const data = {};
   for (const [key,max] of Object.entries({ phone:40, secondPhone:40, email:180, telegram:40, instagram:80, city:120, profession:160, birthday:10 })) {
-    const value = String(values[key] || '').trim();
+    const value = key === 'city' ? normalizeClientCity(values[key]) : String(values[key] || '').trim();
     if (!optional(value,max)) throw Error('Слишком длинное значение');
     if (value) data[key] = value;
   }
-  if (!birthdayValid(data.birthday)) throw Error('Проверь дату рождения');
-  for (const number of [data.phone,data.secondPhone]) if (number && !/^\+[1-9][0-9 ()-]{5,29}$/.test(number)) throw Error('Укажи телефон с кодом страны, например +381');
+  for (const [key,label] of [['phone','основной местный телефон'],['secondPhone','дополнительный телефон']]) {
+    const number = data[key];
+    if (!number || number === '+') {
+      delete data[key];
+      continue;
+    }
+    if (!/^\+[1-9][\d ()-]*$/.test(number) || !/^\+[1-9]\d{5,14}$/.test(number.replace(/[ ()-]/g,''))) {
+      throw Error('Укажи ' + label + ' с кодом страны, например +381');
+    }
+  }
+  if (required) {
+    if (!data.phone) throw Error('Укажи основной местный телефон');
+    if (!data.email) throw Error('Укажи email');
+    if (!data.city) throw Error('Укажи основной город');
+    if (!data.profession) throw Error('Укажи профессию');
+    if (!data.birthday) throw Error('Укажи день и месяц рождения');
+  }
   if (data.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) throw Error('Проверь email');
+  if (!birthdayValid(data.birthday) || data.birthday?.length === 10 && (data.birthday < '1900-01-01' || data.birthday > localDate())) {
+    throw Error('Проверь дату рождения');
+  }
   client.profile = data;
 }
 

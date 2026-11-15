@@ -82,6 +82,7 @@ export function createClient(s,values,day=localDate()){
   const name=String(values.name||'').trim();if(!name||name.length>180)throw Error('Введи имя клиента');
   ensureUniqueName(s,name);
   const client={id:id('client'),aliases:[],role:'Клиент',status:'Активный',format:'Уточнить',currentFormat:null,group:'Уточнить',personal:'unknown',basis:'Сейчас плана нет',level:'Обычное',features:[],rules:[],camps:[],zones:null,telegram:null,lastContact:null,context:'',...values,name};
+  if(values.profile) setProfile(client,values.profile,{required:client.role==='Клиент'});
   s.clients[client.id]=client;event(s,'client-created',client.id,client.id);recordMovement(s,client,null,day);return client;
 }
 export function editClient(s,clientId,values,day=localDate()){
@@ -98,8 +99,8 @@ function ensureUniqueName(s,name,except) {
     throw Error('Карточка с таким именем уже есть. Проверь другие категории, включая архив.');
   }
 }
-export function saveProfile(s,clientId,values){
-  setProfile(s.clients[clientId],values);
+export function saveProfile(s,clientId,values,options){
+  setProfile(s.clients[clientId],values,options);
   event(s,'profile-edited',clientId,clientId);
 }
 export function saveTraining(s,clientId,values){

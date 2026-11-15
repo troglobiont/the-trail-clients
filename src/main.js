@@ -175,12 +175,15 @@ function editClient(clientId=null) {
     const fold=section('Классификация',(c?.id||'new')+'-classification',[classification]);
     if(!c)fold.open=true;
     form.append(fold);
+    const profileEditor = c ? null : detailsUI.profileEditor();
+    if(profileEditor) append(form,el('h3','О клиенте'),profileEditor.element);
     const actualStatus = () => status.value === 'occasional' ? 'Активный' : status.value;
     const syncFields = () => {
       const isClient = role.value === 'Клиент';
       statusField.hidden = !isClient;
       pauseFields.hidden = !isClient || status.value !== 'На паузе';
       effective.hidden = !isClient || c?.role === 'Клиент' && actualStatus() === c.status;
+      profileEditor?.requireFields(isClient);
     };
     role.addEventListener('change',syncFields);
     status.addEventListener('change',syncFields);
@@ -195,6 +198,7 @@ function editClient(clientId=null) {
         pause:!pauseFields.hidden ? {kind:pauseType.value,returnWindow:returnWindow.value.trim(),contactOn:contactOn.value || null} : null
       };
       if (!values.name) throw Error('Введи имя');
+      if (profileEditor) values.profile = profileEditor.values();
       return commit(s=>c ? C.editClient(s,c.id,values,date.value) : C.createClient(s,values,date.value));
     };
   });
