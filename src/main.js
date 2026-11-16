@@ -3,7 +3,7 @@ import { assistantKind, mentionsCompletedSession, suggestAssistantClients } from
 import { CURRENCIES, PACKAGES, activeService, amountMinor, clientServices, matchingTariffClients, serviceBalance } from './accounting.js';
 import {createStore,browserAdapter} from './store.js';
 import {createUpdater} from './updates.js';
-import {parseConnection} from './connection.js';
+import {currentServiceOrigin,parseConnection} from './connection.js';
 import {createRecipientSearch} from './telegram-picker.js';
 import {microphoneAccess,microphoneState} from './microphone.js';
 import {createAccountingUI} from './accounting-ui.js';
@@ -840,7 +840,7 @@ async function previewAssistantRecord(client,kind,value){
     };
   });
 }
-async function service(path,body){const base=state().settings.serviceURL;if(!base)throw Error('Подключи сервис в настройках');const address=new URL(path,base);if(address.protocol!=='https:')throw Error('Нужен HTTPS-адрес сервиса');if(window.TrailNative?.native){const res=await window.TrailNative.request(address.href,'POST',body);return JSON.parse(res.body);}throw Error('Подключение сервиса доступно в установленном Android-приложении');}
+async function service(path,body){const base=currentServiceOrigin(state().settings.serviceURL);if(!base)throw Error('Подключи сервис в настройках');const address=new URL(path,base);if(address.protocol!=='https:')throw Error('Нужен HTTPS-адрес сервиса');if(window.TrailNative?.native){const res=await window.TrailNative.request(address.href,'POST',body);return JSON.parse(res.body);}throw Error('Подключение сервиса доступно в установленном Android-приложении');}
 async function recordVoice(clientId){
   if(ui.recorder){
     if(ui.recordingClientId!==clientId)throw Error('Сначала останови запись в карточке другого клиента');
@@ -1128,7 +1128,7 @@ function renderSettings(){
     button('Сохранить',()=>commit(s=>{
       const n=Number(wait.value);if(!Number.isInteger(n)||n<1||n>30)throw Error('Укажи от 1 до 30 дней');s.settings.waitDays=n;
     })),text('Интервалы уже созданных задач сохраняются.'));
-  const services=el('div',null,'stack'),url=input('url',state().settings.serviceURL||'','https://…'),token=input('password','','Новый ключ сервиса');
+  const services=el('div',null,'stack'),url=input('url',currentServiceOrigin(state().settings.serviceURL)||'','https://…'),token=input('password','','Новый ключ сервиса');
   token.autocomplete='off';
   const agentEnabled=input('checkbox');agentEnabled.checked=!!state().settings.agentEnabled;
   append(services,field('Адрес твоего сервиса',url),field('Ключ доступа · оставить пустым, чтобы сохранить прежний',token),
@@ -1139,9 +1139,9 @@ function renderSettings(){
       if(url.value.trim()){
         const parsed=new URL(url.value.trim());
         if(parsed.protocol!=='https:'||parsed.username||parsed.password||parsed.search||parsed.hash)throw Error('Укажи HTTPS-адрес без ключей в ссылке');
-        base=parsed.origin;
+        base=currentServiceOrigin(parsed.origin);
       }
-      if(base!==(state().settings.serviceURL||''))await window.TrailNative.setSecret('serviceToken','');
+      if(base!==(currentServiceOrigin(state().settings.serviceURL)||''))await window.TrailNative.setSecret('serviceToken','');
       await commit(s=>{s.settings.serviceURL=base;s.settings.agentEnabled=agentEnabled.checked;});
       if(token.value)await window.TrailNative.setSecret('serviceToken',token.value.trim());
       message('Настройки подключения сохранены');
@@ -1185,5 +1185,15 @@ function render(){
   else if(hash==='#settings'){root.append(renderSettings());renderUpdate();renderCloudPanel();}
   else root.append(renderTodo());
 }
-async function start(){try{store=await createStore(window.TrailNative?.native?window.TrailNative.adapter:browserAdapter());applyAppearance();ui.drafts=C.clone(state().settings.drafts||{});if(window.TrailNative?.native){try{ui.pendingVoice=await window.TrailNative.loadVoice();}catch{message('Голосовой черновик не удалось прочитать. База клиентов доступна.',true);}}updater=createUpdater({version:VERSION,bridge:window.TrailNative,flush:async()=>{await saveDrafts();await store.flush();},onChange:u=>{renderUpdate();const link=document.querySelector('.gear-link');if(link){link.classList.toggle('has-update',u.status==='available');link.setAttribute('aria-label',u.status==='available'?'Настройки · доступно обновление':'Настройки');}}});if(!location.hash)history.replaceState(null,'','#todo');window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});await refreshMicrophonePermission();render();document.getElementById('save-status').textContent='На устройстве';await window.TrailNative?.ready();startCloud();if(window.TrailNative?.native)setTimeout(()=>updater.check(),1500);}catch(e){root.textContent='';append(root,el('h1','Не удалось открыть базу'),text(e.message,'danger-text'),text('Не удаляй приложение: данные могут оставаться на устройстве.'),button('Повторить',()=>location.reload()));}}
+async function migrateSavedServiceOrigin() {
+  const saved=state().settings.serviceURL;
+  const current=currentServiceOrigin(saved);
+  if(current===saved)return;
+  try {
+    await store.mutate(s=>{s.settings.serviceURL=current;});
+  } catch {
+    message('Используется новый адрес сервиса. Сохранить его на устройстве пока не удалось.',true);
+  }
+}
+async function start(){try{store=await createStore(window.TrailNative?.native?window.TrailNative.adapter:browserAdapter());if(window.TrailNative?.native)await migrateSavedServiceOrigin();applyAppearance();ui.drafts=C.clone(state().settings.drafts||{});if(window.TrailNative?.native){try{ui.pendingVoice=await window.TrailNative.loadVoice();}catch{message('Голосовой черновик не удалось прочитать. База клиентов доступна.',true);}}updater=createUpdater({version:VERSION,bridge:window.TrailNative,flush:async()=>{await saveDrafts();await store.flush();},onChange:u=>{renderUpdate();const link=document.querySelector('.gear-link');if(link){link.classList.toggle('has-update',u.status==='available');link.setAttribute('aria-label',u.status==='available'?'Настройки · доступно обновление':'Настройки');}}});if(!location.hash)history.replaceState(null,'','#todo');window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});await refreshMicrophonePermission();render();document.getElementById('save-status').textContent='На устройстве';await window.TrailNative?.ready();startCloud();if(window.TrailNative?.native)setTimeout(()=>updater.check(),1500);}catch(e){root.textContent='';append(root,el('h1','Не удалось открыть базу'),text(e.message,'danger-text'),text('Не удаляй приложение: данные могут оставаться на устройстве.'),button('Повторить',()=>location.reload()));}}
 start();
