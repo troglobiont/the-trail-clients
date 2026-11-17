@@ -120,7 +120,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     if (!options.length) return noService(clientId);
     const title = scheduled ? 'Тренировка состоялась' : selection?.label ?? 'Быстрая оплата';
     let confirmation;
-    modal(title, form => {
+    modal(title, (form, setSaveEnabled) => {
       const details = el('div',null,'stack');
       let selected = options[0];
       let selectedDate = scheduled?.date || selection?.date || today();
@@ -143,13 +143,16 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         const paid = input('checkbox');
         const separate = input('checkbox');
         const alreadyRecorded = scheduled && A.hasManualSession(state(),service.id,scheduled.date);
-        const sessionField = append(el('label',null,'checkbox'),recordSession,el('span','Записать занятие'));
+        const sessionField = append(el('label',null,'checkbox'),recordSession,el('span','Занятие проведено'));
         const paidField = append(el('label',null,'checkbox'),paid,el('span','Оплата получена'));
         const receivedField = field('Получено, ' + service.currency,received);
         const dateLabel = el('span');
         const placeField = field('Место',place);
         const rateField = field('Стоимость занятия, ' + service.currency,rate);
         const note = text('');
+        const changes = append(el('details',null,'fold'),el('summary','Дата и детали'),
+          append(el('div',null,'stack fold-body'),append(el('label'),dateLabel,date),
+            canRecordSession && placeField,canRecordSession && rateField));
         const advanced = button('Другая валюта или распределение',()=>{
           const suggested = received.value.trim() ? A.amountMinor(received.value) : undefined;
           editPayment({clientId,serviceId:service.id,period:period.value,suggested,fromAccount,paymentDate:date.value,
@@ -157,22 +160,25 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         },'subtle');
         const recalc = () => {
           const session = recordSession.checked;
-          paidField.hidden = !session;
-          receivedField.hidden = session && !paid.checked;
+          const payment = !canRecordSession || paid.checked;
+          setSaveEnabled(session || payment);
+          receivedField.hidden = !payment;
           if (receivedOnField) receivedOnField.hidden = !paid.checked || selectedDate === today();
-          dateLabel.textContent = session ? 'Дата занятия' : 'Дата получения';
-          placeField.hidden = rateField.hidden = advanced.hidden = session;
+          dateLabel.textContent = session ? payment ? 'Дата занятия и оплаты' : 'Дата занятия' : 'Дата получения';
+          placeField.hidden = rateField.hidden = !session;
+          advanced.hidden = !payment || session;
+          changes.hidden = !session && !payment;
           note.textContent = '';
           if (session) {
-            received.value = rate.value;
+            if (!received.dataset.edited) received.value = rate.value;
             const {balance} = A.serviceBalance(state(),service.id);
             if (scheduled) {
               const covered = Math.min(service.rate,Math.max(0,balance));
               const value = amount => A.money(amount,service.currency);
-              if (!paid.checked) note.textContent = covered === service.rate
+              if (!payment) note.textContent = covered === service.rate
                 ? 'Из аванса '+value(covered)+' · останется '+value(balance-covered)
                 : [covered && 'Из аванса '+value(covered),'К оплате '+value(service.rate-covered)].filter(Boolean).join(' · ');
-            } else if (!paid.checked && balance > 0) note.textContent = 'Занятие будет учтено в остатке аванса';
+            } else if (!payment && balance > 0) note.textContent = 'Занятие будет учтено в остатке аванса';
           } else if (monthly) {
             const charge = A.monthlyCharge(state(),service,period.value);
             const remaining = charge?.remaining ?? service.rate;
@@ -183,21 +189,18 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
               .some(entry => entry.block === service.block && ['review','shared'].includes(entry.kind))) {
               note.textContent = 'Есть запись из бухгалтерии для сверки';
             }
-          } else {
+          } else if (!received.dataset.edited) {
             const {balance} = A.serviceBalance(state(),service.id);
             received.value = String((balance < 0 ? -balance : service.rate)/100);
           }
         };
         period.addEventListener('change',recalc);
-        recordSession.addEventListener('change',()=>{delete received.dataset.edited;recalc();});
+        recordSession.addEventListener('change',recalc);
         paid.addEventListener('change',recalc);
-        rate.addEventListener('input',() => { if (!received.dataset.edited) recalc(); });
+        rate.addEventListener('input',recalc);
         received.addEventListener('input',()=>{received.dataset.edited='true';});
         recalc();
         if (providedAmount != null) received.value = String(providedAmount/100);
-        const changes = append(el('details',null,'fold'),el('summary','Дата и детали'),
-          append(el('div',null,'stack fold-body'),append(el('label'),dateLabel,date),
-            canRecordSession && placeField,canRecordSession && rateField));
         details.replaceChildren(...[
           selection && text(serviceCaption(service)),
           scheduled && text([formatDate(scheduled.date),A.money(service.rate,service.currency)].join(' · ')),
@@ -209,7 +212,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         save = async () => {
           const actualDate = recordedDate(date);
           const session = recordSession.checked;
-          const payment = !session || paid.checked;
+          const payment = !canRecordSession || paid.checked;
+          if (!session && !payment) throw Error('Отметь занятие или оплату');
           const amount = payment && A.amountMinor(received.value);
           const saved = await commit(s => {
             if (scheduled) return A.recordCalendarSession(s,{...scheduled,clientId,serviceId:service.id,
