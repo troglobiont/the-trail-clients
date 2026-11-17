@@ -229,12 +229,21 @@ function renderCatalog(scope) {
   const search = input('search',ui.filters.query,'Поиск (фамилия имя)');
   search.setAttribute('aria-label','Поиск (фамилия имя)');
   search.maxLength = 100;
-  search.addEventListener('input',()=>{
+  const clear = button('×',()=>{
+    search.value = '';
+    updateSearch();
+  },'catalog-search-clear');
+  clear.setAttribute('aria-label','Очистить поиск');
+  clear.hidden = !search.value;
+  function updateSearch(){
+    clear.hidden = !search.value;
     ui.filters.query = search.value;
     ui.catalogLimit = CATALOG_PAGE_SIZE;
     renderCatalogResults();
-  });
-  page.append(scope === 'active' ? activeCatalogFilters(search) : search);
+  }
+  search.addEventListener('input',updateSearch);
+  const searchField = append(el('div',null,'catalog-search'),search,clear);
+  page.append(scope === 'active' ? activeCatalogFilters(searchField) : searchField);
   if (scope === 'paused') page.append(pauseFilters());
   const list = el('div',null,'client-directory');
   list.id = 'client-tiles';
@@ -279,7 +288,7 @@ function pauseFilters() {
   return filters;
 }
 
-function activeCatalogFilters(search) {
+function activeCatalogFilters(searchField) {
   const quick = el('div',null,'row catalog-quick catalog-shortcuts');
   quick.setAttribute('role','group');
   quick.setAttribute('aria-label','Быстрые фильтры');
@@ -349,7 +358,7 @@ function activeCatalogFilters(search) {
       render();
     },'subtle')
   );
-  return append(el('div',null,'stack catalog-options'),search,quick,section('Фильтры','catalog-filters',[advanced]));
+  return append(el('div',null,'stack catalog-options'),searchField,quick,section('Фильтры','catalog-filters',[advanced]));
 }
 
 function filterControl(key,label,values) {

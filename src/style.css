@@ -133,6 +133,10 @@ button.catalog-section-link{display:grid;grid-template-columns:1fr auto auto;ali
 .checkbox input{width:21px;height:21px;flex-shrink:0;margin:1px 0 0;accent-color:var(--ink)}
 label{display:grid;gap:5px;font-size:14px;font-weight:500;color:var(--muted)}
 input:not([type=checkbox]):not([type=radio]),textarea,select{width:100%;min-width:0;padding:10px 12px;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:10px;font-size:16px;min-height:46px}
+.catalog-search{position:relative;min-width:0}
+.catalog-search input[type=search]{padding-inline-end:48px}
+.catalog-search input::-webkit-search-cancel-button{display:none;-webkit-appearance:none}
+.catalog-search-clear{position:absolute;inset-block:1px;inset-inline-end:1px;width:44px;padding:0;color:var(--muted);font-size:22px;line-height:1}
 textarea{resize:vertical;min-height:110px}
 textarea::placeholder,input::placeholder{color:var(--muted)}
 details>summary{cursor:pointer;min-height:48px;padding:12px 0;font-size:15px;font-weight:500;line-height:1.5;color:var(--muted)}
