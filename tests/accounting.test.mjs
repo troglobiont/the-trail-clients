@@ -170,6 +170,32 @@ test('an agreed receipt in another currency settles a month or a range without c
   assert.equal(A.currentPaymentStatuses(state,'2024-11-17').get(group.id).nextDue,'2025-03-24');
 });
 
+test('client history merges old receipts with actual operations and replaces an undated coverage marker', () => {
+  const state = emptyState();
+  const client = createClient(state,{name:'Клиент'},'2024-10-01');
+  const group = enrollment(state,client,{startsOn:'2024-11-12',billingFrom:'2024-12',coveredThrough:'2024-11'});
+  const october = { kind:'payment',block:'belgrade',owners:[client.id],date:'2024-10-03',month:'2024-10',values:{RSD:800000} };
+  state.ledger = {rows:[october,{...october,kind:'repeat'},
+    {...october,kind:'review',date:'2024-11-04',month:'2024-11'}]};
+  const day = '2024-11-17';
+  const history = () => A.clientAccountHistory(state,client.id,day);
+  assert.deepEqual(history().map(item=>item.type),['coverage','ledger']);
+  assert.equal(history()[1].row.date,'2024-10-03');
+  assert.equal(A.monthlyCharge(state,group,'2024-11',day).coverageOnly,true);
+  assert.deepEqual(A.combinedSummary(state,'2024-11').receipts,{});
+  const values = {serviceId:group.id,firstMonth:'2024-11',part:800000,recordCovered:true};
+  const allocations = A.settleMonths(state,values,undefined,day);
+  const november = payment(state,'2024-11-01','RUB',800000,allocations);
+  assert.deepEqual(history().map(item=>item.type),['operation','ledger']);
+  assert.equal(history()[0].operation.id,november.id);
+  assert.deepEqual(A.combinedSummary(state,'2024-11').receipts,{RUB:800000});
+  assert.throws(()=>A.settleMonths(state,values,undefined,day),/уже записана полная оплата/);
+  state.ledger.rows.push({...october,date:'2024-11-01',month:'2024-11',values:{RUB:800000}});
+  assert.equal(history().length,2);
+  A.setVoided(state,november.id,true);
+  assert.deepEqual(history().map(item=>item.type),['coverage','operation','ledger','ledger']);
+});
+
 test('pauses stay distinct from endings and suppress charges due during a recorded pause', () => {
   const state = emptyState();
   const client = createClient(state, { name: 'Клиент' }, '2024-10-01');

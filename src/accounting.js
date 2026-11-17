@@ -308,6 +308,10 @@ function receiptKey(owners,date,currency,amount) {
   return date && owners.length ? JSON.stringify([[...new Set(owners)].sort(),date,currency,amount]) : null;
 }
 
+const operationReceiptKey = (services, operation) => receiptKey(
+  operation.allocations.map(item => services[item.serviceId].clientId),
+  operation.date,operation.currency,operation.amount);
+
 export function combinedSummary(state, month) {
   const result = summarize(state,month), book = accounting(state);
   result.imported = { receipts:0, expenses:0, sessionRows:0, skippedDuplicates:0, review:0 };
@@ -322,8 +326,7 @@ export function combinedSummary(state, month) {
   }
   for (const operation of operations(state,{month})) {
     if (operation.kind !== 'payment') continue;
-    const owners = operation.allocations.map(item => book.services[item.serviceId].clientId);
-    const key = receiptKey(owners,operation.date,operation.currency,operation.amount);
+    const key = operationReceiptKey(book.services,operation);
     nativeByKey.set(key,(nativeByKey.get(key)||0)+1);
   }
   for (const row of state.ledger?.rows || []) {
@@ -408,7 +411,7 @@ function monthlyCredits(state, today, replacedId) {
     for (const item of o.id === replacedId ? [] : o.allocations) {
       if (item.month) add(item.serviceId, item.month, item.credit, o.date);
     }
-    receipts.add(receiptKey(o.allocations.map(item => book.services[item.serviceId].clientId),o.date,o.currency,o.amount));
+    receipts.add(operationReceiptKey(book.services,o));
   }
   const recurring = new Map();
   for (const service of Object.values(book.services)) {
@@ -436,13 +439,15 @@ function monthlyCredits(state, today, replacedId) {
   return credits;
 }
 
-function chargeFor(credits, service, month, settle = false) {
+function chargeFor(credits, service, month, { settle = false, recordCovered = false } = {}) {
   if (!validMonth(month) || service.kind === 'personal') return null;
   const due = dueDate(service, month);
   if (month < service.startsOn.slice(0, 7) || (service.endsOn && due > service.endsOn)) return null;
   const payment = credits.get(`${service.id}/${month}`);
-  if ((service.coveredThrough && month <= service.coveredThrough) || payment?.amount >= service.rate) {
-    return { due, remaining:0, lastPaidOn:payment?.lastPaidOn };
+  const covered = Boolean(service.coveredThrough && month <= service.coveredThrough);
+  const received = (payment?.amount ?? 0) >= service.rate;
+  if ((!recordCovered && covered) || received) {
+    return { due, remaining:0, lastPaidOn:payment?.lastPaidOn, coverageOnly:!received };
   }
   if (!settle && service.billingFrom && month < service.billingFrom) return null;
   return { due, remaining:service.rate - (payment?.amount ?? 0), lastPaidOn:payment?.lastPaidOn };
@@ -452,21 +457,24 @@ export function monthlyCharge(state, service, month, today = localDate()) {
   return chargeFor(monthlyCredits(state, today), service, month);
 }
 
-export function settleMonths(state, { serviceId, firstMonth, lastMonth = firstMonth, part }, replacedId, today = localDate()) {
+export function settleMonths(state, { serviceId, firstMonth, lastMonth = firstMonth, part, recordCovered = false }, replacedId, today = localDate()) {
   const service = accounting(state).services[serviceId];
   if (!service || service.kind === 'personal') throw Error('Выбери месячный тариф');
   if (!validMonth(firstMonth) || !validMonth(lastMonth) || firstMonth > lastMonth) throw Error('Проверь месяцы оплаты');
   if (!validMoney(part)) throw Error('Проверь сумму поступления');
+  if (recordCovered && (lastMonth !== firstMonth || !(firstMonth <= service.coveredThrough))) {
+    throw Error('Выбери закрытый месяц, за который поступили деньги');
+  }
   const credits = monthlyCredits(state,today,replacedId);
   const open = [];
   for (let month = firstMonth, count = 0; ; month = nextMonth(month)) {
     if (++count > 120) throw Error('Слишком много месяцев в одной оплате');
-    const charge = chargeFor(credits,service,month,true);
+    const charge = chargeFor(credits,service,month,{settle:true,recordCovered});
     if (!charge) throw Error('Выбранный месяц вне срока действия тарифа');
     if (charge.remaining > 0) open.push({ serviceId, month, credit:charge.remaining });
     if (month === lastMonth) break;
   }
-  if (!open.length) throw Error('Выбранный период уже оплачен');
+  if (!open.length) throw Error(recordCovered ? 'За этот месяц уже записана полная оплата' : 'Выбранный период уже оплачен');
   const totalCredit = open.reduce((total, item) => total + BigInt(item.credit),0n);
   let apportioned = 0;
   let creditSoFar = 0n;
@@ -478,6 +486,44 @@ export function settleMonths(state, { serviceId, firstMonth, lastMonth = firstMo
     apportioned = upto;
     return { ...item, part:share };
   });
+}
+
+export function clientAccountHistory(state, clientId, today = localDate()) {
+  const services = accounting(state).services;
+  const recorded = operations(state,{clientId,includeVoided:true});
+  const history = recorded.map(operation => ({ type:'operation', date:operation.date, operation }));
+  const nativeReceipts = new Map();
+  for (const operation of recorded) {
+    if (operation.kind !== 'payment' || operation.voided) continue;
+    const key = operationReceiptKey(services,operation);
+    nativeReceipts.set(key,(nativeReceipts.get(key) ?? 0) + 1);
+  }
+  const imports = (state.ledger?.rows || []).filter(row => row.owners.includes(clientId) && ['payment','shared','session'].includes(row.kind));
+  const importedReceipts = new Map();
+  for (const row of imports) {
+    if (row.kind === 'session') continue;
+    for (const [currency,amount] of Object.entries(row.values)) {
+      const key = receiptKey(row.owners,row.date,currency,amount);
+      if (key && amount > 0) importedReceipts.set(key,(importedReceipts.get(key) ?? 0) + 1);
+    }
+  }
+  for (const row of imports) {
+    const values = row.kind === 'session' ? row.values : Object.fromEntries(Object.entries(row.values).filter(([currency,amount]) => {
+      const key = receiptKey(row.owners,row.date,currency,amount);
+      return amount > 0 && !(nativeReceipts.get(key) === 1 && importedReceipts.get(key) === 1);
+    }));
+    if (!Object.keys(values).length && row.kind !== 'session') continue;
+    history.push({ type:'ledger',date:row.date || row.month+'-31',row:{...row,values} });
+  }
+  const credits = monthlyCredits(state,today);
+  for (const service of clientServices(state,clientId)) {
+    const through = service.coveredThrough;
+    if (!through || (credits.get(`${service.id}/${through}`)?.amount ?? 0) >= service.rate) continue;
+    const period = today.slice(0,7);
+    history.push({ type:'coverage',date:through < period ? through+'-31' : today,service });
+  }
+  // Inferred coverage has no receipt date. Order it by period without showing an invented date.
+  return history.sort((a,b) => b.date.localeCompare(a.date) || Number(a.type === 'coverage') - Number(b.type === 'coverage'));
 }
 
 export function paymentTiming(due, today) {

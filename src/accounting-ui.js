@@ -150,7 +150,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
             const charge = A.monthlyCharge(state(), service, period.value);
             const remaining = charge?.remaining ?? service.rate;
             received.value = remaining ? String(remaining / 100) : '';
-            if (charge && !charge.remaining) note.textContent = 'Этот месяц уже оплачен';
+            if (charge && !charge.remaining) note.textContent = charge.coverageOnly
+              ? 'Месяц закрыт. Здесь можно записать полученные деньги.' : 'Этот месяц уже оплачен';
             else if (ledgerRows(state(),{clientId:service.clientId,period:period.value})
               .some(entry => entry.block === service.block && ['review','shared'].includes(entry.kind))) {
               note.textContent = 'Есть запись из бухгалтерии для сверки';
@@ -357,7 +358,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         sync();
       });
       sync();
-      append(form, field('Пакет', kind), field('Действует с', starts), tariffFields);
+      append(form, field('Пакет', kind), field('Действует с', starts), tariffFields, existing?.note && text(existing.note));
       return async () => {
         if (resume && !kind.value) return commit(s => activateClient(s, clientId, starts.value));
         const personal = kind.value === 'personal';
@@ -458,9 +459,11 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           const service = findService(item.service.value);
           const foreign = differentCurrency(service);
           const closeMonths = closesMonths(item,service);
+          const covered = closeMonths && A.monthlyCharge(state(),service,item.paidMonth.value)?.coverageOnly;
           item.periodField.hidden = !service || !isMonthly(service);
           item.settlementField.hidden = !foreign || !isMonthly(service);
-          item.lastMonthField.hidden = !closeMonths;
+          item.settlement.options[0].textContent = covered ? 'Записать поступление за закрытый месяц' : 'Закрыть месяц полностью';
+          item.lastMonthField.hidden = !closeMonths || covered;
           item.creditField.hidden = !foreign || closeMonths;
           item.creditError.hidden = item.creditField.hidden || !item.creditError.textContent;
           if (service) item.creditLabel.textContent = `Сколько покрывает платёж, ${service.currency}`;
@@ -498,6 +501,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           sync();
         });
         settlement.addEventListener('change',sync);
+        paidMonth.addEventListener('change',sync);
         credit.addEventListener('input',()=>{
           credit.removeAttribute('aria-invalid');
           creditError.textContent = '';
@@ -522,7 +526,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           const part = allocations.length === 1 ? full : A.amountMinor(item.part.value);
           const paidMonth = isMonthly(service) ? item.paidMonth.value : null;
           if (closesMonths(item,service)) {
-            return { serviceId:service.id, firstMonth:paidMonth,lastMonth:item.lastMonth.value || paidMonth,part };
+            const recordCovered = Boolean(A.monthlyCharge(state(),service,paidMonth)?.coverageOnly);
+            return { serviceId:service.id,firstMonth:paidMonth,lastMonth:recordCovered ? paidMonth : item.lastMonth.value || paidMonth,part,recordCovered };
           }
           let credit = part;
           if (differentCurrency(service)) {
@@ -620,7 +625,22 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     }
     const items = operation.allocations.filter(item => !clientId || findService(item.serviceId).clientId === clientId);
     const names = [...new Set(items.map(item => clientName(findService(item.serviceId).clientId)))];
-    const details = items.map(item => serviceTitle(findService(item.serviceId)) + (item.month ? ' · ' + monthLabel(item.month) : ' · аванс или оплата занятия'));
+    const byService = new Map();
+    for (const item of items) {
+      if (!byService.has(item.serviceId)) byService.set(item.serviceId,[]);
+      byService.get(item.serviceId).push(item.month);
+    }
+    const details = [...byService].map(([serviceId,periods]) => {
+      if (!periods[0]) return serviceTitle(findService(serviceId)) + ' · аванс или оплата занятия';
+      const ranges = [];
+      for (const period of periods.sort()) {
+        const last = ranges[ranges.length-1];
+        if (last && A.nextMonth(last[1]) === period) last[1] = period;
+        else ranges.push([period,period]);
+      }
+      const included = ranges.map(([first,last]) => first === last ? monthLabel(first) : monthLabel(first) + ' — ' + monthLabel(last));
+      return serviceTitle(findService(serviceId)) + ' · ' + included.join(', ');
+    });
     const label = clientId ? 'Оплата' : names.join(', ');
     const value = items.reduce((sum, item) => sum + item.part, 0);
     return line(label, `${status}${formatDate(date)} · ${details.join(' / ')}${note ? ' · ' + note : ''}`, A.money(value, currency), () => editPayment({ existing: operation, fromAccount: !clientId }));
@@ -656,12 +676,11 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       ...Object.entries(labels).map(([block, label]) => line(label, '', totals(source.blocks[block] || {}))));
   }
 
-  function sourceLine(entry, clientId) {
+  function sourceLine(entry) {
     const labels = { payment: 'Оплата по таблице', shared: 'Общий платёж семьи', review: 'Нужно сверить', repeat: 'Повтор строки', session: 'Персональные занятия', expense: 'Расход' };
     const information = [entry.date ? formatDate(entry.date) : '', labels[entry.kind], entry.detail].filter(Boolean).join(' · ');
-    const title = clientId ? monthLabel(entry.month) : entry.name;
-    const owner = !clientId && entry.owners.length === 1 ? entry.owners[0] : null;
-    return line(title, information, totals(entry.values), owner ? () => openClient(owner) : null);
+    const owner = entry.owners.length === 1 ? entry.owners[0] : null;
+    return line(entry.name, information, totals(entry.values), owner ? () => openClient(owner) : null);
   }
 
   function sourceOperations() {
@@ -671,16 +690,6 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const group = entries.filter(entry => entry.block === block);
       return group.length && section(`${label} · ${group.length}`, `ledger-${month}-${block}`, group.map(entry => sourceLine(entry)));
     }));
-  }
-
-  function lastPayment(clientId, imported, history) {
-    const archive = imported.filter(entry => entry.kind === 'payment' && entry.date).sort((a,b) => b.date.localeCompare(a.date))[0];
-    const manual = history.find(entry => entry.kind === 'payment' && !entry.voided);
-    if (manual && (!archive || manual.date >= archive.date)) {
-      const part = manual.allocations.filter(item => findService(item.serviceId).clientId === clientId).reduce((sum, item) => sum + item.part, 0);
-      return line('Последняя оплата', formatDate(manual.date), A.money(part, manual.currency));
-    }
-    return archive && line('Последняя оплата по таблице', formatDate(archive.date) + ' · ' + archive.date.slice(0,4), totals(archive.values));
   }
 
   function summary() {
@@ -748,12 +757,11 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const services = A.clientServices(state(), client.id);
     const active = services.filter(s => !s.oneOff && client.status === 'Активный' && A.activeService(s, today()));
     const unpaidVisits = services.filter(s=>s.oneOff).map(s=>({service:s,debt:-A.serviceBalance(state(),s.id).balance})).filter(x=>x.debt>0);
-    const history = A.operations(state(), { clientId: client.id, includeVoided: true });
-    const imported = ledgerRows(state(), { clientId: client.id });
+    const history = A.clientAccountHistory(state(),client.id,today());
     const statuses = A.currentPaymentStatuses(state(),today(),client.id);
-    const tariffLine = s => line(serviceTitle(s), [isMonthly(s) ? 'Оплата ' + s.day + '-го' : s.place,
-      s.startsOn > today() ? 'С ' + formatDate(s.startsOn) : '', s.note].filter(Boolean).join(' · '),
-      A.money(s.rate, s.currency) + (isMonthly(s) ? ' / мес.' : ' / зан.'), () => editService(client.id, s));
+    const tariffLine = s => line(serviceTitle(s), [!isMonthly(s) && s.place,
+      s.startsOn > today() && 'С ' + formatDate(s.startsOn), s.endsOn && s.endsOn < today() && 'До ' + formatDate(s.endsOn)]
+      .filter(Boolean).join(' · '), A.money(s.rate,s.currency) + (isMonthly(s) ? ' / мес.' : ' / зан.'), () => editService(client.id, s));
     const currentStatus = s => {
       const info = statuses.get(s.id);
       if (!info) return null;
@@ -763,7 +771,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         const period = monthLabel(info.month).replace(/\s\d{4}$/, '');
         if (info.type === 'paid') {
           status = 'Месяц оплачен';
-          detail = [period, info.lastPaidOn ? 'получено ' + formatDate(info.lastPaidOn) : 'срок ' + formatDate(info.due),
+          detail = [period, 'срок ' + formatDate(info.due),
             info.nextDue && 'следующий срок ' + formatDate(info.nextDue)].filter(Boolean).join(' · ');
         } else if (info.type === 'none') {
           status = 'За этот месяц начислений нет';
@@ -800,34 +808,43 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const primary = actions[0];
     const actionButton = (action, style) => button(action.label + (active.length > 1 ? ' · ' + serviceCaption(action.service) : ''),
       () => quickEntry(client.id, action), style);
-    const journal = clientHistory(history, client.id);
     const previous = services.filter(s => !s.oneOff && !active.includes(s));
     const panel=section('Оплаты и занятия', `${client.id}-account`, [
       client.billingNote && text(client.billingNote),
       ...active.map(currentStatus), !active.length && !client.billingNote && text(previous.length ? 'Нет действующих услуг' : 'Тарифы пока не заданы'),
-      ...unpaidVisits.map(({service,debt})=>line(serviceCaption(service),formatDate(history.find(s=>s.kind==='session'&&s.serviceId===service.id)?.date||service.startsOn)+' · К оплате',
-        A.money(debt,service.currency),()=>editPayment({clientId:client.id,serviceId:service.id,suggested:debt}))),
+      ...unpaidVisits.map(({service,debt})=>{
+        const visit = history.find(({operation}) => operation?.kind === 'session' && operation.serviceId === service.id);
+        return line(serviceCaption(service),formatDate(visit?.date || service.startsOn)+' · К оплате',A.money(debt,service.currency),
+          ()=>editPayment({clientId:client.id,serviceId:service.id,suggested:debt}));
+      }),
       primary && actionButton(primary, 'primary account-main-action'),
       actions.length > 1 && section('Другие действия', `${client.id}-account-actions`, actions.slice(1).map(action => actionButton(action, 'account-extra-action'))),
-      section('Тарифы' + (active.length ? ' · ' + active.length : ''), `${client.id}-tariffs`, [
-        ...active.map(tariffLine), previous.length && section('Другие периоды', `${client.id}-past-services`, previous.map(tariffLine)),
+      section('Тарифы', `${client.id}-tariffs`, [
+        ...active.map(tariffLine), previous.length && text('Прежние и будущие тарифы'), ...previous.map(tariffLine),
+        previous.length && button('Оплата за прошлую услугу', () => editPayment({ clientId:client.id }), 'subtle'),
         button('Добавить услугу', () => editService(client.id), 'subtle')
       ]),
-      previous.length && button('Оплата за прошлую услугу', () => editPayment({ clientId:client.id }), 'subtle'),
-      (imported.length || history.length) && section('История оплат и занятий', `${client.id}-account-history`, [
-        lastPayment(client.id, imported, history), ...journal,
-        imported.length && section('Из бухгалтерии 2026 · ' + imported.length, `${client.id}-source-history`, imported.map(entry => sourceLine(entry, client.id)))
-      ])
+      section('История оплат и занятий', `${client.id}-account-history`, [clientHistory(history,client.id)])
     ]);
     panel.classList.add('client-accounting');
     return panel;
   }
 
+  function importedHistoryLine(entry) {
+    const label = {payment:'Оплата',shared:'Семейная оплата',session:'Занятия'}[entry.kind];
+    const detail = [entry.date ? formatDate(entry.date) : '', entry.kind === 'session' ? monthLabel(entry.month) : 'за ' + monthLabel(entry.month),
+      entry.kind === 'shared' && 'общая сумма'].filter(Boolean).join(' · ');
+    return line(label,detail,totals(entry.values),entry.detail ? () => modal(label, form => {
+      append(form,text(detail),text(entry.detail));
+    },{saveLabel:null}) : null);
+  }
+
   function clientHistory(history, clientId) {
-    const byId = new Map(history.map(operation => [operation.id, operation]));
+    const recorded = history.filter(item => item.type === 'operation').map(item => item.operation);
+    const byId = new Map(recorded.map(operation => [operation.id, operation]));
     const pairs = new Map();
     const pairedSessions = new Set();
-    for (const payment of history) {
+    for (const payment of recorded) {
       const session = byId.get(payment.sessionId);
       const allocation = payment.allocations?.[0];
       if (!session || session.kind !== 'session' || payment.kind !== 'payment' || payment.voided || session.voided
@@ -836,12 +853,30 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       pairs.set(payment.id, session);
       pairedSessions.add(session.id);
     }
-    return history.filter(item => !pairedSessions.has(item.id)).map(item => {
-      const session = pairs.get(item.id);
-      if (!session) return operationLine(item, clientId);
-      return section('Занятие и оплата · ' + formatDate(session.date) + ' · ' + A.money(item.amount, item.currency),
-        `account-pair-${session.id}`, [operationLine(session, clientId), operationLine(item, clientId)]);
-    });
+    const entries = history.filter(item => item.type !== 'operation' || !pairedSessions.has(item.operation.id));
+    if (!entries.length) return text('Платежей и занятий пока нет');
+    const pageSize = 6;
+    let limit = pageSize;
+    const list = el('div',null,'account-history-list');
+    const more = button('',()=>{limit += pageSize;draw();},'subtle');
+    function draw(){
+      list.replaceChildren(...entries.slice(0,limit).map(item => {
+        if (item.type === 'coverage') return line('Период закрыт',
+          serviceTitle(item.service) + ' · по ' + monthLabel(item.service.coveredThrough) + ' · без отдельной записи платежа');
+        if (item.type === 'ledger') return importedHistoryLine(item.row);
+        const operation = item.operation;
+        const session = pairs.get(operation.id);
+        if (!session) return operationLine(operation,clientId);
+        return line('Занятие и оплата',formatDate(session.date) + ' · ' + session.place,A.money(operation.amount,operation.currency),() =>
+          modal('Занятие и оплата',form => {
+            append(form,operationLine(session,clientId),operationLine(operation,clientId));
+          },{saveLabel:null}));
+      }));
+      more.hidden = limit >= entries.length;
+      more.textContent = 'Показать ещё · ' + (entries.length-limit);
+    }
+    draw();
+    return append(el('div',null,'stack'),list,more);
   }
 
   function settingsPanel() {
