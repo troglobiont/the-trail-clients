@@ -16,6 +16,8 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from server.calendar_sync import calendar_book, calendar_list
+
 TEMPLATES = {"Привет! Как дела?", "Привет! Как самочувствие?", "Привет! Как прошла тренировка?"}
 GOAL_STATUSES = {"Желание клиента", "Согласовано", "Предложение тренера", "Рабочая цель тренера"}
 MAX_BODY = 9 * 1024 * 1024
@@ -354,7 +356,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             payload = json.loads(self.rfile.read(size))
             handlers = {"/records/parse": parse_record, "/audio/transcribe": transcribe, "/telegram/send": telegram_send,
-                        "/telegram/status": telegram_status, "/telegram/search": telegram_search, "/agent/status": agent_status}
+                        "/telegram/status": telegram_status, "/telegram/search": telegram_search, "/agent/status": agent_status,
+                        "/calendar/list": calendar_list, "/calendar/book": calendar_book}
             if self.path not in handlers:
                 self.reply(404, {"error": "Not found"})
                 return

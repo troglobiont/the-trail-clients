@@ -295,8 +295,12 @@ input.account-month{width:auto;max-width:100%}
 .app-nav .nav-assistant[aria-current=page]{background:var(--accent);color:var(--panel)}
 .task-completed{opacity:.78}
 .payment-chip{align-self:flex-start;color:var(--ink);background:var(--soft)}
-.todo-filters{flex-wrap:nowrap}
-.todo-filters button{white-space:nowrap;padding-inline:clamp(7px,3vw,13px)}
+.todo-filters{gap:6px}
+.todo-filters button{white-space:nowrap;padding-inline:clamp(7px,2.2vw,12px)}
+.calendar-day{margin:8px 0 0;font-size:14px;color:var(--muted)}
+.calendar-event{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start;padding:12px}
+.calendar-time{font-variant-numeric:tabular-nums;font-size:14px;white-space:nowrap}
+.calendar-link{font-weight:600;overflow-wrap:anywhere}
 .task-tile-top{display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;width:100%}
 .birthday-tile{border-inline-start:3px solid var(--warn)}
 .birthday-chip{color:var(--warn);font-weight:600}

@@ -13,6 +13,7 @@ import {createCloudSync} from './cloud-sync.js';
 import {createClientDetailsUI} from './client-details-ui.js';
 import {birthdayGreeting,birthdayReminders,telegramReminders,GOAL_TYPES} from './client-details.js';
 import {cloudConfig} from './cloud-config.js';
+import {createCalendarUI,isSchedulingTask} from './calendar-ui.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,cloud,noticeTimer,draftTimer;
@@ -53,6 +54,7 @@ function section(title,key,children){const d=el('details',null,'fold'),summary=e
 function navigate(hash){location.hash=hash;}
 function openClient(clientId,type,target){ui.returnTo=location.hash.startsWith('#client/')?ui.returnTo:location.hash||'#todo';navigate('#client/'+clientId+(type?'/'+type+(target?'/'+target:''):''));}
 const detailsUI=createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard});
+const calendarUI=createCalendarUI({state,service,el,append,button,row,field,input,select,text,modal,commit,formatDate});
 const accountingUI=createAccountingUI({state,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,navigate,message,importLedger:()=>importDatabase(true),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   activateClient:(s,id,day)=>C.editClient(s,id,{status:'Активный',engagement:null,pause:null},day),
@@ -444,10 +446,10 @@ function editBirthdayGreeting(client,day){
   },{saveLabel:'Поздравил',saveClass:'subtle'});
 }
 
-function renderTodo(birthdayRoute=false){
+function renderTodo(routeFilter){
   const page=el('div',null,'stack-lg');
   const today=C.localDate(),days=ui.birthdayDays||30;
-  const filter=birthdayRoute?'birthdays':ui.taskFilter;
+  const filter=routeFilter||ui.taskFilter;
   const birthdayEntries=horizon=>birthdayReminders(state(),today,horizon).map(({client,day})=>({
     name:client.name,due:day,birthday:true,open:()=>editBirthdayGreeting(client,day)
   }));
@@ -463,22 +465,24 @@ function renderTodo(birthdayRoute=false){
   const entries=(filter==='birthdays'?birthdayEntries(days):filter==='mine'?tasks.filter(e=>!e.reply):all)
     .sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
   append(page,append(el('div',null,'page-title'),el('h1','ToDo')));
-  if(!Object.keys(state().clients).length){page.append(emptyDatabase());return page;}
   const filters=el('div',null,'row catalog-quick todo-filters');
   filters.setAttribute('role','group');filters.setAttribute('aria-label','Фильтры ToDo');
-  for(const [value,label] of [['all','Все'],['mine','Мои действия'],['birthdays','ДР']]){
+  for(const [value,label] of [['all','Все'],['mine','Мои действия'],['birthdays','ДР'],['schedule','Расписание']]){
     const b=button(label,()=>{
-      if(value==='birthdays'){
-        if(location.hash!=='#todo/birthdays')navigate('#todo/birthdays');
+      if(value==='birthdays'||value==='schedule'){
+        if(location.hash!=='#todo/'+value)navigate('#todo/'+value);
         return;
       }
       ui.taskFilter=value;
-      if(birthdayRoute)navigate('#todo');
+      if(routeFilter)navigate('#todo');
       else render();
     });
     if(value==='birthdays')b.setAttribute('aria-label','ДР · Дни рождения');
     b.setAttribute('aria-pressed',String(filter===value));filters.append(b);
   }
+  page.append(filters);
+  if(filter==='schedule')return append(page,calendarUI.schedule());
+  if(!Object.keys(state().clients).length)return append(page,emptyDatabase());
   const list=el('div',null,'stack');
   for(const item of entries){
     const b=button('',item.open,item.birthday?'task-tile birthday-tile':'task-tile');
@@ -489,7 +493,7 @@ function renderTodo(birthdayRoute=false){
     if(item.warning)b.append(text(item.warning.text,item.warning.level==='danger'?'danger-text small':'warning-text small'));
     list.append(b);
   }
-  append(page,filters,filter==='birthdays'&&birthdayPeriods(days),
+  append(page,filter==='birthdays'&&birthdayPeriods(days),
     list.children.length?list:text(filter==='birthdays'?'На ближайшие '+days+' дней нет дней рождения.':'Открытых задач в этом разделе нет.'));
   return page;
 }
@@ -519,11 +523,14 @@ function task(t){
   wrap.id='task-'+t.id;wrap.tabIndex=-1;
   if(t.phase==='done'){
     wrap.classList.add('task-completed');
-    return append(wrap,el('div',t.title,'task-title'),row(el('span','Выполнено','chip'),
+    return append(wrap,el('div',t.title,'task-title'),calendarUI.linked(t),row(el('span','Выполнено','chip'),
       button('Вернуть в работу',()=>commit(s=>C.completeTask(s,t.id,false)),'subtle')));
   }
   wrap.append(append(el('div',null,'task-heading'),el('div',t.title,'task-title'),button('Изменить',()=>editTask(t),'subtle')));
   wrap.append(text((t.due&&t.phase==='todo'?formatDate(t.due)+' · ':'')+taskStateLabel(t)));
+  if(isSchedulingTask(t))append(wrap,calendarUI.linked(t),button('Назначить тренировку',()=>calendarUI.book(t,()=>{
+    ui.recentlyCompleted.add(t.id);render();message('Тренировка связана с задачей');
+  }),'subtle'));
   const goal=C.taskGoal(state(),t);
   if(goal&&!goal.deletedAt)wrap.append(button('К цели: '+goal.title,()=>{
     ui.goalFilters??={};ui.goalFilters[t.clientId]='';render();focusCard('goal',goal.id);
@@ -602,7 +609,7 @@ function renderHistory(c) {
   const features=new Map(c.features.map(f=>[f.id,f]));
   const past=Object.values(state().tasks).filter(t=>t.clientId===c.id&&t.phase==='done');
   for(const t of past.sort((a,b)=>(b.closedAt||'').localeCompare(a.closedAt||''))){
-    history.append(append(el('li'),text('Выполнено'+(t.closedAt?' · '+formatDate(t.closedAt,true):'')),el('div',t.title),
+    history.append(append(el('li'),text('Выполнено'+(t.closedAt?' · '+formatDate(t.closedAt,true):'')),el('div',t.title),calendarUI.linked(t),
       button('Вернуть в работу',async()=>{await commit(s=>C.completeTask(s,t.id,false));focusCard('task',t.id);},'subtle')));
   }
   for(const f of features.values())if(f.active===false) {
@@ -1186,7 +1193,7 @@ function render(){
   const openCard=hash.startsWith('#client/')?hash.split('/')[1]:null;
   if(ui.openCard!==openCard){ui.recentlyCompleted.clear();ui.openCard=openCard;}
   const birthdayRoute=route=>['#todo/birthdays','#clients/birthdays'].includes(route);
-  const sectionTab=route=>birthdayRoute(route)?'#todo':route.startsWith('#clients/')?'#clients':route;
+  const sectionTab=route=>birthdayRoute(route)||route==='#todo/schedule'?'#todo':route.startsWith('#clients/')?'#clients':route;
   const activeTab=sectionTab(hash.startsWith('#client/')?ui.returnTo:hash);
   root.replaceChildren();
   document.querySelectorAll('.app-nav a, .gear-link').forEach(a=>a.setAttribute('aria-current',a.hash===activeTab?'page':'false'));
@@ -1194,7 +1201,8 @@ function render(){
     const [,id,type,target]=hash.split('/');
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
     root.append(renderClient(id,type,target));
-  }else if(birthdayRoute(hash))root.append(renderTodo(true));
+  }else if(birthdayRoute(hash))root.append(renderTodo('birthdays'));
+  else if(hash==='#todo/schedule')root.append(renderTodo('schedule'));
   else if(hash==='#clients'||hash.startsWith('#clients/')){
     const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();
   }else if(hash==='#account')root.append(accountingUI.page());

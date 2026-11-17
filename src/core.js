@@ -160,6 +160,20 @@ export function editGoal(s,goalId,title,status,classification){
 export function deleteGoal(s,goalId,deleted=true){const g=s.goals[goalId];if(!g)throw Error('Цель не найдена');g.deletedAt=deleted?stamp():null;g.updatedAt=stamp();event(s,deleted?'goal-deleted':'goal-restored',g.clientId,g.id);}
 export function createTask(s,clientId,title,options={}){if(!s.clients[clientId]||!title?.trim())throw Error('Введи действие');const {sourceRecordId=null}=options;const due=options.due||null;if(due&&!validDate(due))throw Error('Проверь срок');const existing=sourceRecordId&&Object.values(s.tasks).find(t=>t.sourceRecordId===sourceRecordId&&normalizeSearch(t.title)===normalizeSearch(title));if(existing)return existing;const t={id:id('task'),clientId,title:title.trim().slice(0,1000),due,lane:options.lane==='discussion'?'discussion':'current',needsReply:!!options.needsReply,waitDays:options.waitDays||s.settings.waitDays,phase:'todo',outboundCount:0,lastSentAt:null,checkOn:null,createdAt:stamp(),closedAt:null,sourceRecordId,linkedGoalId:options.linkedGoalId||null};s.tasks[t.id]=t;event(s,'task-created',clientId,t.id,{sourceRecordId});return t;}
 export function completeTask(s,taskId,done=true){const t=s.tasks[taskId];if(!t)throw Error('Задача не найдена');if((t.phase==='done')===done)return;t.phase=done?'done':t.lastSentAt?'waiting':'todo';t.closedAt=done?stamp():null;event(s,done?'task-closed':'task-reopened',t.clientId,t.id);}
+export function linkCalendarTask(s, taskId, calendarEvent) {
+  const task = s.tasks[taskId];
+  if (!task) throw Error('Задача не найдена');
+  if (calendarEvent.clientId && calendarEvent.clientId !== task.clientId) throw Error('Эта тренировка назначена другому клиенту');
+  const {id, start, end, location, url} = calendarEvent;
+  if (typeof id !== 'string' || !id || !Number.isFinite(Date.parse(start)) || !(Date.parse(end) > Date.parse(start))) {
+    throw Error('В календаре указано некорректное время тренировки');
+  }
+  if (Object.values(s.tasks).some(t => t.id !== taskId && t.calendarEvent?.id === id)) {
+    throw Error('Эта тренировка уже привязана к другой задаче');
+  }
+  task.calendarEvent = {id, start, end, location, url};
+  completeTask(s, taskId);
+}
 export function editTask(s,taskId,title,due=null,linkedGoalId=undefined){
   const t=s.tasks[taskId];if(!t)throw Error('Задача не найдена');
   if(typeof title!=='string'||!title.trim()||title.trim().length>1000)throw Error('Введи действие · не более 1000 символов');
