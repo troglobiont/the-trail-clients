@@ -1,5 +1,6 @@
 import {addDays, localDate, TIMEZONE} from './model-utils.js';
 import {linkCalendarTask, normalizeSearch} from './core.js';
+import {accounting, activeService, clientServices, money, serviceBalance, tariffLabel} from './accounting.js';
 
 const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit'});
 
@@ -9,25 +10,47 @@ export function isSchedulingTask(task) {
 }
 
 export function taskCalendarChoices(events, clients, task, tasks) {
-  const client = clients[task.clientId];
-  const words = name => String(name).trim().split(/\s+/u).map(normalizeSearch).filter(Boolean);
-  const names = person => [person.name, ...(person.aliases || [])].map(words);
-  const signature = parts => [...parts].sort().join(' ');
-  const aliases = names(client);
-  const others = Object.values(clients).filter(c => c.id !== client.id && !c.mergedInto);
   const reserved = new Set(Object.values(tasks).filter(t => t.id !== task.id).map(t => t.calendarEvent?.id));
-  return events.filter(event => {
-    if (reserved.has(event.id)) return false;
-    if (event.clientId) return event.clientId === task.clientId;
-    const person = words(event.title.split('·')[1] || '');
-    if (person.length > 1) return aliases.some(alias => signature(alias) === signature(person));
-    return person.length === 1 && aliases.some(alias => alias.includes(person[0])) &&
-      !others.some(other => names(other).some(alias => alias.includes(person[0])));
-  });
+  return events.filter(event => !reserved.has(event.id) && calendarClient(event,clients)?.id === task.clientId);
 }
 
-export function createCalendarUI({state, service, el, append, button, row, field, input, select, text, modal, commit, formatDate}) {
+const calendarName = event => event.title.split('·')[1]?.trim() || event.title;
+
+export function calendarClient(event, clients, linkedId) {
+  const available = client => client && !client.mergedInto && (!client.role || client.role === 'Клиент');
+  if (linkedId || event.clientId) {
+    const direct = clients[linkedId || event.clientId];
+    const client = direct?.mergedInto ? clients[direct.mergedInto] : direct;
+    return available(client) ? client : undefined;
+  }
+  const words = name => name.trim().split(/\s+/u).map(normalizeSearch).filter(Boolean);
+  const signature = parts => [...parts].sort().join(' ');
+  const person = words(calendarName(event)), target = signature(person);
+  if (!person.length) return;
+  const matches = Object.values(clients).filter(client => available(client) && [client.name,...(client.aliases || [])].some(name => {
+    const parts = words(name);
+    return person.length > 1 ? signature(parts) === target : parts.includes(person[0]);
+  }));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+async function sessionIds(eventId) {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(eventId)));
+  const key = Array.from(bytes,byte=>byte.toString(16).padStart(2,'0')).join('');
+  return {sessionId:'calendar-session-'+key,paymentId:'calendar-payment-'+key};
+}
+
+export function calendarPlace(location) {
+  const name = location?.toLowerCase() || '';
+  if (/\bgym\b|teretana|(^|\s)зал(\s|$)|fitness|фитнес/u.test(name)) return 'Зал';
+  if (/кал[еи]мегдан|kalemegdan|улица|outdoor|\bpark\b|парк|ада циганлия|ada ciganlija/u.test(name)) return 'Улица';
+  return null;
+}
+
+export function createCalendarUI({state, service, el, append, button, row, field, input, select, text, modal, commit, formatDate,
+    navigate, openClient, searchClients, scheduledSession, addScheduledTariff}) {
   let cached, loading;
+  const selectedClients = new Map();
   const load = (force = false) => {
     if (loading) return loading;
     if (!force && cached?.until > Date.now()) return Promise.resolve(cached.value);
@@ -65,10 +88,9 @@ export function createCalendarUI({state, service, el, append, button, row, field
           const day = localDate(new Date(event.start));
           if (day !== previousDay) list.append(el('h3', formatDate(day), 'calendar-day'));
           previousDay = day;
-          const name = event.title.split('·')[1]?.trim() || event.title;
-          list.append(append(el('article', null, 'panel calendar-event'),
+          list.append(append(button('',()=>navigate('#todo/schedule/'+encodeURIComponent(event.id)),'panel calendar-event'),
             text(timeRange(event), 'calendar-time'),
-            append(el('div'),eventLink(event,name)||el('strong',name),event.location&&text(event.location))));
+            append(el('div'),el('strong',calendarName(event)),event.location&&text(event.location))));
         }
       } catch(error) {
         status.textContent = error.message;
@@ -77,6 +99,73 @@ export function createCalendarUI({state, service, el, append, button, row, field
     append(box,append(el('div',null,'page-title'),el('h2','Персональные тренировки'),button('Обновить',()=>update(true),'subtle')),status,list);
     void update(false);
     return box;
+  }
+
+  function session(eventId) {
+    const content = el('section',null,'stack-lg');
+    const page = append(el('div',null,'stack-lg'),button('← К расписанию',()=>navigate('#todo/schedule'),'back subtle'),content);
+    const display = (event, ids) => {
+      const s = state(), date = localDate(new Date(event.start));
+      const {services,operations} = accounting(s);
+      const operation = operations[ids.sessionId];
+      const recorded = operation && !operation.voided;
+      const existingClientId = operation && services[operation.serviceId]?.clientId;
+      const linkedTask = Object.values(s.tasks).find(task=>task.calendarEvent?.id===event.id);
+      const client = calendarClient(event,s.clients,existingClientId || selectedClients.get(event.id) || event.clientId || linkedTask?.clientId);
+      const place = calendarPlace(event.location);
+      const tariffs = client ? clientServices(s,client.id).filter(tariff=>tariff.kind==='personal' && !tariff.oneOff
+        && activeService(tariff,date) && (!place || tariff.place===place)) : [];
+      const tariff = recorded ? services[operation.serviceId] : tariffs.length===1 ? tariffs[0] : null;
+      const credit = tariff && serviceBalance(s,tariff.id).balance;
+      const started = Date.parse(event.start) <= Date.now();
+      const pickClient = () => modal('Выбрать клиента',form=>{
+        const query = input('search',calendarName(event),'Поиск (фамилия имя)');
+        query.setAttribute('aria-label','Поиск (фамилия имя)');
+        const matches = el('div',null,'stack');
+        const update = () => {
+          const found = searchClients(query.value).slice(0,10);
+          matches.replaceChildren(...found.map(person=>button(person.name,()=>{
+            selectedClients.set(event.id,person.id);
+            form.closest('dialog').close();display(event,ids);
+          },'client-tile')), ...(!found.length?[text('Клиенты не найдены')]:[]));
+        };
+        query.addEventListener('input',update);update();append(form,query,matches);
+      },{saveLabel:null});
+
+      content.replaceChildren(el('h1','Персональная тренировка'),
+        append(el('section',null,'panel stack calendar-detail'),
+          append(el('div',null,'row between'),
+            client ? button(client.name,()=>openClient(client.id),'calendar-client') : el('h2',calendarName(event)),
+            recorded && el('span','Проведена','chip')),
+          text([date===localDate()?'Сегодня':null,formatDate(date),timeRange(event)].filter(Boolean).join(' · '),'calendar-time'),
+          event.location && el('p',event.location),
+          !client && button('Выбрать клиента',pickClient,'subtle'),
+          eventLink(event,'Открыть в Google Календаре')));
+      if (!client) return;
+      const actions = el('section',null,'stack calendar-actions');
+      append(actions,tariff && append(el('div',null,'row between'),el('h2',tariffLabel(tariff)),
+        el('strong',money(recorded?operation.amount:tariff.rate,tariff.currency),'money-amount')),
+        credit > 0 && text('Остаток аванса · '+money(credit,tariff.currency)),
+        recorded && credit < 0 && text('К оплате по тарифу · '+money(-credit,tariff.currency)));
+      if (!recorded) {
+        if (tariffs.length) {
+          const complete = button('Тренировка состоялась',()=>scheduledSession(client.id,{...ids,date},tariffs),'primary');
+          complete.disabled = !started;
+          append(actions,tariffs.length>1&&text('Тариф можно выбрать при записи'),complete);
+        } else if (started) {
+          append(actions,text('На дату тренировки нет подходящего персонального тарифа'),
+            button('Добавить тариф',()=>addScheduledTariff(client.id,{date,place}),'subtle'));
+        }
+      }
+      if (actions.children.length) content.append(actions);
+    };
+    content.append(text('Загружаю тренировку…'));
+    void Promise.all([load(),sessionIds(eventId)]).then(([data,ids])=>{
+      const event = data.events.find(item=>item.id===eventId);
+      if (!event) throw Error('Тренировка не найдена в расписании');
+      display(event,ids);
+    }).catch(error=>content.replaceChildren(text(error.message)));
+    return page;
   }
 
   function book(task, onSaved) {
@@ -133,5 +222,5 @@ export function createCalendarUI({state, service, el, append, button, row, field
     return append(el('div',null,'row'),text(formatDate(event.start,true)+' · Тренировка'),eventLink(event,'Календарь'));
   }
 
-  return {schedule, book, linked};
+  return {schedule, session, book, linked};
 }

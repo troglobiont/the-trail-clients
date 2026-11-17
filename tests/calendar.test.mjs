@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {linkCalendarTask} from '../src/core.js';
-import {isSchedulingTask, taskCalendarChoices} from '../src/calendar-ui.js';
+import {createClient, emptyState, linkCalendarTask} from '../src/core.js';
+import * as A from '../src/accounting.js';
+import {localDate} from '../src/model-utils.js';
+import {calendarClient, calendarPlace, isSchedulingTask, taskCalendarChoices} from '../src/calendar-ui.js';
 
 test('finding a session by a unique first name does not associate an ambiguous first name', () => {
   const task = {id:'task-1',clientId:'c1',title:'Согласовать день недели и время тренировки'};
@@ -24,4 +26,32 @@ test('linking keeps the calendar event on the completed task and rejects another
   assert.equal(task.calendarEvent.id,event.id);
   assert.throws(()=>linkCalendarTask(s,other.id,event),/уже привязана/u);
   assert.equal(other.phase,'todo');
+});
+
+test('the abbreviated title for an outdoor session resolves to the client and outdoor tariff', () => {
+  const client = {id:'c1',name:'Тестов Владимир'};
+  const event = {title:'Персональная · Владимир · Сергей',location:'Калемегдан'};
+  assert.equal(calendarClient(event,{c1:client}),client);
+  assert.equal(calendarPlace(event.location),'Улица');
+  assert.equal(calendarPlace('Mega Gym'),'Зал');
+});
+
+test('completing a calendar session uses advance once and can record a separate actual payment', () => {
+  const s = emptyState();
+  const date = localDate();
+  const client = createClient(s,{name:'Тестов Владимир'},date);
+  const service = A.saveService(s,{clientId:client.id,kind:'personal',block:'personal',place:'Улица',currency:'RSD',rate:400000,
+    startsOn:date,endsOn:null,day:null,reminder:false,openingCredit:{date,amount:3200000}});
+  const data = {clientId:client.id,serviceId:service.id,place:service.place,amount:service.rate,currency:service.currency,date,
+    sessionId:'calendar-session-one',paymentId:'calendar-payment-one'};
+  A.recordCalendarSession(s,data);
+  assert.deepEqual(A.serviceBalance(s,service.id),{received:0,used:400000,balance:2800000});
+  assert.throws(()=>A.recordCalendarSession(s,data),/уже записана/u);
+  assert.equal(A.operations(s).length,1);
+  const sameDay = {...data,sessionId:'calendar-session-two',paymentId:'calendar-payment-two',received:400000,receivedOn:date};
+  const [session,receipt] = A.recordCalendarSession(s,sameDay);
+  assert.equal(receipt.sessionId,session.id);
+  assert.equal(A.serviceBalance(s,service.id).balance,2800000);
+  A.setVoided(s,session.id,true);
+  assert.throws(()=>A.recordCalendarSession(s,sameDay),/уже есть оплата/u);
 });

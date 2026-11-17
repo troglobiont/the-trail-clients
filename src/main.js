@@ -54,12 +54,15 @@ function section(title,key,children){const d=el('details',null,'fold'),summary=e
 function navigate(hash){location.hash=hash;}
 function openClient(clientId,type,target){ui.returnTo=location.hash.startsWith('#client/')?ui.returnTo:location.hash||'#todo';navigate('#client/'+clientId+(type?'/'+type+(target?'/'+target:''):''));}
 const detailsUI=createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard});
-const calendarUI=createCalendarUI({state,service,el,append,button,row,field,input,select,text,modal,commit,formatDate});
 const accountingUI=createAccountingUI({state,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,navigate,message,importLedger:()=>importDatabase(true),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   activateClient:(s,id,day)=>C.editClient(s,id,{status:'Активный',engagement:null,pause:null},day),
   openClient(clientId){ui.open.add(clientId+'-account');openClient(clientId);}
 });
+const scheduleRoute='#todo/schedule';
+const calendarUI=createCalendarUI({state,service,el,append,button,row,field,input,select,text,modal,commit,formatDate,navigate,openClient,
+  searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
+  scheduledSession:accountingUI.scheduledSession,addScheduledTariff:accountingUI.addScheduledTariff});
 function modal(title,build,{saveLabel='Сохранить',saveClass='primary',onSaved}={}){
   dialog.textContent='';
   const form=el('form'),heading=el('h2',title),error=text('','form-error');
@@ -638,7 +641,8 @@ function renderClient(clientId,targetType,targetId){
   const c=state().clients[clientId];
   if(!c||c.mergedInto){navigate('#clients');return el('div');}
   const page=el('div',null,'stack-lg client-page');
-  const backLabel={'#todo':'← К ToDo','#account':'← К учёту','#races':'← К стартам','#todo/birthdays':'← К дням рождения'}[ui.returnTo]||'← К списку клиентов';
+  const backLabel=ui.returnTo.startsWith(scheduleRoute+'/')?'← К тренировке':
+    {'#todo':'← К ToDo','#account':'← К учёту','#races':'← К стартам','#todo/birthdays':'← К дням рождения'}[ui.returnTo]||'← К списку клиентов';
   page.append(button(backLabel,()=>navigate(ui.returnTo),'back subtle'));
   const header=el('header',null,'stack client-header');
   append(header,append(el('div',null,'page-title'),el('h1',c.name),button('Изменить',()=>editClient(c.id),'subtle')),chips(c),
@@ -1193,7 +1197,7 @@ function render(){
   const openCard=hash.startsWith('#client/')?hash.split('/')[1]:null;
   if(ui.openCard!==openCard){ui.recentlyCompleted.clear();ui.openCard=openCard;}
   const birthdayRoute=route=>['#todo/birthdays','#clients/birthdays'].includes(route);
-  const sectionTab=route=>birthdayRoute(route)||route==='#todo/schedule'?'#todo':route.startsWith('#clients/')?'#clients':route;
+  const sectionTab=route=>birthdayRoute(route)||route===scheduleRoute||route.startsWith(scheduleRoute+'/')?'#todo':route.startsWith('#clients/')?'#clients':route;
   const activeTab=sectionTab(hash.startsWith('#client/')?ui.returnTo:hash);
   root.replaceChildren();
   document.querySelectorAll('.app-nav a, .gear-link').forEach(a=>a.setAttribute('aria-current',a.hash===activeTab?'page':'false'));
@@ -1202,7 +1206,11 @@ function render(){
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
     root.append(renderClient(id,type,target));
   }else if(birthdayRoute(hash))root.append(renderTodo('birthdays'));
-  else if(hash==='#todo/schedule')root.append(renderTodo('schedule'));
+  else if(hash===scheduleRoute)root.append(renderTodo('schedule'));
+  else if(hash.startsWith(scheduleRoute+'/')){
+    try{root.append(calendarUI.session(decodeURIComponent(hash.slice(scheduleRoute.length+1))));}
+    catch{navigate(scheduleRoute);}
+  }
   else if(hash==='#clients'||hash.startsWith('#clients/')){
     const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();
   }else if(hash==='#account')root.append(accountingUI.page());

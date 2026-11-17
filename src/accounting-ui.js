@@ -115,15 +115,15 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     }, { saveLabel:null });
   }
 
-  function quickEntry(clientId, selection, fromAccount = false, {tariffs} = {}) {
+  function quickEntry(clientId, selection, fromAccount = false, {tariffs, scheduled} = {}) {
     const options = tariffs ?? (selection ? [selection] : quickOptions(clientId));
     if (!options.length) return noService(clientId);
-    const title = selection?.label ?? 'Быстрая оплата';
+    const title = scheduled ? 'Тренировка состоялась' : selection?.label ?? 'Быстрая оплата';
     let confirmation;
     modal(title, form => {
       const details = el('div',null,'stack');
       let selected = options[0];
-      let selectedDate = selection?.date || today();
+      let selectedDate = scheduled?.date || selection?.date || today();
       let save;
       const show = () => {
         const {service,period:paidPeriod,amount:providedAmount} = selected;
@@ -135,8 +135,14 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         const rate = moneyInput(service.rate);
         const period = input('month',paidPeriod || today().slice(0,7));
         const received = moneyInput();
+        const receivedOn = scheduled && dateInput(selectedDate);
+        const receivedOnField = scheduled && append(el('details',null,'fold'),
+          el('summary','Дата оплаты'),append(el('div',null,'fold-body'),field('Дата получения',receivedOn)));
         const recordSession = input('checkbox');
+        recordSession.checked = Boolean(scheduled);
         const paid = input('checkbox');
+        const separate = input('checkbox');
+        const alreadyRecorded = scheduled && A.hasManualSession(state(),service.id,scheduled.date);
         const sessionField = append(el('label',null,'checkbox'),recordSession,el('span','Записать занятие'));
         const paidField = append(el('label',null,'checkbox'),paid,el('span','Оплата получена'));
         const receivedField = field('Получено, ' + service.currency,received);
@@ -153,12 +159,20 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           const session = recordSession.checked;
           paidField.hidden = !session;
           receivedField.hidden = session && !paid.checked;
+          if (receivedOnField) receivedOnField.hidden = !paid.checked || selectedDate === today();
           dateLabel.textContent = session ? 'Дата занятия' : 'Дата получения';
           placeField.hidden = rateField.hidden = advanced.hidden = session;
           note.textContent = '';
           if (session) {
             received.value = rate.value;
-            if (!paid.checked && A.serviceBalance(state(),service.id).balance > 0) note.textContent = 'Занятие будет учтено в остатке аванса';
+            const {balance} = A.serviceBalance(state(),service.id);
+            if (scheduled) {
+              const covered = Math.min(service.rate,Math.max(0,balance));
+              const value = amount => A.money(amount,service.currency);
+              if (!paid.checked) note.textContent = covered === service.rate
+                ? 'Из аванса '+value(covered)+' · останется '+value(balance-covered)
+                : [covered && 'Из аванса '+value(covered),'К оплате '+value(service.rate-covered)].filter(Boolean).join(' · ');
+            } else if (!paid.checked && balance > 0) note.textContent = 'Занятие будет учтено в остатке аванса';
           } else if (monthly) {
             const charge = A.monthlyCharge(state(),service,period.value);
             const remaining = charge?.remaining ?? service.rate;
@@ -186,8 +200,11 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
             canRecordSession && placeField,canRecordSession && rateField));
         details.replaceChildren(...[
           selection && text(serviceCaption(service)),
-          canRecordSession && sessionField,canRecordSession && paidField,
-          receivedField,monthly && field('Оплаченный месяц',period),note,changes,advanced
+          scheduled && text([formatDate(scheduled.date),A.money(service.rate,service.currency)].join(' · ')),
+          alreadyRecorded && text('На эту дату уже записано занятие по этому тарифу. Проверь историю клиента.','warning-text small'),
+          alreadyRecorded && append(el('label',null,'checkbox'),separate,el('span','Это другое занятие')),
+          canRecordSession && !scheduled && sessionField, canRecordSession && paidField,
+          receivedField,receivedOnField,monthly && field('Оплаченный месяц',period),note,!scheduled && changes,!scheduled && advanced
         ].filter(Boolean));
         save = async () => {
           const actualDate = recordedDate(date);
@@ -195,6 +212,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           const payment = !session || paid.checked;
           const amount = payment && A.amountMinor(received.value);
           const saved = await commit(s => {
+            if (scheduled) return A.recordCalendarSession(s,{...scheduled,clientId,serviceId:service.id,
+              currency:service.currency,amount:service.rate,place:service.place,received:amount,
+              receivedOn:payment&&recordedDate(receivedOn),separate:separate.checked});
             const fresh = A.accounting(s).services[service.id];
             if (!fresh || fresh.clientId !== clientId || fresh.kind !== service.kind || fresh.currency !== service.currency) {
               throw Error('Условия услуги изменились. Открой запись заново');
@@ -225,7 +245,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         return [service.id,name];
       });
       append(form,text(clientName(clientId),'account-form-client'),
-        !selection && tariffButtons(labels,selected.service.id,id=>{
+        (!selection && (!scheduled || options.length>1)) && tariffButtons(labels,selected.service.id,id=>{
           if (selected.service.id === id) return id;
           selected = options.find(option => option.service.id === id);
           show();
@@ -234,6 +254,10 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       show();
       return () => save();
     },{onSaved:fromAccount ? () => quickClientPicker(confirmation) : selection?.onSaved});
+  }
+
+  function scheduledSession(clientId, scheduled, services) {
+    quickEntry(clientId,null,false,{scheduled,tariffs:services.map(service=>({service}))});
   }
 
   function numberInput(value, min, max) {
@@ -352,17 +376,17 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     });
   }
 
-  function editService(clientId, existing, { resume = false } = {}) {
+  function editService(clientId, existing, { resume = false, scheduled } = {}) {
     const client = state().clients[clientId];
     modal(resume ? 'Возобновить сотрудничество' : existing ? 'Условия услуги' : 'Добавить услугу', form => {
-      const initial = client.group === 'Да' ? 'belgrade' : ['gym', 'outside'].includes(client.personal) ? 'personal'
+      const initial = scheduled ? 'personal' : client.group === 'Да' ? 'belgrade' : ['gym', 'outside'].includes(client.personal) ? 'personal'
         : client.level === 'Премиум' ? 'coaching' : 'online';
       const options = Object.entries(A.PACKAGES).map(([key,label]) => [key,A.TARIFF_LABELS[key] ?? label]);
       if (resume) options.unshift(['','Без тарифа']);
       const kind = select(options, existing ? A.servicePackage(existing) : resume ? '' : initial);
       const defaultBlock = type => ({ online:'online', personal:'personal', coaching:'online', belgrade:'belgrade', gym:'belgrade', trainingpeaks:'online' })[type] || 'online';
       const block = select(Object.entries(A.BLOCKS), existing?.block || defaultBlock(kind.value));
-      const starts = dateInput(resume ? today() : existing?.startsOn || today(), resume);
+      const starts = dateInput(resume ? today() : existing?.startsOn || scheduled?.date || today(), resume);
       const ends = dateInput(resume ? '' : existing?.endsOn || '', false);
       const currency = select(currencyOptions, existing?.currency || (block.value === 'online' ? 'RUB' : 'RSD'));
       const rate = moneyInput(existing?.rate ?? (kind.value === 'belgrade' ? 800000 : undefined));
@@ -372,7 +396,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         : starts.value.slice(0,7) > thisMonth ? starts.value.slice(0,7) : thisMonth;
       const day = numberInput(managesSchedule ? A.paymentDay(existing,period) : existing?.day ?? Number(starts.value.slice(-2)), 1, 31);
       day.readOnly = Boolean(managesSchedule);
-      const place = select(A.PLACES, existing?.place || (client.personal === 'outside' ? 'Улица' : 'Зал'));
+      const place = select(A.PLACES, existing?.place || scheduled?.place || (client.personal === 'outside' ? 'Улица' : 'Зал'));
       const reminder = input('checkbox');
       reminder.checked = existing?.reminder ?? true;
       const monthlyFields = append(el('div', null, 'stack'), field('День оплаты', day), append(el('label', null, 'checkbox'), reminder, el('span', 'Напоминать в ToDo')));
@@ -991,5 +1015,6 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       })));
   }
 
-  return { page, clientPanel, remindersPanel, todoItems, settingsPanel, quickEntry, quickOptions, assistantVisit, activeClientIds, resumeClient };
+  return { page, clientPanel, remindersPanel, todoItems, settingsPanel, quickEntry, quickOptions, assistantVisit, activeClientIds, resumeClient,
+    scheduledSession, addScheduledTariff:(clientId,scheduled)=>editService(clientId,undefined,{scheduled}) };
 }

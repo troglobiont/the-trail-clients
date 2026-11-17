@@ -159,14 +159,39 @@ export function saveOperation(state, values, operationId = id('operation')) {
   return operation;
 }
 
-export function savePaidSession(state, values, received, paymentDate = values.date) {
-  const session = prepareOperation(state, { ...values, kind: 'session' }, id('operation'));
+export function savePaidSession(state, values, received, paymentDate = values.date, ids = {}) {
+  const session = prepareOperation(state, { ...values, kind: 'session' }, ids.session ?? id('operation'));
   const payment = prepareOperation(state, {
     kind: 'payment', date: paymentDate, amount: received, currency: session.currency, note: '', payer: '',
     sessionId: session.id, allocations: [{ serviceId: session.serviceId, month: null, part: received, credit: received }]
-  }, id('operation'));
+  }, ids.payment ?? id('operation'));
   Object.assign(writable(state).operations, { [session.id]: session, [payment.id]: payment });
   return [session, payment];
+}
+
+export function hasManualSession(state, serviceId, date) {
+  return Object.values(accounting(state).operations).some(operation => operation.kind === 'session' && !operation.voided
+    && operation.serviceId === serviceId && operation.date === date && !operation.id.startsWith('calendar-session-'));
+}
+
+export function recordCalendarSession(state, { clientId, serviceId, date, currency, amount, place, sessionId, paymentId, received, receivedOn, separate }) {
+  const book = accounting(state);
+  const service = book.services[serviceId];
+  if (service?.clientId !== clientId || service.kind !== 'personal' || service.oneOff || !activeService(service,date)
+      || service.rate !== amount || service.currency !== currency || service.place !== place) {
+    throw Error('Тариф изменился. Открой тренировку заново');
+  }
+  if (book.operations[sessionId] && !book.operations[sessionId].voided) throw Error('Эта тренировка уже записана');
+  if (book.operations[paymentId] && !book.operations[paymentId].voided) {
+    throw Error('За эту тренировку уже есть оплата. Проверь историю занятий');
+  }
+  if (!separate && hasManualSession(state,serviceId,date)) throw Error('На эту дату уже есть занятие. Подтверди, что записываешь другое');
+  const values = { serviceId, date, currency, amount, place, note:'' };
+  const saved = received
+    ? savePaidSession(state,values,received,receivedOn,{session:sessionId,payment:paymentId})
+    : [saveOperation(state,{...values,kind:'session'},sessionId)];
+  for (const operation of saved) operation.voided = false;
+  return saved;
 }
 
 export function savePersonalVisit(state, { clientId, serviceId, oneOff, place, currency, rate, date, payment, paymentOnly = false }) {

@@ -298,9 +298,12 @@ input.account-month{width:auto;max-width:100%}
 .todo-filters{gap:6px}
 .todo-filters button{white-space:nowrap;padding-inline:clamp(7px,2.2vw,12px)}
 .calendar-day{margin:8px 0 0;font-size:14px;color:var(--muted)}
-.calendar-event{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start;padding:12px}
+.calendar-event{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start;padding:12px;text-align:left;color:var(--text)}
 .calendar-time{font-variant-numeric:tabular-nums;font-size:14px;white-space:nowrap}
 .calendar-link{font-weight:600;overflow-wrap:anywhere}
+.calendar-detail .calendar-link{justify-self:start;padding-block:8px;font-size:13px;font-weight:500}
+.calendar-client{font-weight:650;font-size:18px;text-align:left;padding-inline:0;text-decoration:underline;text-underline-offset:3px}
+.calendar-actions .primary{justify-self:start}
 .task-tile-top{display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;width:100%}
 .birthday-tile{border-inline-start:3px solid var(--warn)}
 .birthday-chip{color:var(--warn);font-weight:600}
