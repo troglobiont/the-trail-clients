@@ -21,6 +21,7 @@ const validKey = key => typeof key === 'string' && /^[-a-zA-Z0-9_]{1,180}$/.test
 const has = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 const validNote = value => typeof value === 'string' && value.length <= 300;
 const validReminder = days => Number.isInteger(days) && days >= 0 && days <= 30;
+const validPaymentDay = day => Number.isInteger(day) && day >= 1 && day <= 31;
 const validMonth = value => typeof value === 'string' && /^\d{4}-\d{2}$/.test(value) && validDate(value + '-01');
 const objectMap = value => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length <= 50000;
 
@@ -54,10 +55,15 @@ function checkService(state, service) {
   if (kind === 'personal') {
     if (day !== null || reminder !== false || !PLACES.includes(place)) throw Error('Выбери место занятия');
     if (service.openingCredit && (!validMoney(service.openingCredit.amount) || !validDate(service.openingCredit.date))) throw Error('Проверь остаток аванса');
-  } else if (!Number.isInteger(day) || day < 1 || day > 31 || typeof reminder !== 'boolean' || place !== null) {
+  } else if (!validPaymentDay(day) || typeof reminder !== 'boolean' || place !== null) {
     throw Error('Укажи день оплаты от 1 до 31');
   } else if ([service.billingFrom, service.coveredThrough].some(month => month != null && !validMonth(month))) {
     throw Error('Проверь месяц начисления или предоплаты');
+  }
+  if (service.paymentDays !== undefined && (kind === 'personal' || !objectMap(service.paymentDays) ||
+      Object.entries(service.paymentDays).some(([period,value]) => !validMonth(period) || !objectMap(value) ||
+        !Object.keys(value).length || Object.entries(value).some(([key,day]) => !['once','from'].includes(key) || !validPaymentDay(day))))) {
+    throw Error('Проверь график оплаты');
   }
 }
 
@@ -388,12 +394,31 @@ export function nextMonth(month, delta = 1) {
   return date.toISOString().slice(0, 7);
 }
 
+export function paymentDay(service, month) {
+  const schedule = service.paymentDays ?? {};
+  if (schedule[month]?.once) return schedule[month].once;
+  const latest = Object.keys(schedule).filter(period => period <= month && schedule[period].from).sort().pop();
+  return latest ? schedule[latest].from : service.day;
+}
+
+export function movePaymentDay(state, serviceId, month, day, mode) {
+  const service = accounting(state).services[serviceId];
+  if (!service || service.kind === 'personal') throw Error('Выбери месячный тариф');
+  if (!validMonth(month) || month < service.startsOn.slice(0,7) || (service.endsOn && month > service.endsOn.slice(0,7))) {
+    throw Error('Выбери месяц действия тарифа');
+  }
+  if (!validPaymentDay(day) || !['once','from'].includes(mode)) throw Error('Укажи день оплаты от 1 до 31');
+  const paymentDays = { ...service.paymentDays, [month]:{ ...service.paymentDays?.[month], [mode]:day } };
+  if (mode === 'from') delete paymentDays[month].once;
+  return saveService(state,{...service,paymentDays},serviceId);
+}
+
 function dueDate(service, month) {
   const last = new Date(month + '-01T12:00:00Z');
   last.setUTCMonth(last.getUTCMonth() + 1, 0);
-  const day = String(Math.min(service.day, last.getUTCDate())).padStart(2, '0');
+  const day = String(Math.min(paymentDay(service,month), last.getUTCDate())).padStart(2, '0');
   const due = `${month}-${day}`;
-  return due < service.startsOn ? service.startsOn : due;
+  return due < service.startsOn && !service.paymentDays?.[month] ? service.startsOn : due;
 }
 
 function monthlyCredits(state, today, replacedId) {

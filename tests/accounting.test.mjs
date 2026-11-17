@@ -196,6 +196,26 @@ test('client history merges old receipts with actual operations and replaces an 
   assert.deepEqual(history().map(item=>item.type),['coverage','operation','ledger','ledger']);
 });
 
+test('moving a due day preserves receipts and can apply for one month or from a selected month', () => {
+  const state = emptyState();
+  const client = createClient(state,{name:'Клиент'},'2024-10-01');
+  const service = enrollment(state,client,{startsOn:'2024-11-12',day:28});
+  const receipt = payment(state,'2024-11-01','RUB',800000,[credit(service,'2024-11',800000)]);
+  const status = () => A.currentPaymentStatuses(state,'2024-11-17').get(service.id);
+  assert.equal(status().due,'2024-11-28');
+  A.movePaymentDay(state,service.id,'2024-11',1,'once');
+  assert.equal(status().due,'2024-11-01');
+  assert.equal(status().nextDue,'2024-12-28');
+  A.movePaymentDay(state,service.id,'2024-12',3,'from');
+  assert.equal(status().nextDue,'2024-12-03');
+  assert.equal(A.paymentReminders(state,'2024-12-02')[0].due,'2024-12-03');
+  const restored = parseImport(exportState(state));
+  const saved = A.accounting(restored).services[service.id];
+  assert.equal(A.monthlyCharge(restored,saved,'2025-01','2024-11-17').due,'2025-01-03');
+  assert.deepEqual(A.accounting(restored).operations[receipt.id],receipt);
+  assert.throws(()=>A.movePaymentDay(state,service.id,'2024-10',1,'once'),/месяц действия тарифа/);
+});
+
 test('pauses stay distinct from endings and suppress charges due during a recorded pause', () => {
   const state = emptyState();
   const client = createClient(state, { name: 'Клиент' }, '2024-10-01');

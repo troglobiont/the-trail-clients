@@ -316,6 +316,23 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return [field(label, control), control];
   }
 
+  function editPaymentDay(service, initialMonth) {
+    modal('Перенести срок оплаты', form => {
+      const period = input('month',initialMonth);
+      period.min = service.startsOn.slice(0,7);
+      if (service.endsOn) period.max = service.endsOn.slice(0,7);
+      const day = numberInput(A.paymentDay(service,period.value),1,31);
+      const mode = select([['from','Начиная с этого месяца'],['once','Только в этом месяце']],'from');
+      period.addEventListener('change',() => { day.value = A.paymentDay(service,period.value); });
+      append(form,text(serviceTitle(service)),field('Месяц',period),field('Новый день оплаты',day),field('Применить',mode),
+        text('Меняется срок оплаты. Даты и суммы полученных платежей сохраняются.'));
+      return async () => {
+        await commit(s => A.movePaymentDay(s,service.id,period.value,Number(day.value),mode.value));
+        message('Срок оплаты изменён');
+      };
+    });
+  }
+
   function editService(clientId, existing, { resume = false } = {}) {
     const client = state().clients[clientId];
     modal(resume ? 'Возобновить сотрудничество' : existing ? 'Условия услуги' : 'Добавить услугу', form => {
@@ -330,11 +347,17 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const ends = dateInput(resume ? '' : existing?.endsOn || '', false);
       const currency = select(currencyOptions, existing?.currency || (block.value === 'online' ? 'RUB' : 'RSD'));
       const rate = moneyInput(existing?.rate ?? (kind.value === 'belgrade' ? 800000 : undefined));
-      const day = numberInput(existing?.day ?? Number(starts.value.slice(-2)), 1, 31);
+      const managesSchedule = existing?.id && isMonthly(existing) && !resume;
+      const thisMonth = today().slice(0,7);
+      const period = existing?.endsOn && existing.endsOn.slice(0,7) < thisMonth ? existing.endsOn.slice(0,7)
+        : starts.value.slice(0,7) > thisMonth ? starts.value.slice(0,7) : thisMonth;
+      const day = numberInput(managesSchedule ? A.paymentDay(existing,period) : existing?.day ?? Number(starts.value.slice(-2)), 1, 31);
+      day.readOnly = Boolean(managesSchedule);
       const place = select(A.PLACES, existing?.place || (client.personal === 'outside' ? 'Улица' : 'Зал'));
       const reminder = input('checkbox');
       reminder.checked = existing?.reminder ?? true;
       const monthlyFields = append(el('div', null, 'stack'), field('День оплаты', day), append(el('label', null, 'checkbox'), reminder, el('span', 'Напоминать в ToDo')));
+      if (managesSchedule) monthlyFields.append(button('Перенести срок',()=>editPaymentDay(existing,period),'subtle account-move-date'));
       const placeField = field('Обычное место занятия', place);
       const rateLabel = el('span');
       const billingStart = input('month', resume ? '' : existing?.billingFrom || '');
@@ -368,8 +391,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         }
         const values = {
           clientId, kind: A.packageKind(kind.value), package:kind.value, block: block.value, startsOn: starts.value, endsOn: ends.value || null,
-          currency: currency.value, rate: A.amountMinor(rate.value), day: personal ? null : Number(day.value),
+          currency: currency.value, rate: A.amountMinor(rate.value), day: personal ? null : managesSchedule ? existing.day : Number(day.value),
           reminder: !personal && reminder.checked, place: personal ? place.value : null,
+          ...(!resume && !personal && existing?.paymentDays ? {paymentDays:existing.paymentDays} : {}),
           ...(!personal && cover.value ? { coveredThrough:cover.value } : {}),
           ...(!personal && billingStart.value ? { billingFrom:billingStart.value } : {}),
           ...(!resume && personal && existing?.openingCredit ? { openingCredit:existing.openingCredit } : {}),
@@ -631,7 +655,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       byService.get(item.serviceId).push(item.month);
     }
     const details = [...byService].map(([serviceId,periods]) => {
-      if (!periods[0]) return serviceTitle(findService(serviceId)) + ' · аванс или оплата занятия';
+      const tariff = clientId ? '' : serviceTitle(findService(serviceId)) + ' · ';
+      if (!periods[0]) return tariff + 'аванс или оплата занятия';
       const ranges = [];
       for (const period of periods.sort()) {
         const last = ranges[ranges.length-1];
@@ -639,11 +664,12 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         else ranges.push([period,period]);
       }
       const included = ranges.map(([first,last]) => first === last ? monthLabel(first) : monthLabel(first) + ' — ' + monthLabel(last));
-      return serviceTitle(findService(serviceId)) + ' · ' + included.join(', ');
+      return tariff + (clientId ? 'за ' : '') + included.join(', ');
     });
     const label = clientId ? 'Оплата' : names.join(', ');
     const value = items.reduce((sum, item) => sum + item.part, 0);
-    return line(label, `${status}${formatDate(date)} · ${details.join(' / ')}${note ? ' · ' + note : ''}`, A.money(value, currency), () => editPayment({ existing: operation, fromAccount: !clientId }));
+    return line(label, `${status}${formatDate(date)} · ${[...new Set(details)].join(' / ')}${!clientId && note ? ' · ' + note : ''}`,
+      A.money(value,currency),() => editPayment({existing:operation,fromAccount:!clientId}));
   }
 
   function remindersPanel(limit = Infinity, periodFilter) {
@@ -802,7 +828,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const previous = info.previous;
       return append(el('div', null, 'account-client-status'), item, previous &&
         line(previous.timing === 'overdue' ? 'Просрочено за прошлые месяцы' : 'К оплате за прошлый месяц',
-          'Первый срок ' + formatDate(previous.due),A.money(previous.remaining,s.currency)));
+          'Первый срок ' + formatDate(previous.due),A.money(previous.remaining,s.currency)),
+        isMonthly(s) && button('Перенести срок',()=>editPaymentDay(s,info.month),'subtle account-move-date'));
     };
     const actions = quickOptions(client.id, active, statuses);
     const primary = actions[0];
@@ -863,7 +890,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       list.replaceChildren(...entries.slice(0,limit).map(item => {
         if (item.type === 'coverage') {
           const { service } = item;
-          const row = line('Оплачено по ' + monthLabel(service.coveredThrough),serviceTitle(service));
+          const row = line('Оплачено по ' + monthLabel(service.coveredThrough));
           const note = service.note?.trim();
           append(row.firstElementChild,note && el('small',note),el('small','Дата и сумма платежа не записаны'));
           return row;

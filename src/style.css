@@ -232,6 +232,7 @@ button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opa
 .account-allocation button{justify-self:start}
 .account-client-status{padding:2px 12px;background:var(--soft);border-radius:10px}
 .account-client-status .payment-indicator{display:block;font-size:13px;font-weight:650}
+button.account-move-date{padding-inline:0}
 .payment-indicator::before{content:"";display:inline-block;width:.5em;height:.5em;margin-inline-end:.45em;border-radius:50%;background:var(--payment-color,var(--muted));vertical-align:.14em}
 .payment-paid{--payment-color:#357951}
 .payment-pending{--payment-color:var(--warn)}
