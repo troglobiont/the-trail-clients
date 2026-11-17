@@ -1178,7 +1178,7 @@ function renderSettings(){
       section('Напоминания об оплате','settings-accounting',[accountingUI.settingsPanel()]),
       section('Агент и Telegram','settings-services',[services])));
 }
-function renderUpdate(){const panel=document.getElementById('update-panel');if(!panel)return;panel.textContent='';const u=updater.state(),errors={save:'Не удалось сохранить базу перед обновлением. Повтори после освобождения места.', 'asset-id':'Не удалось прочитать ID архива обновления. Нужен исправленный APK.', 'rate-limit':'GitHub временно ограничил загрузку. Попробуй другую сеть или повтори позже.', forbidden:'GitHub отклонил загрузку. Проверь, открывается ли выпуск в браузере.',storage:'Недостаточно места для обновления. Освободи место и повтори.',timeout:'Сервер обновлений не ответил вовремя. Повтори загрузку.',tls:'Не удалось установить защищённое соединение с сервером обновлений.',native:'Обновление интерфейса доступно в установленном Android-приложении.',manifest:'Не удалось проверить сведения об обновлении. Текущая версия сохранена.','native-required':'Для этой версии нужен новый APK. Установи его поверх приложения.','github-auth':'GitHub отклонил запрос обновления. Проверь доступ к выпуску.','release-missing':'Готовый выпуск не найден или к нему временно нет доступа.',checksum:'Архив не прошёл проверку целостности. Текущая версия сохранена.',network:'Не удалось загрузить обновление. Проверь интернет и повтори.'},labels={idle:'Проверка по нажатию',checking:'Проверяю обновление…',current:'Установлена актуальная версия',available:'Доступна версия '+u.latest,downloading:'Загружаю · '+Math.round(u.progress)+'%',applying:'Открываю новую версию…',error:errors[u.error]||'Обновление не выполнено'};append(panel,el('h2','Данные и обновления'),text('THE.TRAIL Clients · '+VERSION),text(labels[u.status],u.status==='error'?'danger-text small':'muted small'));if(u.status==='error')panel.append(text('Этап: '+({save:'сохранение базы',release:'проверка выпуска',compatibility:'совместимость APK',download:'получение архива',apply:'запуск обновления'}[u.step]||'проверка')+' · код '+u.error));const progress=el('progress');progress.max=100;progress.value=u.progress;progress.hidden=u.status!=='downloading';panel.append(progress);const update=button('Обновить сейчас',()=>updater.update(),'primary');update.disabled=['checking','downloading','applying'].includes(u.status);panel.append(update);panel.append(text('Обновление сохраняет базу и черновики. При неудачном запуске возвращается предыдущая рабочая версия. Новые системные возможности могут потребовать нового APK.'));}
+function renderUpdate(){const panel=document.getElementById('update-panel');if(!panel)return;panel.textContent='';const u=updater.state(),errors={save:'Не удалось сохранить базу перед обновлением. Повтори после освобождения места.', 'asset-id':'Не удалось прочитать ID архива обновления. Нужен исправленный APK.', 'rate-limit':'GitHub временно ограничил загрузку. Попробуй другую сеть или повтори позже.', forbidden:'GitHub отклонил загрузку. Проверь, открывается ли выпуск в браузере.',storage:'Недостаточно места для обновления. Освободи место и повтори.',timeout:'Сервер обновлений не ответил вовремя. Повтори загрузку.','download-timeout':'Android не закончил подготовку архива. Нажми «Обновить сейчас», чтобы продолжить.',apply:'Новая версия не открылась. Нажми «Обновить сейчас», чтобы повторить запуск.',tls:'Не удалось установить защищённое соединение с сервером обновлений.',native:'Обновление интерфейса доступно в установленном Android-приложении.',manifest:'Не удалось проверить сведения об обновлении. Текущая версия сохранена.','native-required':'Для этой версии нужен новый APK. Установи его поверх приложения.','github-auth':'GitHub отклонил запрос обновления. Проверь доступ к выпуску.','release-missing':'Готовый выпуск не найден или к нему временно нет доступа.',checksum:'Архив не прошёл проверку целостности. Текущая версия сохранена.',network:'Не удалось загрузить обновление. Проверь интернет и повтори.'},labels={idle:'Проверка по нажатию',checking:'Проверяю обновление…',current:'Установлена актуальная версия',available:'Доступна версия '+u.latest,downloading:u.step==='save'?'Сохраняю данные…':'Загружаю · '+Math.round(u.progress)+'%',applying:'Открываю новую версию…',error:errors[u.error]||'Обновление не выполнено'};append(panel,el('h2','Данные и обновления'),text('THE.TRAIL Clients · '+VERSION),text(labels[u.status],u.status==='error'?'danger-text small':'muted small'));if(u.status==='error')panel.append(text('Этап: '+({save:'сохранение базы',release:'проверка выпуска',compatibility:'совместимость APK',download:'получение архива',apply:'запуск обновления'}[u.step]||'проверка')+' · код '+u.error));const progress=el('progress');progress.max=100;progress.value=u.progress;progress.hidden=u.status!=='downloading'||u.step==='save';panel.append(progress);const update=button('Обновить сейчас',()=>updater.update(),'primary');update.disabled=['checking','downloading','applying'].includes(u.status);panel.append(update);panel.append(text('Обновление сохраняет базу и черновики. При неудачном запуске возвращается предыдущая рабочая версия. Новые системные возможности могут потребовать нового APK.'));}
 function render(){
   if(!store)return;
   applyAppearance();const hash=location.hash||'#todo';
@@ -1213,5 +1213,43 @@ async function migrateSavedServiceOrigin() {
     message('Используется новый адрес сервиса. Сохранить его на устройстве пока не удалось.',true);
   }
 }
-async function start(){try{store=await createStore(window.TrailNative?.native?window.TrailNative.adapter:browserAdapter());if(window.TrailNative?.native)await migrateSavedServiceOrigin();applyAppearance();ui.drafts=C.clone(state().settings.drafts||{});if(window.TrailNative?.native){try{ui.pendingVoice=await window.TrailNative.loadVoice();}catch{message('Голосовой черновик не удалось прочитать. База клиентов доступна.',true);}}updater=createUpdater({version:VERSION,bridge:window.TrailNative,flush:async()=>{await saveDrafts();await store.flush();},onChange:u=>{renderUpdate();const link=document.querySelector('.gear-link');if(link){link.classList.toggle('has-update',u.status==='available');link.setAttribute('aria-label',u.status==='available'?'Настройки · доступно обновление':'Настройки');}}});if(!location.hash)history.replaceState(null,'','#todo');window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});await refreshMicrophonePermission();render();document.getElementById('save-status').textContent='На устройстве';await window.TrailNative?.ready();startCloud();if(window.TrailNative?.native)setTimeout(()=>updater.check(),1500);}catch(e){root.textContent='';append(root,el('h1','Не удалось открыть базу'),text(e.message,'danger-text'),text('Не удаляй приложение: данные могут оставаться на устройстве.'),button('Повторить',()=>location.reload()));}}
+async function start(){
+  const bridge=window.TrailNative;
+  try{
+    store=await createStore(bridge?.native?bridge.adapter:browserAdapter());
+    if(bridge?.native)await migrateSavedServiceOrigin();
+    applyAppearance();
+    ui.drafts=C.clone(state().settings.drafts||{});
+    if(bridge?.native){
+      try{ui.pendingVoice=await bridge.loadVoice();}
+      catch{message('Голосовой черновик не удалось прочитать. База клиентов доступна.',true);}
+    }
+    updater=createUpdater({version:VERSION,bridge,flush:async()=>{await saveDrafts();await store.flush();},onChange:u=>{
+      renderUpdate();
+      const link=document.querySelector('.gear-link');
+      if(link){
+        link.classList.toggle('has-update',u.status==='available');
+        link.setAttribute('aria-label',u.status==='available'?'Настройки · доступно обновление':'Настройки');
+      }
+    }});
+    if(!location.hash)history.replaceState(null,'','#todo');
+    window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});
+    render();
+    document.getElementById('save-status').textContent='На устройстве';
+    if(await bridge?.ready(VERSION))message('Обновлено до '+VERSION);
+    startCloud();
+    if(bridge?.native){
+      void refreshMicrophonePermission().then(()=>{
+        if(!ui.recorder&&!ui.voiceStartingClientId&&!ui.voiceSavingClientId&&
+          (location.hash.startsWith('#client/')||location.hash==='#assistant'||location.hash==='#settings'))render();
+      });
+      setTimeout(()=>updater.check(),1500);
+    }
+  }catch(e){
+    root.textContent='';
+    append(root,el('h1','Не удалось открыть базу'),text(e.message,'danger-text'),
+      text('Не удаляй приложение: данные могут оставаться на устройстве.'),button('Повторить',()=>location.reload()));
+  }
+}
 start();

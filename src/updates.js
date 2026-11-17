@@ -21,6 +21,8 @@ export function classifyUpdateError(error,step){
   const text=String(error?.message||'');
   if(['manifest','native','native-required','checksum'].includes(text))return text;
   if(step==='save')return 'save';
+  if(step==='apply')return 'apply';
+  if(text==='update-download-timeout')return 'download-timeout';
   if(text.includes('update-asset-id'))return 'asset-id';
   if(text.includes('update-rate-limit'))return 'rate-limit';
   if(text.includes('github-auth')||text.includes('update-asset-http-401'))return 'github-auth';

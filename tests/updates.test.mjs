@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {compareVersions,validateManifest,createUpdater,APP_ID,classifyUpdateError,readPublicRelease} from '../src/updates.js';
+import {activateNativeUpdate,downloadNativeUpdate} from '../mobile/update-bridge.js';
 const manifest={schemaVersion:1,appId:APP_ID,version:'0.1.1',minNativeVersion:'0.1.0',nativeRuntime:1,bundle:{url:'https://github.com/troglobiont/the-trail-clients/releases/download/v0.1.1/THE-TRAIL-Clients-update.zip',sha256:'a'.repeat(64)}};
 function fixture(overrides={}){const calls=[];const bridge={native:true,async readRelease(){return {manifest:JSON.stringify(manifest),assetId:123,tag:'v0.1.1'};},async info(){return {nativeVersion:'0.1.0',runtime:1};},async downloadUpdate(m,progress){calls.push('download');progress(70);return {id:'bundle-1',version:m.version,checksum:m.bundle.sha256};},async applyUpdate(){calls.push('apply');},...overrides};const updater=createUpdater({version:'0.1.0',bridge,flush:async()=>{calls.push('save');}});return {updater,calls};}
 test('versions compare numerically; foreign ID and URL rejected',()=>{assert.equal(compareVersions('0.10.0','0.9.0'),1);assert.throws(()=>validateManifest({...manifest,appId:'other'}));assert.throws(()=>validateManifest({...manifest,bundle:{...manifest.bundle,url:'https://evil.test/update.zip'}}));});
@@ -37,4 +38,55 @@ test('public update rejects unrelated origins, malformed manifests and missing r
   await updater.update();
   assert.equal(updater.state().error,'manifest');
   assert.ok(!calls.includes('apply'));
+});
+
+const bundle={id:'verified-bundle',version:manifest.version,checksum:manifest.bundle.sha256,status:'pending'};
+
+test('a verified download event can finish even when the Android download call and listener cleanup never return',async()=>{
+  const progress=[];
+  let notify, removed=false;
+  const plugin={
+    async list(){return {bundles:[]};},
+    async addListener(_, callback){notify=callback;return {remove(){removed=true;return new Promise(()=>{});}};},
+    download(){
+      notify({bundle:{...bundle,checksum:'b'.repeat(64)},percent:100});
+      notify({bundle,percent:100});
+      return new Promise(()=>{});
+    }
+  };
+  assert.deepEqual(await downloadNativeUpdate(plugin,manifest,manifest.bundle.url,n=>progress.push(n),100),bundle);
+  assert.deepEqual(progress,[99,99]);
+  assert.equal(removed,true);
+});
+
+test('retry reuses an already verified bundle, and an unfinished download allows another attempt',async()=>{
+  const plugin={
+    async list(){return {bundles:[bundle]};},
+    download(){assert.fail('Do not download an already verified bundle');}
+  };
+  assert.equal(await downloadNativeUpdate(plugin,manifest,manifest.bundle.url,()=>{},100),bundle);
+  plugin.list=async()=>({bundles:[{...bundle,status:'downloading'}]});
+  plugin.addListener=async()=>({remove(){}});
+  plugin.download=()=>new Promise(()=>{});
+  await assert.rejects(downloadNativeUpdate(plugin,manifest,manifest.bundle.url,()=>{},5),/update-download-timeout/);
+  assert.equal(classifyUpdateError(Error('update-download-timeout'),'download'),'download-timeout');
+});
+
+test('activation queues the bundle and retries navigation only once the new files are served',async()=>{
+  const events=[];
+  let reads=0;
+  const plugin={
+    async next({id}){events.push('next '+id);},
+    async reload(){events.push('reload');}
+  };
+  const page={
+    saveUpdate(version){events.push('save '+version);},
+    async servedVersion(){return ++reads===1?'0.1.0':bundle.version;},
+    reloadFresh(){events.push('fresh page');}
+  };
+  // The test page stays alive on purpose to check the deadline after attempted navigation.
+  await assert.rejects(activateNativeUpdate(plugin,bundle,page,{delay:1,timeout:45}),/update-apply/);
+  assert.deepEqual(events,['save '+bundle.version,'next '+bundle.id,'reload','fresh page']);
+  assert.equal(reads,2);
+  assert.equal(classifyUpdateError(Error('Reload failed'),'apply'),'apply');
 });
