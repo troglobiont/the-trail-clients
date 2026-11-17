@@ -106,6 +106,50 @@ test('partial payment keeps the reminder, full payment closes it and voiding res
   assert.equal(A.operations(state, { includeVoided: true }).length, 2);
 });
 
+test('late receipts close their selected month, and past due balances stay visible across the month boundary', () => {
+  const state = emptyState();
+  const client = createClient(state,{name:'Клиент'},'2025-10-01');
+  const group = enrollment(state,client,{startsOn:'2025-10-01',day:17,billingFrom:'2025-10'});
+  const personal = enrollment(state,client,{startsOn:'2025-10-01',kind:'personal',block:'personal',
+    day:null,reminder:false,place:'Зал',rate:400000});
+  payment(state,'2025-11-03','RSD',800000,[credit(group,'2025-10',800000)]);
+  payment(state,'2025-11-04','RSD',400000,[credit(personal,null,400000)]);
+  const status = date => A.currentPaymentStatuses(state,date).get(group.id);
+  assert.equal(status('2025-11-17').timing,'today');
+  assert.equal(status('2025-11-20').timing,'grace');
+  assert.equal(A.clientPaymentStatuses(state,'2025-11-21').get(client.id),'overdue');
+  const november = payment(state,'2025-11-24','RSD',300000,[credit(group,'2025-11',300000)]);
+  payment(state,'2025-11-27','RSD',800000,[credit(group,'2025-12',800000)]);
+  assert.equal(status('2025-12-01').type,'paid');
+  assert.deepEqual(status('2025-12-01').previous,{month:'2025-11',due:'2025-11-17',remaining:500000,timing:'overdue'});
+  assert.equal(A.clientPaymentStatuses(state,'2025-12-01').get(client.id),'overdue');
+  payment(state,'2025-12-02','RSD',500000,[credit(group,'2025-11',500000)]);
+  assert.equal(A.clientPaymentStatuses(state,'2025-12-02').get(client.id),'paid');
+  A.setVoided(state,november.id,true);
+  assert.equal(status('2025-12-02').previous.remaining,300000);
+});
+
+test('confirmed archive payments and explicit early allocations show coverage without assuming earlier debts', () => {
+  const state = emptyState();
+  const client = createClient(state,{name:'Клиент'},'2025-11-01');
+  const group = enrollment(state,client,{startsOn:'2025-11-12',day:17,billingFrom:'2025-12'});
+  const date = '2025-11-17';
+  const status = () => A.currentPaymentStatuses(state,date).get(group.id);
+  const archive = { owners:[client.id],block:'belgrade',date:'2025-11-07',month:'2025-11',values:{RSD:800000} };
+  state.ledger = {rows:[{...archive,kind:'review'}]};
+  assert.equal(status().type,'none');
+  assert.equal(status().nextDue,'2025-12-17');
+  state.ledger.rows[0].kind = 'payment';
+  assert.equal(status().type,'paid');
+  assert.equal(status().lastPaidOn,'2025-11-07');
+  const receipt = payment(state,archive.date,'RSD',800000,[credit(group,'2025-12',800000)]);
+  assert.equal(status().type,'none');
+  assert.equal(status().nextDue,'2026-01-17');
+  A.saveOperation(state,{...receipt,allocations:[credit(group,'2025-11',800000)]},receipt.id);
+  assert.equal(status().type,'paid');
+  assert.equal(status().nextDue,'2025-12-17');
+});
+
 test('pauses stay distinct from endings and suppress charges due during a recorded pause', () => {
   const state = emptyState();
   const client = createClient(state, { name: 'Клиент' }, '2024-10-01');

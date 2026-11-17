@@ -60,20 +60,18 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     !s.oneOff && state().clients[s.clientId].status === 'Активный' && A.activeService(s, today()));
   const activeClientIds = () => new Set(activeServices().map(s => s.clientId));
   const serviceCaption = s => isMonthly(s) ? serviceTitle(s) : (s.oneOff ? 'Разовое занятие' : serviceTitle(s)) + ' · ' + s.place;
-  const importedPayment = (s, period) => ledgerRows(state(), { clientId:s.clientId, period })
-    .some(entry => entry.block === s.block && ['payment','shared','review'].includes(entry.kind));
 
-  function quickOptions(clientId, services = activeServices().filter(s => s.clientId === clientId)) {
+  function quickOptions(clientId, services = activeServices().filter(s => s.clientId === clientId),
+      statuses = A.currentPaymentStatuses(state(),today(),clientId)) {
     const priority = [];
     const personal = [];
     const other = [];
     for (const service of services) {
       if (isMonthly(service)) {
-        const period = today().slice(0, 7);
-        const remaining = A.monthlyCharge(state(), service, period)?.remaining ?? 0;
-        const seenInArchive = importedPayment(service, period);
+        const info = statuses.get(service.id);
+        const period = info?.previous?.month ?? today().slice(0, 7);
         const action = { kind:'payment', service, label:'Принять оплату', period };
-        if (remaining && !seenInArchive) priority.push(action);
+        if (info?.previous || info?.type === 'pending' || info?.type === 'overdue') priority.push(action);
         else other.push(action);
         continue;
       }
@@ -150,10 +148,13 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
             received.value = rate.value;
           } else if (isMonthly(service)) {
             const charge = A.monthlyCharge(state(), service, period.value);
-            const archived = importedPayment(service, period.value);
-            received.value = !archived && (charge?.remaining ?? service.rate) ? String((charge?.remaining ?? service.rate) / 100) : '';
-            if (archived) note.textContent = 'В бухгалтерии уже есть запись за этот месяц';
-            else if (charge && !charge.remaining) note.textContent = 'Этот месяц уже оплачен';
+            const remaining = charge?.remaining ?? service.rate;
+            received.value = remaining ? String(remaining / 100) : '';
+            if (charge && !charge.remaining) note.textContent = 'Этот месяц уже оплачен';
+            else if (ledgerRows(state(),{clientId:service.clientId,period:period.value})
+              .some(entry => entry.block === service.block && ['review','shared'].includes(entry.kind))) {
+              note.textContent = 'Есть запись из бухгалтерии для сверки';
+            }
           } else {
             const balance = A.serviceBalance(state(), service.id).balance;
             received.value = String((balance < 0 ? -balance : service.rate) / 100);
@@ -335,12 +336,13 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const monthlyFields = append(el('div', null, 'stack'), field('День оплаты', day), append(el('label', null, 'checkbox'), reminder, el('span', 'Напоминать в ToDo')));
       const placeField = field('Обычное место занятия', place);
       const rateLabel = el('span');
+      const billingStart = input('month', resume ? '' : existing?.billingFrom || '');
       const cover = input('month', existing?.coveredThrough || '');
       const tariffFields = append(el('div', null, 'stack'), field('Раздел отчёта', block),
         field('Последний день', ends),
         append(el('div', null, 'account-fields'), append(el('label'), rateLabel, rate), field('Валюта тарифа', currency)),
         monthlyFields, placeField);
-      monthlyFields.append(field('Оплачено по месяц включительно', cover));
+      monthlyFields.append(field('Начислять с месяца', billingStart), field('Оплачено по месяц включительно', cover));
       const sync = () => {
         const personal = kind.value === 'personal';
         tariffFields.hidden = !kind.value;
@@ -360,12 +362,15 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         if (resume && !kind.value) return commit(s => activateClient(s, clientId, starts.value));
         const personal = kind.value === 'personal';
         if (!personal && !day.value) throw Error('Укажи день оплаты');
+        if (!personal && billingStart.value && billingStart.value < starts.value.slice(0,7)) {
+          throw Error('Месяц начисления должен быть не раньше начала действия тарифа');
+        }
         const values = {
           clientId, kind: A.packageKind(kind.value), package:kind.value, block: block.value, startsOn: starts.value, endsOn: ends.value || null,
           currency: currency.value, rate: A.amountMinor(rate.value), day: personal ? null : Number(day.value),
           reminder: !personal && reminder.checked, place: personal ? place.value : null,
           ...(!personal && cover.value ? { coveredThrough:cover.value } : {}),
-          ...(!resume && !personal && existing?.billingFrom ? { billingFrom:existing.billingFrom } : {}),
+          ...(!personal && billingStart.value ? { billingFrom:billingStart.value } : {}),
           ...(!resume && personal && existing?.openingCredit ? { openingCredit:existing.openingCredit } : {}),
           ...(!resume && existing?.note ? { note:existing.note } : {})
         };
@@ -377,7 +382,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
             const sameTerms = ['block','currency','rate','day'].every(key => current[key] === values[key]);
             if (sameTerms || personal && current.block === values.block && current.currency === values.currency) {
               A.saveService(s, { ...current, rate:values.rate, endsOn:values.endsOn, reminder:values.reminder,
-                coveredThrough:values.coveredThrough ?? null }, current.id);
+                billingFrom:values.billingFrom ?? current.billingFrom, coveredThrough:values.coveredThrough ?? null }, current.id);
               return activateClient(s, clientId, starts.value);
             }
             if (current.startsOn >= values.startsOn) throw Error('На эту дату уже действует этот пакет. Проверь дату или открой условия тарифа.');
@@ -586,7 +591,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const reminders = A.paymentReminders(state()).filter(item => !periodFilter || item.month === periodFilter);
     if (!reminders.length) return null;
     const list = reminders.slice(0, limit).map(({ service, month: period, due, remaining }) => {
-      const detail = `${serviceTitle(service)} · ${monthLabel(period)} · ${due < today() ? 'просрочено с ' : 'срок '}${formatDate(due)}`;
+      const status = A.paymentTiming(due,today()) === 'overdue' ? 'Просрочено · срок ' : 'срок ';
+      const detail = `${serviceTitle(service)} · ${monthLabel(period)} · ${status}${formatDate(due)}`;
       return append(el('div', null, 'account-reminder'),
         line(clientName(service.clientId), detail, A.money(remaining, service.currency), () => openClient(service.clientId)),
         button('Записать оплату', () => editPayment({ clientId: service.clientId, serviceId: service.id, period, suggested: remaining }), 'subtle'));
@@ -705,24 +711,32 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const unpaidVisits = services.filter(s=>s.oneOff).map(s=>({service:s,debt:-A.serviceBalance(state(),s.id).balance})).filter(x=>x.debt>0);
     const history = A.operations(state(), { clientId: client.id, includeVoided: true });
     const imported = ledgerRows(state(), { clientId: client.id });
+    const statuses = A.currentPaymentStatuses(state(),today(),client.id);
     const tariffLine = s => line(serviceTitle(s), [isMonthly(s) ? 'Оплата ' + s.day + '-го' : s.place,
       s.startsOn > today() ? 'С ' + formatDate(s.startsOn) : '', s.note].filter(Boolean).join(' · '),
       A.money(s.rate, s.currency) + (isMonthly(s) ? ' / мес.' : ' / зан.'), () => editService(client.id, s));
     const currentStatus = s => {
-      let status, value;
+      const info = statuses.get(s.id);
+      if (!info) return null;
+      let status, detail, value;
+      let tone = info.type;
       if (isMonthly(s)) {
-        const period = today().slice(0, 7);
-        const charge = client.status === 'Активный' && A.monthlyCharge(state(), s, period);
-        if (!charge) return null;
-        if (s.coveredThrough && period <= s.coveredThrough) status = 'Оплачено по ' + monthLabel(s.coveredThrough);
-        else if (!charge.remaining) status = monthLabel(period) + ' · оплачено';
-        else if (importedPayment(s, period)) status = monthLabel(period) + ' · есть запись в бухгалтерии';
-        else {
-          status = monthLabel(period) + ' · к оплате';
-          value = A.money(charge.remaining, s.currency);
+        const period = monthLabel(info.month).replace(/\s\d{4}$/, '');
+        if (info.type === 'paid') {
+          status = 'Месяц оплачен';
+          detail = [period, info.lastPaidOn ? 'получено ' + formatDate(info.lastPaidOn) : 'срок ' + formatDate(info.due),
+            info.nextDue && 'следующий срок ' + formatDate(info.nextDue)].filter(Boolean).join(' · ');
+        } else if (info.type === 'none') {
+          status = 'За этот месяц начислений нет';
+          detail = info.nextDue && 'Следующий срок ' + formatDate(info.nextDue);
+        } else {
+          status = { upcoming:'Предстоит оплата', today:'Оплата сегодня', grace:'Ожидает оплаты', overdue:'Просрочено' }[info.timing];
+          if (info.timing === 'upcoming') tone = 'none';
+          detail = period + ' · срок ' + formatDate(info.due);
+          value = A.money(info.remaining, s.currency);
         }
       } else {
-        const { balance, used } = A.serviceBalance(state(), s.id);
+        const { balance, used } = info;
         if (balance < 0) {
           status = 'К оплате';
           value = A.money(-balance, s.currency);
@@ -736,9 +750,14 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           value = A.money(s.rate, s.currency);
         }
       }
-      return append(el('div', null, 'account-client-status'), line(serviceCaption(s), status, value));
+      const item = line(serviceCaption(s), '', value);
+      append(item.firstElementChild,el('span',status,`payment-indicator payment-${tone}`),detail && el('small',detail));
+      const previous = info.previous;
+      return append(el('div', null, 'account-client-status'), item, previous &&
+        line(previous.timing === 'overdue' ? 'Просрочено за прошлые месяцы' : 'К оплате за прошлый месяц',
+          'Первый срок ' + formatDate(previous.due),A.money(previous.remaining,s.currency)));
     };
-    const actions = quickOptions(client.id, active);
+    const actions = quickOptions(client.id, active, statuses);
     const primary = actions[0];
     const actionButton = (action, style) => button(action.label + (active.length > 1 ? ' · ' + serviceCaption(action.service) : ''),
       () => quickEntry(client.id, action), style);

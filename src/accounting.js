@@ -13,6 +13,7 @@ export const PLACES = ['Зал', 'Улица'];
 export const EXPENSES = ['Оплата тренеру', 'Налоги', 'Реклама', 'Прочее'];
 export const MOVEMENT = { new: 'Новые', returned: 'Вернулись', paused: 'На паузе', ended: 'Завершили' };
 export const DEFAULT_REMINDERS = { belgrade: 3, online: 0, personal: 0 };
+const PAYMENT_GRACE_DAYS = 3;
 const EMPTY = { services: {}, operations: {}, reminders: {} };
 const MAX_AMOUNT = 100000000000;
 const validMoney = value => Number.isSafeInteger(value) && value > 0 && value <= MAX_AMOUNT;
@@ -392,45 +393,162 @@ function dueDate(service, month) {
   return due < service.startsOn ? service.startsOn : due;
 }
 
-function monthlyCredits(book, today) {
+function monthlyCredits(state, today) {
+  const book = accounting(state);
   const credits = new Map();
+  const receipts = new Set();
+  const add = (serviceId, month, amount, date) => {
+    const key = `${serviceId}/${month}`;
+    const previous = credits.get(key);
+    credits.set(key, { amount:(previous?.amount ?? 0) + amount,
+      lastPaidOn:previous?.lastPaidOn > date ? previous.lastPaidOn : date });
+  };
   for (const o of Object.values(book.operations)) {
     if (o.kind !== 'payment' || o.voided || o.date > today) continue;
     for (const item of o.allocations) {
-      const key = `${item.serviceId}/${item.month}`;
-      credits.set(key, (credits.get(key) ?? 0) + item.credit);
+      if (item.month) add(item.serviceId, item.month, item.credit, o.date);
+    }
+    receipts.add(receiptKey(o.allocations.map(item => book.services[item.serviceId].clientId),o.date,o.currency,o.amount));
+  }
+  const recurring = new Map();
+  for (const service of Object.values(book.services)) {
+    if (service.kind === 'personal') continue;
+    const key = `${service.clientId}/${service.block}`;
+    if (!recurring.has(key)) recurring.set(key, []);
+    recurring.get(key).push(service);
+  }
+  for (const row of state.ledger?.rows || []) {
+    if (row.kind !== 'payment' || row.owners.length !== 1 || !validDate(row.date) || row.date > today) continue;
+    const candidates = (recurring.get(`${row.owners[0]}/${row.block}`) || []).filter(service =>
+      service.startsOn.slice(0,7) <= row.month && (!service.endsOn || dueDate(service,row.month) <= service.endsOn));
+    for (const [currency, amount] of Object.entries(row.values)) {
+      if (amount <= 0) continue;
+      const receipt = receiptKey(row.owners,row.date,currency,amount);
+      if (receipts.has(receipt)) continue;
+      receipts.add(receipt);
+      const parts = row.packageParts?.[currency];
+      for (const [pkg, part] of parts ? Object.entries(parts) : [[row.package,amount]]) {
+        const matches = candidates.filter(s => s.currency === currency && (!pkg || servicePackage(s) === pkg));
+        if (matches.length === 1) add(matches[0].id,row.month,part,row.date);
+      }
     }
   }
   return credits;
 }
 
-export function monthlyCharge(state, service, month, today = localDate()) {
+function chargeFor(credits, service, month) {
+  if (!validMonth(month) || service.kind === 'personal') return null;
   const due = dueDate(service, month);
   if (month < service.startsOn.slice(0, 7) || (service.endsOn && due > service.endsOn)) return null;
-  if (service.coveredThrough && month <= service.coveredThrough) return { due, remaining:0 };
+  const payment = credits.get(`${service.id}/${month}`);
+  if ((service.coveredThrough && month <= service.coveredThrough) || payment?.amount >= service.rate) {
+    return { due, remaining:0, lastPaidOn:payment?.lastPaidOn };
+  }
   if (service.billingFrom && month < service.billingFrom) return null;
-  const credits = monthlyCredits(accounting(state), today);
-  return { due, remaining: Math.max(0, service.rate - (credits.get(`${service.id}/${month}`) ?? 0)) };
+  return { due, remaining:service.rate - (payment?.amount ?? 0), lastPaidOn:payment?.lastPaidOn };
+}
+
+export function monthlyCharge(state, service, month, today = localDate()) {
+  return chargeFor(monthlyCredits(state, today), service, month);
+}
+
+export function paymentTiming(due, today) {
+  if (today < due) return 'upcoming';
+  if (today === due) return 'today';
+  return today <= addDays(due, PAYMENT_GRACE_DAYS) ? 'grace' : 'overdue';
+}
+
+function billingStart(service) {
+  const starts = service.startsOn.slice(0,7);
+  return service.billingFrom > starts ? service.billingFrom : starts;
+}
+
+function clientMovements(state, clientId) {
+  return state.events.filter(event => event.type === 'client-movement' && event.clientId === clientId)
+    .reverse().sort((a,b) => b.day.localeCompare(a.day) || b.at.localeCompare(a.at));
+}
+
+function activeOn(movements, date) {
+  const event = movements.find(item => item.day <= date);
+  return !event || event.status === 'Активный';
+}
+
+export function currentPaymentStatuses(state, today = localDate(), clientId) {
+  const month = today.slice(0,7);
+  const credits = monthlyCredits(state,today);
+  const result = new Map();
+  const movements = new Map();
+  for (const service of Object.values(accounting(state).services)) {
+    const client = state.clients[service.clientId];
+    if ((clientId && clientId !== service.clientId) || client?.status !== 'Активный' || client.mergedInto) continue;
+    const active = activeService(service,today);
+    if (service.kind === 'personal') {
+      if (!service.oneOff && !active) continue;
+      const { balance, used } = serviceBalance(state,service.id,today);
+      if (service.oneOff && balance >= 0) continue;
+      result.set(service.id, { type:balance < 0 ? 'pending' : balance > 0 || used ? 'paid' : 'none', balance, used });
+      continue;
+    }
+    if (!active) continue;
+    if (!movements.has(service.clientId)) movements.set(service.clientId,clientMovements(state,service.clientId));
+    const events = movements.get(service.clientId);
+    let previous;
+    const first = billingStart(service);
+    const earliest = service.coveredThrough >= first ? nextMonth(service.coveredThrough) : first;
+    for (let period = earliest; period < month; period = nextMonth(period)) {
+      const bill = chargeFor(credits,service,period);
+      if (!bill?.remaining || !activeOn(events,bill.due)) continue;
+      previous ??= { month:period, due:bill.due, remaining:0, timing:paymentTiming(bill.due,today) };
+      previous.remaining += bill.remaining;
+    }
+    const charge = chargeFor(credits,service,month);
+    const next = service.billingFrom > month ? service.billingFrom : nextMonth(month);
+    if (!charge || !charge.remaining || !activeOn(events,charge.due)) {
+      let nextPeriod = service.coveredThrough >= next ? nextMonth(service.coveredThrough) : next;
+      let nextCharge = chargeFor(credits,service,nextPeriod);
+      while (nextCharge && !nextCharge.remaining) {
+        nextPeriod = nextMonth(nextPeriod);
+        nextCharge = chargeFor(credits,service,nextPeriod);
+      }
+      result.set(service.id,{ ...charge, month, type:charge?.remaining === 0 ? 'paid' : 'none', nextDue:nextCharge?.due, previous });
+      continue;
+    }
+    const timing = paymentTiming(charge.due,today);
+    result.set(service.id,{ ...charge, month, timing, type:timing === 'overdue' ? 'overdue' : 'pending', previous });
+  }
+  return result;
+}
+
+export function clientPaymentStatuses(state, today = localDate()) {
+  const services = accounting(state).services;
+  const result = new Map();
+  const priority = { paid:1, pending:2, overdue:3 };
+  for (const [serviceId, { type:current, previous }] of currentPaymentStatuses(state,today)) {
+    const older = previous?.timing === 'overdue' ? 'overdue' : previous ? 'pending' : 'none';
+    const type = (priority[older] ?? 0) > (priority[current] ?? 0) ? older : current;
+    if (type === 'none') continue;
+    const { clientId } = services[serviceId];
+    if (priority[type] > (priority[result.get(clientId)] ?? 0)) result.set(clientId,type);
+  }
+  return result;
 }
 
 export function paymentReminders(state, today = localDate()) {
   const book = accounting(state);
-  const credits = monthlyCredits(book, today);
+  const credits = monthlyCredits(state, today);
   const next = [];
   for (const service of Object.values(book.services)) {
     const client = state.clients[service.clientId];
     if (service.kind === 'personal' || !service.reminder || client.role !== 'Клиент' || client.status !== 'Активный') continue;
     const horizon = addDays(today, book.reminders[service.block] ?? DEFAULT_REMINDERS[service.block]);
-    const events = state.events.filter(e => e.type === 'client-movement' && e.clientId === service.clientId).reverse().sort((a, b) => b.day.localeCompare(a.day) || b.at.localeCompare(a.at));
-    const starts = service.startsOn.slice(0, 7);
-    const first = service.billingFrom > starts ? service.billingFrom : starts;
+    const events = clientMovements(state,service.clientId);
+    const first = billingStart(service);
     for (let month = first; month <= horizon.slice(0, 7); month = nextMonth(month)) {
       const due = dueDate(service, month);
       if (service.endsOn && due > service.endsOn) break;
       if (due > horizon || (service.coveredThrough && month <= service.coveredThrough)) continue;
-      const status = events.find(e => e.day <= due);
-      if (status && status.status !== 'Активный') continue;
-      const remaining = service.rate - (credits.get(`${service.id}/${month}`) ?? 0);
+      if (!activeOn(events,due)) continue;
+      const remaining = chargeFor(credits,service,month)?.remaining ?? 0;
       if (remaining > 0) next.push({ service, month, due, remaining });
     }
   }

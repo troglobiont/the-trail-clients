@@ -1,6 +1,6 @@
 import * as C from './core.js';
 import { assistantKind, mentionsCompletedSession, suggestAssistantClients } from './assistant.js';
-import { CURRENCIES, PACKAGES, activeService, amountMinor, clientServices, matchingTariffClients, serviceBalance } from './accounting.js';
+import { CURRENCIES, PACKAGES, activeService, amountMinor, clientPaymentStatuses, clientServices, matchingTariffClients, serviceBalance } from './accounting.js';
 import {createStore,browserAdapter} from './store.js';
 import {createUpdater} from './updates.js';
 import {currentServiceOrigin,parseConnection} from './connection.js';
@@ -20,8 +20,9 @@ const catalogViews = { active:'Клиенты', occasional:'Разовые', pau
 const planBasisLabel = basis => basis === 'С нуля' ? 'Вне когорты' : basis;
 const planBasisOptions = C.BASES.map(basis=>[basis,planBasisLabel(basis)]);
 const CATALOG_PAGE_SIZE = 12;
+const paymentFilters = [['all','Оплаты'],['paid','Оплачено'],['pending','К оплате'],['overdue','Просрочено']];
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
-  packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7)});
+  packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7),paymentStatus:'all'});
 const ui={filters:defaultFilters(),catalogScope:'active',pauseFilter:null,catalogLimit:CATALOG_PAGE_SIZE,
   contactOrder:false, recentlyCompleted:new Set(), taskFilter:'all',returnTo:'#clients',open:new Set(),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
 const state=()=>store.state();
@@ -297,6 +298,22 @@ function activeCatalogFilters(search) {
   contactOrder.setAttribute('aria-label','Пинг: давно без контакта');
   contactOrder.setAttribute('aria-pressed',String(ui.contactOrder));
   quick.append(contactOrder);
+  const paymentFilter = button('', () => {
+    ui.filters.paymentStatus = paymentFilters[(paymentFilterIndex() + 1) % paymentFilters.length][0];
+    ui.catalogLimit = CATALOG_PAGE_SIZE;
+    refreshPaymentFilter();
+    renderCatalogResults();
+  },'catalog-payment-filter');
+  const paymentFilterIndex = () => paymentFilters.findIndex(([value]) => value === ui.filters.paymentStatus);
+  const refreshPaymentFilter = () => {
+    const index = paymentFilterIndex();
+    const [value,label] = paymentFilters[index];
+    paymentFilter.replaceChildren(el('span',label,`payment-indicator payment-${value}`));
+    paymentFilter.setAttribute('aria-pressed',String(value !== 'all'));
+    paymentFilter.setAttribute('aria-label',`Оплаты: ${value === 'all' ? 'все' : label.toLowerCase()}. Следующий фильтр: ${index === paymentFilters.length - 1 ? 'все' : paymentFilters[index + 1][1].toLowerCase()}`);
+  };
+  refreshPaymentFilter();
+  quick.append(paymentFilter);
   const extra = el('div',null,'filters');
   const currencyOptions = [['all','Любая'],...CURRENCIES];
   for (const [key,label,values] of [
@@ -360,8 +377,9 @@ function renderCatalogResults() {
   if (!list) return;
   const scope = ui.catalogScope;
   const tariffs = scope === 'active' ? matchingTariffClients(state(),ui.filters) : null;
+  const payment = scope === 'active' && ui.filters.paymentStatus !== 'all' ? clientPaymentStatuses(state()) : null;
   const clients = C.filterClients(state(),{ ...ui.filters,section:scope,pauseKind:ui.pauseFilter })
-    .filter(c=>!tariffs || tariffs.has(c.id));
+    .filter(c=>(!tariffs || tariffs.has(c.id)) && (!payment || payment.get(c.id) === ui.filters.paymentStatus));
   const byContact=scope==='active'&&ui.contactOrder;
   if(byContact)clients.sort((a,b)=>(a.lastContact?.at||'').localeCompare(b.lastContact?.at||''));
   const accountingClients = accountingUI.activeClientIds();

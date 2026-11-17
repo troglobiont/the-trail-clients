@@ -95,8 +95,9 @@ main{max-width:920px;margin:0 auto;padding:24px 20px calc(110px + env(safe-area-
 .directory-account{min-height:44px;font-size:13px;color:var(--muted);padding-inline:10px}
 .catalog-page .fold summary{min-height:44px;padding-block:10px}
 .catalog-options{gap:6px}
-.catalog-shortcuts{flex-wrap:nowrap;gap:4px}
+.catalog-shortcuts{flex-wrap:wrap;gap:4px}
 .catalog-shortcuts button{padding-inline:clamp(5px,2vw,12px);white-space:nowrap}
+.catalog-shortcuts button.catalog-payment-filter[aria-pressed=true]{background:var(--soft);color:var(--ink);border-color:currentColor}
 .catalog-advanced{padding-block:6px}
 .catalog-control{min-width:0;align-self:start;position:relative}
 .catalog-page .catalog-control>summary{display:grid;gap:1px;padding:6px 23px 6px 9px;min-height:48px}
@@ -228,6 +229,12 @@ button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opa
 .account-allocation{border-top:1px solid var(--line);padding-top:10px}
 .account-allocation button{justify-self:start}
 .account-client-status{padding:2px 12px;background:var(--soft);border-radius:10px}
+.account-client-status .payment-indicator{display:block;font-size:13px;font-weight:650}
+.payment-indicator::before{content:"";display:inline-block;width:.5em;height:.5em;margin-inline-end:.45em;border-radius:50%;background:var(--payment-color,var(--muted));vertical-align:.14em}
+.payment-paid{--payment-color:#357951}
+.payment-pending{--payment-color:var(--warn)}
+.payment-overdue{--payment-color:var(--danger)}
+[data-appearance=dark] .payment-paid{--payment-color:#80c99d}
 .account-main-action{width:100%}
 .account-extra-action{justify-self:start;text-align:left;border-color:var(--line)}
 .account-picker{gap:0}
