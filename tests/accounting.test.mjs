@@ -18,6 +18,29 @@ function payment(state, date, currency, amount, allocations) {
 
 const credit = (service, month, part, credited = part) => ({ serviceId: service.id, month, part, credit: credited });
 
+test('a reconciled imported session appears once in history and in monthly counts after reimport', () => {
+  const state = emptyState(), client = createClient(state,{name:'Клиент'},'2026-11-06');
+  const tariff = enrollment(state,client,{kind:'personal',block:'personal',rate:400000,day:null,place:'Зал',reminder:false,startsOn:'2026-11-06'});
+  const row = {id:'ledger-gym',kind:'session',month:'2026-11',date:'',owners:[client.id],block:'personal',
+    detail:'1 зан. × 4000 RSD · ноя: 6',values:{RSD:400000}};
+  state.ledger = {rows:[row]};
+  const visit = {place:'Зал',currency:'RSD',amount:400000,serviceId:tariff.id,note:''};
+  const [reconciled] = A.savePaidSession(state,{...visit,date:'2026-11-06',sourceLedgerRowId:row.id},400000);
+  A.savePaidSession(state,{...visit,date:'2026-11-13'},400000);
+  A.saveOperation(state,{...visit,kind:'session',date:reconciled.date,note:'Уточнено'},reconciled.id);
+  assert.equal(A.accounting(state).operations[reconciled.id].sourceLedgerRowId,row.id);
+  const history = A.filterClientAccountHistory(state,A.clientAccountHistory(state,client.id),client.id,'personal-gym');
+  assert.equal(history.length,4);
+  assert.ok(history.every(item=>item.type === 'operation'));
+  const summary = A.combinedSummary(state,'2026-11');
+  assert.equal(summary.count,2);
+  assert.deepEqual(summary.sessions,{RSD:800000});
+  assert.deepEqual(summary.receipts,{RSD:800000});
+  assert.equal(A.serviceBalance(state,tariff.id).balance,0);
+  row.detail = '2 зан. × 2000 RSD';
+  assert.equal(A.combinedSummary(state,'2026-11').count,4);
+});
+
 test('a one-off visit leaves a payable balance without creating a recurring tariff', () => {
   const state=emptyState(), client=createClient(state,{name:'Тестовый клиент'},'2024-10-01');
   const [session]=A.savePersonalVisit(state,{clientId:client.id,oneOff:true,place:'Зал',currency:'RSD',rate:400000,date:'2024-10-10'});

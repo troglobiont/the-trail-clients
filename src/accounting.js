@@ -114,6 +114,7 @@ function checkOperation(book, operation) {
   } else if (kind === 'session') {
     const service = has(book.services, operation.serviceId) && book.services[operation.serviceId];
     if (service?.kind !== 'personal' || service.currency !== currency || !PLACES.includes(operation.place)) throw Error('Выбери персональную услугу и место занятия');
+    if (operation.sourceLedgerRowId !== undefined && !validKey(operation.sourceLedgerRowId)) throw Error('Некорректная связь со строкой учёта');
   } else if (kind === 'expense') {
     if (!EXPENSES.includes(operation.category)) throw Error('Выбери статью расхода');
     if (operation.quantity !== null && (operation.category !== 'Оплата тренеру' || !Number.isInteger(operation.quantity) || operation.quantity < 1 || !validMoney(operation.rate) || operation.quantity * operation.rate !== amount)) throw Error('Проверь число занятий и ставку тренера');
@@ -143,6 +144,7 @@ function prepareOperation(state, values, operationId) {
   const prior = book.operations[operationId];
   if (!validKey(operationId) || (prior && prior.kind !== values.kind)) throw Error('Некорректная операция');
   const operation = { ...values, id: operationId, voided: prior?.voided ?? false };
+  if (prior?.sourceLedgerRowId && operation.kind === 'session') operation.sourceLedgerRowId ??= prior.sourceLedgerRowId;
   checkOperation(book, operation);
   if (operation.date > localDate()) throw Error('Укажи дату фактической операции');
   if (operation.kind === 'session' && (prior?.serviceId !== operation.serviceId || prior?.date !== operation.date)) {
@@ -383,6 +385,19 @@ const operationReceiptKey = (services, operation) => receiptKey(
   operation.allocations.map(item => services[item.serviceId].clientId),
   operation.date,operation.currency,operation.amount);
 
+function reconciledSessionRows(state, operations, rows) {
+  const services = accounting(state).services;
+  const sources = new Map(operations.filter(o => o.kind === 'session' && !o.voided && o.sourceLedgerRowId)
+    .map(o => [o.sourceLedgerRowId,o]));
+  return new Set(rows.filter(row => {
+    const session = sources.get(row.id);
+    return row.kind === 'session' && /^1 зан\./.test(row.detail) && session
+      && row.owners.length === 1 && row.owners[0] === services[session.serviceId].clientId
+      && (!row.date || row.date === session.date) && session.date.slice(0,7) === row.month && row.values[session.currency] === session.amount
+      && Object.entries(row.values).every(([currency,value])=>currency===session.currency || !value);
+  }).map(row=>row.id));
+}
+
 export function combinedSummary(state, month) {
   const result = summarize(state,month), book = accounting(state);
   result.imported = { receipts:0, expenses:0, sessionRows:0, skippedDuplicates:0, review:0 };
@@ -395,12 +410,15 @@ export function combinedSummary(state, month) {
     services.push(service);
     historicalServices.set(service.clientId,services);
   }
-  for (const operation of operations(state,{month})) {
+  const recorded = operations(state,{month});
+  const imported = state.ledger?.rows || [];
+  const reconciled = reconciledSessionRows(state,recorded,imported);
+  for (const operation of recorded) {
     if (operation.kind !== 'payment') continue;
     const key = operationReceiptKey(book.services,operation);
     nativeByKey.set(key,(nativeByKey.get(key)||0)+1);
   }
-  for (const row of state.ledger?.rows || []) {
+  for (const row of imported) {
     if (row.kind === 'review') {
       if (row.month === month) result.imported.review++;
       continue;
@@ -422,6 +440,10 @@ export function combinedSummary(state, month) {
       }
       result.imported.expenses++;
     } else if (row.kind === 'session') {
+      if (reconciled.has(row.id)) {
+        result.imported.skippedDuplicates++;
+        continue;
+      }
       for (const [currency,amount] of Object.entries(row.values)) addTotal(result.sessions,currency,amount);
       const sessions = Number(/^([\d.]+) зан\./.exec(row.detail || '')?.[1]);
       if (Number.isInteger(sessions) && sessions > 0) result.count += sessions;
@@ -589,6 +611,7 @@ export function clientAccountHistory(state, clientId, today = localDate()) {
     nativeReceipts.set(key,(nativeReceipts.get(key) ?? 0) + 1);
   }
   const imports = (state.ledger?.rows || []).filter(row => row.owners.includes(clientId) && ['payment','shared','session'].includes(row.kind));
+  const reconciled = reconciledSessionRows(state,recorded,imports);
   const importedReceipts = new Map();
   for (const row of imports) {
     if (row.kind === 'session') continue;
@@ -598,6 +621,7 @@ export function clientAccountHistory(state, clientId, today = localDate()) {
     }
   }
   for (const row of imports) {
+    if (reconciled.has(row.id)) continue;
     const values = row.kind === 'session' ? row.values : Object.fromEntries(Object.entries(row.values).filter(([currency,amount]) => {
       const key = receiptKey(row.owners,row.date,currency,amount);
       return amount > 0 && !(nativeReceipts.get(key) === 1 && importedReceipts.get(key) === 1);

@@ -692,7 +692,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     if (kind === 'expense') return line(operation.category, `${status}${formatDate(date)} · Расход${note ? ' · ' + note : ''}`, '−' + A.money(operation.amount, currency), () => editExpense(operation));
     if (kind === 'session') {
       const service = findService(operation.serviceId);
-      return line(clientId ? 'Занятие' : clientName(service.clientId), `${status}${formatDate(date)} · Занятие · ${operation.place}${note ? ' · ' + note : ''}`, A.money(operation.amount, currency), () => editSession({ existing: operation, fromAccount: !clientId }));
+      const when = formatDate(date) + ' · ' + operation.place;
+      return line(clientId ? when : clientName(service.clientId), `${status}${clientId ? 'Проведено' : when}${note ? ' · ' + note : ''}`, A.money(operation.amount, currency), () => editSession({ existing: operation, fromAccount: !clientId }));
     }
     const items = operation.allocations.filter(item => {
       const service = findService(item.serviceId);
@@ -705,8 +706,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       byService.get(item.serviceId).push(item.month);
     }
     const details = [...byService].map(([serviceId,periods]) => {
-      const tariff = clientId ? '' : serviceTitle(findService(serviceId)) + ' · ';
-      if (!periods[0]) return tariff + 'аванс или оплата занятия';
+      const service = findService(serviceId);
+      const tariff = clientId ? '' : serviceTitle(service) + ' · ';
+      if (!periods[0]) return serviceTitle(service);
       const ranges = [];
       for (const period of periods.sort()) {
         const last = ranges[ranges.length-1];
@@ -989,10 +991,13 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         const operation = item.operation;
         const session = pairs.get(operation.id);
         if (!session) return operationLine(operation,clientId,selected);
-        return line('Занятие и оплата',formatDate(session.date) + ' · ' + session.place,A.money(operation.amount,operation.currency),() =>
-          modal('Занятие и оплата',form => {
-            append(form,operationLine(session,clientId),operationLine(operation,clientId));
-          },{saveLabel:null}));
+        const title = formatDate(session.date) + ' · ' + session.place;
+        const amount = A.money(operation.amount,operation.currency);
+        return line(title,'Оплачено',amount,() => modal(title,form => {
+          append(form,line('Оплачено в день занятия','',amount),session.note && text(session.note),operation.note && text(operation.note),
+            row(button('Изменить занятие',()=>editSession({existing:session}),'subtle'),
+              button('Изменить оплату',()=>editPayment({existing:operation}),'subtle')));
+        },{saveLabel:null}));
       }));
       if (!entries.length) list.append(text(selected === 'all' ? 'Платежей и занятий пока нет' : 'По этому тарифу записей нет'));
       more.hidden = limit >= entries.length;
