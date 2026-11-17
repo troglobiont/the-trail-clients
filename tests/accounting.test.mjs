@@ -150,6 +150,26 @@ test('confirmed archive payments and explicit early allocations show coverage wi
   assert.equal(status().nextDue,'2025-12-17');
 });
 
+test('an agreed receipt in another currency settles a month or a range without counting a second receipt', () => {
+  const state = emptyState();
+  const client = createClient(state,{name:'Клиент'},'2024-10-01');
+  const group = enrollment(state,client,{startsOn:'2024-11-12',billingFrom:'2024-12'});
+  const settle = (firstMonth,lastMonth,part,replacedId) => A.settleMonths(state,{serviceId:group.id,firstMonth,lastMonth,part},replacedId,'2024-11-17');
+  const november = payment(state,'2024-11-01','RUB',800000,settle('2024-11',undefined,800000));
+  assert.equal(A.monthlyCharge(state,group,'2024-11','2024-11-17').remaining,0);
+  assert.deepEqual(A.summarize(state,'2024-11').receipts,{RUB:800000});
+  assert.throws(()=>settle('2024-11',undefined,800000),/уже оплачен/);
+  assert.deepEqual(settle('2024-11',undefined,800000,november.id),november.allocations);
+  payment(state,'2024-11-10','RSD',200000,[credit(group,'2024-12',200000)]);
+  const rest = settle('2024-11','2025-02',2300001);
+  assert.deepEqual(rest.map(item=>[item.month,item.credit]),[['2024-12',600000],['2025-01',800000],['2025-02',800000]]);
+  assert.equal(rest.reduce((total,item)=>total+item.part,0),2300001);
+  payment(state,'2024-11-17','RUB',2300001,rest);
+  assert.deepEqual(A.summarize(state,'2024-11').receipts,{RUB:3100001,RSD:200000});
+  assert.deepEqual(A.summarize(state,'2024-12').receipts,{});
+  assert.equal(A.currentPaymentStatuses(state,'2024-11-17').get(group.id).nextDue,'2025-03-24');
+});
+
 test('pauses stay distinct from endings and suppress charges due during a recorded pause', () => {
   const state = emptyState();
   const client = createClient(state, { name: 'Клиент' }, '2024-10-01');

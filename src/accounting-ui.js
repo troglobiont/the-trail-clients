@@ -417,12 +417,12 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     message('Добавь услугу в карточке клиента', false, { label: 'Клиенты', run: () => navigate('#clients') });
   }
 
-  async function saveEntry(values, existing, fromAccount) {
+  async function saveEntry(values, existing, fromAccount, buildAllocations) {
     if (fromAccount) {
       month = values.date.slice(0, 7);
       tab = 'operations';
     }
-    await commit(s => A.saveOperation(s, values, existing?.id));
+    await commit(s => A.saveOperation(s, buildAllocations ? { ...values, allocations:buildAllocations(s) } : values, existing?.id));
     message(existing ? 'Операция обновлена' : ({ payment: 'Оплата записана', session: 'Занятие записано', expense: 'Расход записан' })[values.kind]);
   }
 
@@ -451,12 +451,19 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const lines = el('div', null, 'stack');
       const allocations = [];
       let currencyChosen = Boolean(existing || seed);
+      const differentCurrency = service => Boolean(service && service.currency !== currency.value);
+      const closesMonths = (item,service) => differentCurrency(service) && isMonthly(service) && item.settlement.value === 'full';
       const sync = () => {
         for (const item of allocations) {
           const service = findService(item.service.value);
+          const foreign = differentCurrency(service);
+          const closeMonths = closesMonths(item,service);
           item.periodField.hidden = !service || !isMonthly(service);
-          item.creditField.hidden = !service || service.currency === currency.value;
-          if (service) item.creditLabel.textContent = `Зачесть в ${service.currency}`;
+          item.settlementField.hidden = !foreign || !isMonthly(service);
+          item.lastMonthField.hidden = !closeMonths;
+          item.creditField.hidden = !foreign || closeMonths;
+          item.creditError.hidden = item.creditField.hidden || !item.creditError.textContent;
+          if (service) item.creditLabel.textContent = `Сколько покрывает платёж, ${service.currency}`;
           item.partField.hidden = allocations.length === 1;
           item.remove.hidden = allocations.length === 1;
         }
@@ -464,10 +471,17 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const add = (value, limitToClient) => {
         const service = select(serviceOptions(limitToClient ? own : all, !limitToClient), value.serviceId || '');
         const paidMonth = input('month', value.month || period || (fromAccount ? month : today().slice(0, 7)));
+        const lastMonth = input('month');
         const part = moneyInput(value.part);
         const credit = moneyInput(value.credit);
+        const settlement = select([['full','Закрыть месяц полностью'],['partial','Указать сумму в валюте тарифа']],
+          value.credit == null ? 'full' : 'partial');
         const creditLabel = el('span');
+        const creditError = el('div',null,'form-error');
         const periodField = field('Оплаченный месяц', paidMonth);
+        const settlementField = field('Как зачесть оплату',settlement);
+        const lastMonthField = field('По месяц включительно', lastMonth);
+        lastMonthField.append(el('small','Оставь пустым, если оплачиваешь один месяц'));
         const partField = field('Часть поступления', part);
         const creditField = append(el('label'), creditLabel, credit);
         const panel = el('div', null, 'stack account-allocation');
@@ -476,14 +490,22 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           panel.remove();
           sync();
         }, 'subtle');
-        const item = { service, paidMonth, part, credit, creditLabel, periodField, partField, creditField, remove };
+        const item = { service, paidMonth, lastMonth, settlement, part, credit, creditLabel, creditError,
+          periodField, settlementField, lastMonthField, partField, creditField, remove };
         service.addEventListener('change', () => {
           const current = findService(service.value);
           if (current && !currencyChosen) { currency.value = current.currency; currencyChosen = true; }
           sync();
         });
+        settlement.addEventListener('change',sync);
+        credit.addEventListener('input',()=>{
+          credit.removeAttribute('aria-invalid');
+          creditError.textContent = '';
+          creditError.hidden = true;
+        });
         allocations.push(item);
-        lines.append(append(panel, field(limitToClient ? 'Услуга' : 'Клиент и услуга', service), periodField, partField, creditField, remove));
+        lines.append(append(panel, field(limitToClient ? 'Услуга' : 'Клиент и услуга', service), partField, periodField,
+          settlementField, lastMonthField, creditField, creditError, remove));
         sync();
       };
       currency.addEventListener('change', () => { currencyChosen = true; sync(); });
@@ -493,16 +515,33 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       correction(form, existing);
       return () => {
         const full = A.amountMinor(amount.value);
-        const values = allocations.map(item => {
+        const paymentCurrency = currency.value;
+        const plan = allocations.map(item => {
           const service = findService(item.service.value);
           if (!service) throw Error('Выбери услугу для каждой строки');
           const part = allocations.length === 1 ? full : A.amountMinor(item.part.value);
-          const credit = service.currency === currency.value ? part : A.amountMinor(item.credit.value);
-          return { serviceId: service.id, month: isMonthly(service) ? item.paidMonth.value : null, part, credit };
+          const paidMonth = isMonthly(service) ? item.paidMonth.value : null;
+          if (closesMonths(item,service)) {
+            return { serviceId:service.id, firstMonth:paidMonth,lastMonth:item.lastMonth.value || paidMonth,part };
+          }
+          let credit = part;
+          if (differentCurrency(service)) {
+            try { credit = A.amountMinor(item.credit.value); }
+            catch (error) {
+              const detail = item.credit.value.trim() ? error.message : `Укажи сумму в ${service.currency}, которую покрывает платёж`;
+              item.credit.setAttribute('aria-invalid','true');
+              item.creditError.textContent = detail;
+              item.creditError.hidden = false;
+              item.credit.focus();
+              throw Error(detail);
+            }
+          }
+          return { serviceId:service.id, month:paidMonth, part, credit };
         });
         const sessionId = existing?.sessionId;
-        return saveEntry({ kind: 'payment', date: recordedDate(date), amount: full, currency: currency.value, payer: payer.value.trim(), note: note.value.trim(),
-          allocations: values, ...(sessionId ? { sessionId } : {}) }, existing, fromAccount);
+        return saveEntry({ kind:'payment',date:recordedDate(date),amount:full,currency:paymentCurrency,payer:payer.value.trim(),note:note.value.trim(),
+          ...(sessionId ? { sessionId } : {}) },existing,fromAccount,s => plan.flatMap(item =>
+          'firstMonth' in item ? A.settleMonths(s,item,existing?.id) : [item]));
       };
     }, { onSaved });
   }

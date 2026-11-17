@@ -393,7 +393,7 @@ function dueDate(service, month) {
   return due < service.startsOn ? service.startsOn : due;
 }
 
-function monthlyCredits(state, today) {
+function monthlyCredits(state, today, replacedId) {
   const book = accounting(state);
   const credits = new Map();
   const receipts = new Set();
@@ -405,7 +405,7 @@ function monthlyCredits(state, today) {
   };
   for (const o of Object.values(book.operations)) {
     if (o.kind !== 'payment' || o.voided || o.date > today) continue;
-    for (const item of o.allocations) {
+    for (const item of o.id === replacedId ? [] : o.allocations) {
       if (item.month) add(item.serviceId, item.month, item.credit, o.date);
     }
     receipts.add(receiptKey(o.allocations.map(item => book.services[item.serviceId].clientId),o.date,o.currency,o.amount));
@@ -436,7 +436,7 @@ function monthlyCredits(state, today) {
   return credits;
 }
 
-function chargeFor(credits, service, month) {
+function chargeFor(credits, service, month, settle = false) {
   if (!validMonth(month) || service.kind === 'personal') return null;
   const due = dueDate(service, month);
   if (month < service.startsOn.slice(0, 7) || (service.endsOn && due > service.endsOn)) return null;
@@ -444,12 +444,40 @@ function chargeFor(credits, service, month) {
   if ((service.coveredThrough && month <= service.coveredThrough) || payment?.amount >= service.rate) {
     return { due, remaining:0, lastPaidOn:payment?.lastPaidOn };
   }
-  if (service.billingFrom && month < service.billingFrom) return null;
+  if (!settle && service.billingFrom && month < service.billingFrom) return null;
   return { due, remaining:service.rate - (payment?.amount ?? 0), lastPaidOn:payment?.lastPaidOn };
 }
 
 export function monthlyCharge(state, service, month, today = localDate()) {
   return chargeFor(monthlyCredits(state, today), service, month);
+}
+
+export function settleMonths(state, { serviceId, firstMonth, lastMonth = firstMonth, part }, replacedId, today = localDate()) {
+  const service = accounting(state).services[serviceId];
+  if (!service || service.kind === 'personal') throw Error('Выбери месячный тариф');
+  if (!validMonth(firstMonth) || !validMonth(lastMonth) || firstMonth > lastMonth) throw Error('Проверь месяцы оплаты');
+  if (!validMoney(part)) throw Error('Проверь сумму поступления');
+  const credits = monthlyCredits(state,today,replacedId);
+  const open = [];
+  for (let month = firstMonth, count = 0; ; month = nextMonth(month)) {
+    if (++count > 120) throw Error('Слишком много месяцев в одной оплате');
+    const charge = chargeFor(credits,service,month,true);
+    if (!charge) throw Error('Выбранный месяц вне срока действия тарифа');
+    if (charge.remaining > 0) open.push({ serviceId, month, credit:charge.remaining });
+    if (month === lastMonth) break;
+  }
+  if (!open.length) throw Error('Выбранный период уже оплачен');
+  const totalCredit = open.reduce((total, item) => total + BigInt(item.credit),0n);
+  let apportioned = 0;
+  let creditSoFar = 0n;
+  return open.map(item => {
+    creditSoFar += BigInt(item.credit);
+    const upto = Number(BigInt(part) * creditSoFar / totalCredit);
+    const share = upto - apportioned;
+    if (!share) throw Error('Сумма слишком мала для распределения по этим месяцам');
+    apportioned = upto;
+    return { ...item, part:share };
+  });
 }
 
 export function paymentTiming(due, today) {
