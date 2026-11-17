@@ -31,8 +31,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   function line(title, detail = '', value = '', action) {
     const item = action ? button('', action, 'account-line account-link') : el('div', null, 'account-line');
     const heading = append(el('span', null, 'account-label'), el('span', title), detail && el('small', detail));
-    const amounts = value && append(el('span',null,'account-value'),...String(value).split(' · ')
-      .flatMap((part,i)=>i?[' · ',el('span',part,'money-amount')]:[el('span',part,'money-amount')]));
+    const amounts = value && (typeof value === 'object' ? value : append(el('span',null,'account-value'),...String(value).split(' · ')
+      .flatMap((part,i)=>i?[' · ',el('span',part,'money-amount')]:[el('span',part,'money-amount')])));
     return append(item, heading, amounts);
   }
 
@@ -689,15 +689,22 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     });
   }
 
-  function operationLine(operation, clientId, packageFilter = 'all', application) {
+  function operationLine(operation) {
     const { kind, date, note, currency, voided } = operation;
     const status = voided ? 'Отменена · ' : '';
     if (kind === 'expense') return line(operation.category, `${status}${formatDate(date)} · Расход${note ? ' · ' + note : ''}`, '−' + A.money(operation.amount, currency), () => editExpense(operation));
     if (kind === 'session') {
       const service = findService(operation.serviceId);
       const when = formatDate(date) + ' · ' + operation.place;
-      return line(clientId ? when : clientName(service.clientId), `${status}${clientId ? 'Проведено' : when}${note ? ' · ' + note : ''}`, A.money(operation.amount, currency), () => editSession({ existing: operation, fromAccount: !clientId }));
+      return line(clientName(service.clientId), `${status}${when}${note ? ' · ' + note : ''}`, A.money(operation.amount, currency),
+        () => editSession({existing:operation,fromAccount:true}));
     }
+    const { names, tariffs, amount } = paymentBreakdown(operation);
+    return line(names.join(', '),[status+formatDate(date),tariffs,note].filter(Boolean).join(' · '),A.money(amount,currency),
+      () => editPayment({existing:operation,fromAccount:true}));
+  }
+
+  function paymentBreakdown(operation, clientId, packageFilter = 'all') {
     const items = operation.allocations.filter(item => {
       const service = findService(item.serviceId);
       return (!clientId || service.clientId === clientId) && (packageFilter === 'all' || A.tariffKey(service) === packageFilter);
@@ -721,12 +728,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const included = ranges.map(([first,last]) => first === last ? monthLabel(first) : monthLabel(first) + ' — ' + monthLabel(last));
       return tariff + (clientId ? 'за ' : '') + included.join(', ');
     });
-    const label = clientId ? 'Оплата' : names.join(', ');
-    const value = items.reduce((sum, item) => sum + item.part, 0);
-    const settlement = application && [application.covered>0&&'Погашено '+A.money(application.covered,application.currency),
-      application.advance>0&&'В аванс '+A.money(application.advance,application.currency)].filter(Boolean).join(' · ');
-    return line(label, [status+formatDate(date),[...new Set(details)].join(' / '),settlement,!clientId&&note].filter(Boolean).join(' · '),
-      A.money(value,currency),() => editPayment({existing:operation,fromAccount:!clientId}));
+    return {names,tariffs:[...new Set(details)].join(' / '),amount:items.reduce((sum,item)=>sum+item.part,0)};
   }
 
   function remindersPanel(limit = Infinity, periodFilter) {
@@ -950,17 +952,68 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return panel;
   }
 
+  function historyAmount({label, amount, currency, received}, voided) {
+    const value = (received ? '+' : '−')+A.money(Math.abs(amount),currency);
+    const node = el('span',value,'money-amount'+(received && !voided ? ' history-received' : ''));
+    node.setAttribute('aria-label',label+' '+value);
+    return node;
+  }
+
+  function historyLine({title, status, context, details, amounts, notes = [], edit = [], voided = false}) {
+    const values = append(el('span',null,'account-value history-amounts'),...amounts.map(unit=>historyAmount(unit,voided)));
+    if (voided) values.classList.add('history-voided');
+    return line(title,[status,context,details].filter(Boolean).join(' · '),values,()=>modal(title,form=>{
+      const amountRows = amounts.map(unit => {
+        const value = el('span',null,'account-value');
+        if (voided) value.classList.add('history-voided');
+        value.append(historyAmount(unit,voided));
+        return line(unit.label,'',value);
+      });
+      const corrections = edit.length && append(el('details',null,'fold'),el('summary','Исправить запись'),
+        append(el('div',null,'row fold-body'),...edit.map(([label,action])=>button(label,action,'subtle'))));
+      append(form,text([status,context].filter(Boolean).join(' · ')),append(el('div',null,'history-details'),...amountRows),
+        details && text(details),...notes.filter(Boolean).map(note=>text(note)),corrections);
+    },{saveLabel:null,cancelLabel:'Закрыть'}));
+  }
+
+  function clientHistoryLine(operation, session, clientId, tariff, application) {
+    const payment = operation.kind==='payment' ? operation : null;
+    const visit = session || (operation.kind==='session' ? operation : null);
+    const voided = operation.voided;
+    const when = formatDate(operation.date);
+    const info = payment && paymentBreakdown(payment,clientId,tariff);
+    const received = payment && {label:'Поступило',amount:info.amount,currency:payment.currency,received:true};
+    const charged = visit && {label:'Стоимость занятия',amount:visit.amount,currency:visit.currency,received:false};
+    const status = session ? 'Проведено и оплачено' : visit ? 'Проведено' : 'Поступление';
+    let details;
+    if (application && payment) {
+      details = [application.covered>0 && 'Погашено '+A.money(application.covered,application.currency),
+        application.advance>0 && 'В аванс '+A.money(application.advance,application.currency)].filter(Boolean).join(' · ');
+    } else if (application && visit) {
+      details = [application.fromAdvance>0 && 'Из аванса '+A.money(application.fromAdvance,application.currency),
+        application.due>0 && 'К оплате на эту дату '+A.money(application.due,application.currency)].filter(Boolean).join(' · ');
+    }
+    const context = visit ? '' : info.tariffs;
+    return historyLine({title:when+(visit ? ' · '+visit.place : ''),status:voided ? 'Запись отменена' : status,
+      context,details,amounts:[received,charged].filter(Boolean),
+      notes:[...new Set([visit?.note,payment?.note])],voided,edit:[
+        visit && ['Изменить занятие',()=>editSession({existing:visit})],
+        payment && ['Изменить оплату',()=>editPayment({existing:payment})]
+      ].filter(Boolean)});
+  }
+
   function importedHistoryLine(entry) {
-    const label = {payment:'Оплата',shared:'Семейная оплата',session:'Занятия'}[entry.kind];
-    const detail = [entry.date ? formatDate(entry.date) : '', entry.kind === 'session' ? monthLabel(entry.month) : 'за ' + monthLabel(entry.month),
-      entry.kind === 'shared' && 'общая сумма'].filter(Boolean).join(' · ');
-    return line(label,detail,totals(entry.values),entry.detail ? () => modal(label, form => {
-      append(form,text(detail),text(entry.detail));
-    },{saveLabel:null}) : null);
+    const label = {payment:'Поступление',shared:'Семейная оплата · общая сумма',session:'Занятия за месяц'}[entry.kind];
+    const received = entry.kind !== 'session';
+    const amounts = A.CURRENCIES.filter(currency=>entry.values[currency]>0).map(currency=>({
+      label:received?'Поступило':'Стоимость занятий',currency,amount:entry.values[currency],received}));
+    const period = monthLabel(entry.month);
+    return historyLine({title:entry.date ? formatDate(entry.date) : period,status:label,
+      context:entry.date ? 'за '+period : '',amounts,notes:[entry.detail]});
   }
 
   function clientHistory(history, clientId, services) {
-    const paymentDetails = A.personalPaymentHistory(state(),clientId);
+    const operationDetails = A.personalOperationHistory(state(),clientId);
     const recorded = history.filter(item => item.type === 'operation').map(item => item.operation);
     const byId = new Map(recorded.map(operation => [operation.id, operation]));
     const pairs = new Map();
@@ -995,15 +1048,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         }
         if (item.type === 'ledger') return importedHistoryLine(item.row);
         const operation = item.operation;
-        const session = pairs.get(operation.id);
-        if (!session) return operationLine(operation,clientId,selected,paymentDetails.get(operation.id));
-        const title = formatDate(session.date) + ' · ' + session.place;
-        const amount = A.money(operation.amount,operation.currency);
-        return line(title,'Оплачено',amount,() => modal(title,form => {
-          append(form,line('Оплачено в день занятия','',amount),session.note && text(session.note),operation.note && text(operation.note),
-            row(button('Изменить занятие',()=>editSession({existing:session}),'subtle'),
-              button('Изменить оплату',()=>editPayment({existing:operation}),'subtle')));
-        },{saveLabel:null}));
+        return clientHistoryLine(operation,pairs.get(operation.id),clientId,selected,operationDetails.get(operation.id));
       }));
       if (!entries.length) list.append(text(selected === 'all' ? 'Платежей и занятий пока нет' : 'По этому тарифу записей нет'));
       more.hidden = limit >= entries.length;

@@ -63,7 +63,7 @@ const scheduleRoute='#todo/schedule';
 const calendarUI=createCalendarUI({state,service,el,append,button,row,field,input,select,text,modal,commit,formatDate,navigate,openClient,
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   scheduledSession:accountingUI.scheduledSession,addScheduledTariff:accountingUI.addScheduledTariff});
-function modal(title,build,{saveLabel='Сохранить',saveClass='primary',onSaved}={}){
+function modal(title,build,{saveLabel='Сохранить',saveClass='primary',cancelLabel='Отмена',onSaved}={}){
   dialog.textContent='';
   const form=el('form'),heading=el('h2',title),error=text('','form-error');
   heading.id='editor-title';error.setAttribute('role','alert');form.append(heading);
@@ -72,7 +72,7 @@ function modal(title,build,{saveLabel='Сохранить',saveClass='primary',o
     try{await save();dialog.close();onSaved?.();}catch(e){error.textContent=e.message;}
   },saveClass);
   save=build(form,enabled=>{if(saveControl)saveControl.disabled=!enabled;error.textContent='';});
-  const controls=row(button('Отмена',()=>dialog.close()),saveControl);
+  const controls=row(button(cancelLabel,()=>dialog.close()),saveControl);
   form.addEventListener('submit',e=>{e.preventDefault();if(saveControl&&!saveControl.disabled)saveControl.click();});
   append(form,error,controls);dialog.append(form);
   if(dialog.open)(form.querySelector('[autofocus]')||form.querySelector('select,input,button'))?.focus();

@@ -311,14 +311,19 @@ export function serviceBalance(state, serviceId, today = localDate()) {
   return { received, used, balance: credit + received - used };
 }
 
-export function personalPaymentHistory(state, clientId) {
+export function personalOperationHistory(state, clientId) {
   const tariffs = new Map(clientServices(state,clientId).filter(s=>s.kind==='personal').map(s=>[s.id,s]));
   const entries = operations(state,{clientId}).sort((a,b)=>a.date.localeCompare(b.date)
     || Number(b.kind==='session')-Number(a.kind==='session'));
-  const balances = new Map(), paymentDetails = new Map(), receiptsPerDay = new Map();
-  for (const entry of entries) if (entry.kind==='payment') for (const item of entry.allocations) {
-    const key = item.serviceId+'/'+entry.date;
-    receiptsPerDay.set(key,(receiptsPerDay.get(key) || 0)+1);
+  const balances = new Map(), details = new Map(), receiptsPerDay = new Map(), sessionsPerDay = new Map();
+  for (const entry of entries) {
+    if (entry.kind==='session') {
+      const key = entry.serviceId+'/'+entry.date;
+      sessionsPerDay.set(key,(sessionsPerDay.get(key) || 0)+1);
+    } else for (const item of entry.allocations) {
+      const key = item.serviceId+'/'+entry.date;
+      receiptsPerDay.set(key,(receiptsPerDay.get(key) || 0)+1);
+    }
   }
   for (const entry of entries) {
     const changes = entry.kind==='session' ? [{serviceId:entry.serviceId,credit:-entry.amount}] : entry.allocations;
@@ -329,14 +334,17 @@ export function personalPaymentHistory(state, clientId) {
       const delta = balances.get(serviceId) || 0;
       const balance = delta+(opening?.date<=entry.date ? opening.amount : 0);
       balances.set(serviceId,delta+credit);
-      if (entry.kind==='payment' && !entry.sessionId && entry.allocations.length===1
-          && receiptsPerDay.get(serviceId+'/'+entry.date)===1) {
+      const key = serviceId+'/'+entry.date;
+      if (entry.kind==='payment' && !entry.sessionId && entry.allocations.length===1 && receiptsPerDay.get(key)===1) {
         const covered = Math.min(credit,Math.max(0,-balance));
-        paymentDetails.set(entry.id,{covered,advance:credit-covered,currency:tariff.currency});
+        details.set(entry.id,{covered,advance:credit-covered,currency:tariff.currency});
+      } else if (entry.kind==='session' && sessionsPerDay.get(key)===1 && !receiptsPerDay.has(key)) {
+        const fromAdvance = Math.min(entry.amount,Math.max(0,balance));
+        details.set(entry.id,{fromAdvance,due:entry.amount-fromAdvance,currency:tariff.currency});
       }
     }
   }
-  return paymentDetails;
+  return details;
 }
 
 export function personalBalances(state, through = localDate()) {

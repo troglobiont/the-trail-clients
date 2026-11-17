@@ -229,6 +229,11 @@ button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opa
 .account-label{min-width:0;overflow-wrap:anywhere}
 .account-label small{display:block;color:var(--muted);font-weight:400}
 .account-value{text-align:right;font-weight:650;font-variant-numeric:tabular-nums;max-width:15ch;overflow-wrap:anywhere}
+.history-amounts{display:grid;justify-items:end;gap:2px}
+.history-received{color:#20633c}
+:root[data-appearance=dark] .history-received{color:#8adeaa}
+.history-voided{text-decoration:line-through;color:var(--muted)}
+.history-details{display:grid}
 .account-total{font-size:25px;font-variant-numeric:tabular-nums}
 .account-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .account-fields label{min-width:0}
