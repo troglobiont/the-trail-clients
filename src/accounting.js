@@ -176,16 +176,25 @@ export function hasManualSession(state, serviceId, date) {
     && operation.serviceId === serviceId && operation.date === date && !operation.id.startsWith('calendar-session-'));
 }
 
-export function recordCalendarSession(state, { clientId, serviceId, date, currency, amount, place, sessionId, paymentId, received, receivedOn, separate }) {
+export function recordCalendarSession(state, { clientId, serviceId, date, currency, amount, place, sessionId, paymentId,
+    received, receivedOn, separate, performed = true }) {
   const book = accounting(state);
   const service = book.services[serviceId];
   if (service?.clientId !== clientId || service.kind !== 'personal' || service.oneOff || !activeService(service,date)
       || service.rate !== amount || service.currency !== currency || service.place !== place) {
     throw Error('Тариф изменился. Открой тренировку заново');
   }
-  if (book.operations[sessionId] && !book.operations[sessionId].voided) throw Error('Эта тренировка уже записана');
-  if (book.operations[paymentId] && !book.operations[paymentId].voided) {
+  if (performed && book.operations[sessionId] && !book.operations[sessionId].voided) throw Error('Эта тренировка уже записана');
+  const priorPayment = book.operations[paymentId];
+  if (priorPayment && !priorPayment.voided && (!performed || received || priorPayment.sessionId)) {
     throw Error('За эту тренировку уже есть оплата. Проверь историю занятий');
+  }
+  if (!performed) {
+    if (!received) throw Error('Отметь занятие или оплату');
+    const payment = saveOperation(state,{kind:'payment',date:receivedOn,amount:received,currency,note:'',payer:'',
+      allocations:[{serviceId,month:null,part:received,credit:received}]},paymentId);
+    payment.voided = false;
+    return [payment];
   }
   if (!separate && hasManualSession(state,serviceId,date)) throw Error('На эту дату уже есть занятие. Подтверди, что записываешь другое');
   const values = { serviceId, date, currency, amount, place, note:'' };
@@ -300,6 +309,34 @@ export function serviceBalance(state, serviceId, today = localDate()) {
   const opening = accounting(state).services[serviceId]?.openingCredit;
   const credit = opening && opening.date <= today ? opening.amount : 0;
   return { received, used, balance: credit + received - used };
+}
+
+export function personalPaymentHistory(state, clientId) {
+  const tariffs = new Map(clientServices(state,clientId).filter(s=>s.kind==='personal').map(s=>[s.id,s]));
+  const entries = operations(state,{clientId}).sort((a,b)=>a.date.localeCompare(b.date)
+    || Number(b.kind==='session')-Number(a.kind==='session'));
+  const balances = new Map(), paymentDetails = new Map(), receiptsPerDay = new Map();
+  for (const entry of entries) if (entry.kind==='payment') for (const item of entry.allocations) {
+    const key = item.serviceId+'/'+entry.date;
+    receiptsPerDay.set(key,(receiptsPerDay.get(key) || 0)+1);
+  }
+  for (const entry of entries) {
+    const changes = entry.kind==='session' ? [{serviceId:entry.serviceId,credit:-entry.amount}] : entry.allocations;
+    for (const {serviceId,credit} of changes) {
+      const tariff = tariffs.get(serviceId);
+      if (!tariff) continue;
+      const opening = tariff.openingCredit;
+      const delta = balances.get(serviceId) || 0;
+      const balance = delta+(opening?.date<=entry.date ? opening.amount : 0);
+      balances.set(serviceId,delta+credit);
+      if (entry.kind==='payment' && !entry.sessionId && entry.allocations.length===1
+          && receiptsPerDay.get(serviceId+'/'+entry.date)===1) {
+        const covered = Math.min(credit,Math.max(0,-balance));
+        paymentDetails.set(entry.id,{covered,advance:credit-covered,currency:tariff.currency});
+      }
+    }
+  }
+  return paymentDetails;
 }
 
 export function personalBalances(state, through = localDate()) {

@@ -18,6 +18,16 @@ function payment(state, date, currency, amount, allocations) {
 
 const credit = (service, month, part, credited = part) => ({ serviceId: service.id, month, part, credit: credited });
 
+test('personal history describes the part of a receipt that settles debt and the part left as advance', () => {
+  const s=emptyState(), client=createClient(s,{name:'Тестовый клиент'},'2026-09-15');
+  const tariff=enrollment(s,client,{kind:'personal',block:'personal',place:'Улица',day:null,rate:400000,reminder:false,startsOn:'2026-09-15'});
+  const values={serviceId:tariff.id,amount:400000,currency:'RSD',place:'Улица',note:''};
+  A.savePaidSession(s,{...values,date:'2026-09-15'},400000);
+  for (const date of ['2026-09-22','2026-09-24']) A.saveOperation(s,{...values,date,kind:'session'});
+  const receipt=payment(s,'2026-09-25','RSD',4000000,[credit(tariff,null,4000000)]);
+  assert.deepEqual([...A.personalPaymentHistory(s,client.id)],[[receipt.id,{covered:800000,advance:3200000,currency:'RSD'}]]);
+});
+
 test('a reconciled imported session appears once in history and in monthly counts after reimport', () => {
   const state = emptyState(), client = createClient(state,{name:'Клиент'},'2026-11-06');
   const tariff = enrollment(state,client,{kind:'personal',block:'personal',rate:400000,day:null,place:'Зал',reminder:false,startsOn:'2026-11-06'});

@@ -51,6 +51,7 @@ export function createCalendarUI({state, service, el, append, button, row, field
     navigate, openClient, searchClients, scheduledSession, addScheduledTariff}) {
   let cached, loading;
   const selectedClients = new Map();
+  const aligning = new Set();
   const load = (force = false) => {
     if (loading) return loading;
     if (!force && cached?.until > Date.now()) return Promise.resolve(cached.value);
@@ -74,6 +75,29 @@ export function createCalendarUI({state, service, el, append, button, row, field
     ? 'Снимок календаря · '+formatDate(data.asOf)+'. Автообновление пока не подключено.'
     : data.mode === 'not-connected' ? 'Google Календарь ещё не подключён.' : '';
 
+  function resolveClient(event, clientId) {
+    const s = state();
+    const task = Object.values(s.tasks).find(item=>item.calendarEvent?.id===event.id);
+    return calendarClient(event,s.clients,clientId || selectedClients.get(event.id) || event.clientId || task?.clientId);
+  }
+
+  async function align(event, client) {
+    if (!client || !event.canAlign || aligning.has(event.id)) return;
+    const title = 'Персональная · '+client.name+' · Сергей';
+    if (event.title===title && event.clientId===client.id) return;
+    aligning.add(event.id);
+    try {
+      const response = await service('/calendar/align',{eventId:event.id,clientId:client.id,clientName:client.name,expectedTitle:event.title});
+      if (response.error) throw Error(response.error);
+      if (response.status==='changed' || response.status==='unchanged') {
+        event.title = title;
+        event.clientId = client.id;
+      }
+    } finally {
+      aligning.delete(event.id);
+    }
+  }
+
   function schedule() {
     const list = el('div', null, 'stack'), status = text(''), box = el('section', null, 'stack');
     status.setAttribute('role', 'status');
@@ -84,13 +108,20 @@ export function createCalendarUI({state, service, el, append, button, row, field
         const data = await load(force);
         status.textContent = modeHint(data) || (data.events.length ? '' : 'На ближайшие 30 дней персональных тренировок нет.');
         let previousDay;
-        for (const event of data.events) {
+        const entries = data.events.map(event=>({event,client:resolveClient(event)}));
+        for (const {event,client} of entries) {
           const day = localDate(new Date(event.start));
           if (day !== previousDay) list.append(el('h3', formatDate(day), 'calendar-day'));
           previousDay = day;
           list.append(append(button('',()=>navigate('#todo/schedule/'+encodeURIComponent(event.id)),'panel calendar-event'),
             text(timeRange(event), 'calendar-time'),
-            append(el('div'),el('strong',calendarName(event)),event.location&&text(event.location))));
+            append(el('div'),el('strong',client?.name || calendarName(event)),event.location&&text(event.location))));
+        }
+        for (const {event,client} of entries) {
+          if (!list.isConnected) break;
+          await align(event,client).catch(()=>{
+            status.textContent = 'Имена в приложении актуальны. Обновить названия в Google Календаре можно повторным нажатием «Обновить».';
+          });
         }
       } catch(error) {
         status.textContent = error.message;
@@ -110,8 +141,7 @@ export function createCalendarUI({state, service, el, append, button, row, field
       const operation = operations[ids.sessionId];
       const recorded = operation && !operation.voided;
       const existingClientId = operation && services[operation.serviceId]?.clientId;
-      const linkedTask = Object.values(s.tasks).find(task=>task.calendarEvent?.id===event.id);
-      const client = calendarClient(event,s.clients,existingClientId || selectedClients.get(event.id) || event.clientId || linkedTask?.clientId);
+      const client = resolveClient(event,existingClientId);
       const place = calendarPlace(event.location);
       const tariffs = client ? clientServices(s,client.id).filter(tariff=>tariff.kind==='personal' && !tariff.oneOff
         && activeService(tariff,date) && (!place || tariff.place===place)) : [];
@@ -124,9 +154,10 @@ export function createCalendarUI({state, service, el, append, button, row, field
         const matches = el('div',null,'stack');
         const update = () => {
           const found = searchClients(query.value).slice(0,10);
-          matches.replaceChildren(...found.map(person=>button(person.name,()=>{
+          matches.replaceChildren(...found.map(person=>button(person.name,async()=>{
             selectedClients.set(event.id,person.id);
             form.closest('dialog').close();display(event,ids);
+            await align(event,person);
           },'client-tile')), ...(!found.length?[text('Клиенты не найдены')]:[]));
         };
         query.addEventListener('input',update);update();append(form,query,matches);

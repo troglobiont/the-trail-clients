@@ -101,9 +101,19 @@ export function applyLedger(state, file, { createClient, setTelegramBinding }) {
       bound++;
     }
   }
+  const reconciled = new Map((state.ledger?.rows || []).filter(row=>row.kind==='repeat' && row.sourceKind).map(row=>[row.id,row]));
   state.ledger = {
     datasetId: file.datasetId, asOf: file.asOf, months: file.months,
-    rows: file.rows.map(row => ({ ...row, owners: [...new Set(row.owners.map(id => owners.get(id)).filter(Boolean))] }))
+    rows: file.rows.map(row => {
+      const mapped = {...row,owners:[...new Set(row.owners.map(id=>owners.get(id)).filter(Boolean))]};
+      const old = reconciled.get(row.id);
+      if (old?.sourceKind===mapped.kind && old.month===mapped.month && old.date===mapped.date && old.detail===mapped.detail
+          && old.block===mapped.block && old.owners.length===mapped.owners.length && old.owners.every(id=>mapped.owners.includes(id))
+          && currencies.every(currency=>old.values[currency]===mapped.values[currency])) {
+        return {...mapped,kind:'repeat',sourceKind:old.sourceKind};
+      }
+      return mapped;
+    })
   };
   return { matched, created, bound, rows: state.ledger.rows.length };
 }

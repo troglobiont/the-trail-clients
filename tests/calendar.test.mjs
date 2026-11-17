@@ -55,3 +55,17 @@ test('completing a calendar session uses advance once and can record a separate 
   A.setVoided(s,session.id,true);
   assert.throws(()=>A.recordCalendarSession(s,sameDay),/уже есть оплата/u);
 });
+
+test('taking money first preserves a separate session and prevents a duplicate receipt', () => {
+  const s = emptyState(), date = localDate();
+  const client = createClient(s,{name:'Тестовый клиент'},date);
+  const service = A.saveService(s,{clientId:client.id,kind:'personal',block:'personal',place:'Улица',currency:'RSD',rate:400000,
+    startsOn:date,endsOn:null,day:null,reminder:false});
+  const entry = {clientId:client.id,serviceId:service.id,place:service.place,amount:service.rate,currency:service.currency,date,
+    sessionId:'calendar-session-one',paymentId:'calendar-payment-one'};
+  A.recordCalendarSession(s,{...entry,performed:false,received:400000,receivedOn:date});
+  assert.deepEqual(A.operations(s).map(item=>item.kind),['payment']);
+  assert.throws(()=>A.recordCalendarSession(s,{...entry,received:400000,receivedOn:date}),/уже есть оплата/u);
+  A.recordCalendarSession(s,entry);
+  assert.deepEqual(A.serviceBalance(s,service.id),{received:400000,used:400000,balance:0});
+});

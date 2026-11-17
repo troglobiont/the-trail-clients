@@ -118,7 +118,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   function quickEntry(clientId, selection, fromAccount = false, {tariffs, scheduled} = {}) {
     const options = tariffs ?? (selection ? [selection] : quickOptions(clientId));
     if (!options.length) return noService(clientId);
-    const title = scheduled ? 'Тренировка состоялась' : selection?.label ?? 'Быстрая оплата';
+    const title = scheduled ? 'Запись по тренировке' : selection?.label ?? 'Быстрая оплата';
     let confirmation;
     modal(title, (form, setSaveEnabled) => {
       const details = el('div',null,'stack');
@@ -141,10 +141,12 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         const recordSession = input('checkbox');
         recordSession.checked = Boolean(scheduled);
         const paid = input('checkbox');
+        const priorPayment = scheduled && book().operations[scheduled.paymentId];
+        paid.disabled = Boolean(priorPayment && !priorPayment.voided);
         const separate = input('checkbox');
         const alreadyRecorded = scheduled && A.hasManualSession(state(),service.id,scheduled.date);
         const sessionField = append(el('label',null,'checkbox'),recordSession,el('span','Занятие проведено'));
-        const paidField = append(el('label',null,'checkbox'),paid,el('span','Оплата получена'));
+        const paidField = append(el('label',null,'checkbox'),paid,el('span',scheduled ? 'Получены новые деньги' : 'Оплата получена'));
         const receivedField = field('Получено, ' + service.currency,received);
         const dateLabel = el('span');
         const placeField = field('Место',place);
@@ -206,7 +208,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           scheduled && text([formatDate(scheduled.date),A.money(service.rate,service.currency)].join(' · ')),
           alreadyRecorded && text('На эту дату уже записано занятие по этому тарифу. Проверь историю клиента.','warning-text small'),
           alreadyRecorded && append(el('label',null,'checkbox'),separate,el('span','Это другое занятие')),
-          canRecordSession && !scheduled && sessionField, canRecordSession && paidField,
+          canRecordSession && sessionField, canRecordSession && paidField,
+          paid.disabled && text('Поступление по этой записи уже внесено'),
           receivedField,receivedOnField,monthly && field('Оплаченный месяц',period),note,!scheduled && changes,!scheduled && advanced
         ].filter(Boolean));
         save = async () => {
@@ -218,7 +221,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           const saved = await commit(s => {
             if (scheduled) return A.recordCalendarSession(s,{...scheduled,clientId,serviceId:service.id,
               currency:service.currency,amount:service.rate,place:service.place,received:amount,
-              receivedOn:payment&&recordedDate(receivedOn),separate:separate.checked});
+              receivedOn:payment&&recordedDate(receivedOn),separate:separate.checked,performed:session});
             const fresh = A.accounting(s).services[service.id];
             if (!fresh || fresh.clientId !== clientId || fresh.kind !== service.kind || fresh.currency !== service.currency) {
               throw Error('Условия услуги изменились. Открой запись заново');
@@ -686,7 +689,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     });
   }
 
-  function operationLine(operation, clientId, packageFilter = 'all') {
+  function operationLine(operation, clientId, packageFilter = 'all', application) {
     const { kind, date, note, currency, voided } = operation;
     const status = voided ? 'Отменена · ' : '';
     if (kind === 'expense') return line(operation.category, `${status}${formatDate(date)} · Расход${note ? ' · ' + note : ''}`, '−' + A.money(operation.amount, currency), () => editExpense(operation));
@@ -720,7 +723,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     });
     const label = clientId ? 'Оплата' : names.join(', ');
     const value = items.reduce((sum, item) => sum + item.part, 0);
-    return line(label, `${status}${formatDate(date)} · ${[...new Set(details)].join(' / ')}${!clientId && note ? ' · ' + note : ''}`,
+    const settlement = application && [application.covered>0&&'Погашено '+A.money(application.covered,application.currency),
+      application.advance>0&&'В аванс '+A.money(application.advance,application.currency)].filter(Boolean).join(' · ');
+    return line(label, [status+formatDate(date),[...new Set(details)].join(' / '),settlement,!clientId&&note].filter(Boolean).join(' · '),
       A.money(value,currency),() => editPayment({existing:operation,fromAccount:!clientId}));
   }
 
@@ -955,6 +960,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   }
 
   function clientHistory(history, clientId, services) {
+    const paymentDetails = A.personalPaymentHistory(state(),clientId);
     const recorded = history.filter(item => item.type === 'operation').map(item => item.operation);
     const byId = new Map(recorded.map(operation => [operation.id, operation]));
     const pairs = new Map();
@@ -990,7 +996,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         if (item.type === 'ledger') return importedHistoryLine(item.row);
         const operation = item.operation;
         const session = pairs.get(operation.id);
-        if (!session) return operationLine(operation,clientId,selected);
+        if (!session) return operationLine(operation,clientId,selected,paymentDetails.get(operation.id));
         const title = formatDate(session.date) + ' · ' + session.place;
         const amount = A.money(operation.amount,operation.currency);
         return line(title,'Оплачено',amount,() => modal(title,form => {

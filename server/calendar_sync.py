@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 BELGRADE = ZoneInfo('Europe/Belgrade')
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
-EVENT_FIELDS = 'id,summary,start,end,location,status,extendedProperties'
+EVENT_FIELDS = 'id,summary,start,end,location,status,extendedProperties,recurringEventId,recurrence,attendees(self),etag'
 
 
 def event_view(raw):
@@ -26,7 +26,8 @@ def event_view(raw):
     if not (start and end and raw.get('id')):
         return None
     return {'id': raw['id'], 'title': title, 'start': start, 'end': end,
-            'location': raw.get('location', ''), 'clientId': raw.get('extendedProperties', {}).get('private', {}).get('trailClientId')}
+            'location': raw.get('location', ''), 'clientId': raw.get('extendedProperties', {}).get('private', {}).get('trailClientId'),
+            'canAlign': not bool(raw.get('attendees') or raw.get('recurringEventId') or raw.get('recurrence'))}
 
 
 def date_range(payload):
@@ -36,7 +37,7 @@ def date_range(payload):
     return (datetime.combine(start, time.min, BELGRADE), datetime.combine(end, time.min, BELGRADE))
 
 
-def google_request(path='', params=None, body=None):
+def google_request(path='', params=None, body=None, method=None, etag=None):
     from google.auth.transport.requests import Request as GoogleAuthRequest
     from google.oauth2.service_account import Credentials
 
@@ -49,7 +50,9 @@ def google_request(path='', params=None, body=None):
     if params:
         url += '?' + urlencode(params)
     headers = {'Authorization': f'Bearer {credentials.token}', 'Content-Type': 'application/json'}
-    request = Request(url, data=None if body is None else json.dumps(body).encode(), headers=headers)
+    if etag:
+        headers['If-Match'] = etag
+    request = Request(url, data=None if body is None else json.dumps(body).encode(), headers=headers, method=method)
     with urlopen(request, timeout=15) as response:
         return json.load(response)
 
@@ -90,6 +93,34 @@ def calendar_list(payload, request=google_request):
     for event in events:
         event['url'] = event_link(event['id'])
     return {'mode': 'live', 'events': events}
+
+
+def calendar_align(payload, request=google_request):
+    if not calendar_connected():
+        return {'status': 'skipped'}
+    event_id, client_id, name, expected = (payload[key] for key in ('eventId', 'clientId', 'clientName', 'expectedTitle'))
+    if (not re.fullmatch(r'[a-zA-Z0-9_-]{1,300}', event_id) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,180}', client_id)
+            or not re.fullmatch(r'[^·\r\n]{1,180}', name) or not name.strip()):
+        raise ValueError('Некорректное событие или клиент')
+    path = '/' + quote(event_id, safe='')
+    raw = request(path=path, params={'fields': EVENT_FIELDS})
+    event = event_view(raw)
+    summary = f'Персональная · {name.strip()} · Сергей'
+    if event and event['title'] == summary and event['clientId'] == client_id:
+        return {'status': 'unchanged'}
+    if (not event or not event['canAlign'] or not raw.get('etag') or event['title'] != expected
+            or (event['clientId'] and event['clientId'] != client_id)):
+        return {'status': 'skipped'}
+    properties = raw.get('extendedProperties', {}).get('private', {})
+    try:
+        request(path=path, params={'sendUpdates': 'none'}, method='PATCH', etag=raw['etag'],
+                body={'summary': summary, 'extendedProperties': {'private': {**properties, 'trailClientId': client_id}}})
+    except HTTPError as error:
+        if error.code in (404, 410, 412):
+            error.close()
+            return {'status': 'skipped'}
+        raise
+    return {'status': 'changed'}
 
 
 def calendar_book(payload, request=google_request):
