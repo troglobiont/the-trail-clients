@@ -240,7 +240,6 @@ button.account-move-date{padding-inline:0}
 .payment-overdue{--payment-color:var(--danger)}
 [data-appearance=dark] .payment-paid{--payment-color:#80c99d}
 .account-main-action{width:100%}
-.account-extra-action{justify-self:start;text-align:left;border-color:var(--line)}
 .account-picker{gap:0}
 .account-confirmation{padding-inline:10px;background:var(--success);color:var(--success-text);border-radius:10px}
 .account-form-client{font-weight:600}
