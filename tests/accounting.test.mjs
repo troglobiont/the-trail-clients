@@ -31,6 +31,22 @@ test('a one-off visit leaves a payable balance without creating a recurring tari
   assert.doesNotThrow(()=>parseImport(exportState(state)));
 });
 
+test('receivables apply linked receipts to their own sessions and general payments to the oldest open balance', () => {
+  const state=emptyState();
+  const client=createClient(state,{name:'Клиент'},'2024-10-01');
+  const service=enrollment(state,client,{kind:'personal',block:'personal',place:'Зал',day:null,reminder:false,
+    rate:400000,openingCredit:{date:'2024-10-01',amount:100000},endsOn:'2024-10-15'});
+  const values={serviceId:service.id,place:'Зал',currency:'RSD',amount:400000,note:''};
+  const pending=A.saveOperation(state,{...values,kind:'session',date:'2024-10-04'});
+  A.savePaidSession(state,{...values,date:'2024-10-08'},400000);
+  payment(state,'2024-10-09','RSD',50000,[credit(service,null,50000)]);
+  const [balance]=A.personalReceivables(state,'2024-10-17');
+  assert.deepEqual(balance.unpaid,[{session:pending,remaining:250000}]);
+  assert.equal(balance.remaining,-A.serviceBalance(state,service.id,'2024-10-17').balance);
+  payment(state,'2024-10-17','RSD',250000,[credit(service,null,250000)]);
+  assert.deepEqual(A.personalReceivables(state,'2024-10-17'),[]);
+});
+
 test('assistant commits a new tariff and dated operations together', () => {
   const state=emptyState(), client=createClient(state,{name:'Тестовый клиент'},'2024-10-01');
   const visit={clientId:client.id,oneOff:false,place:'Зал',currency:'RSD',rate:400000,date:'2024-10-10'};
@@ -194,6 +210,24 @@ test('client history merges old receipts with actual operations and replaces an 
   assert.equal(history().length,2);
   A.setVoided(state,november.id,true);
   assert.deepEqual(history().map(item=>item.type),['coverage','operation','ledger','ledger']);
+});
+
+test('history filters intersect the record kind with the package, including a split archive receipt', () => {
+  const state=emptyState();
+  const client=createClient(state,{name:'Клиент'},'2024-10-01');
+  const group=enrollment(state,client);
+  const personal=enrollment(state,client,{kind:'personal',block:'personal',place:'Зал',day:null,reminder:false,rate:400000});
+  const [session,paid]=A.savePaidSession(state,{serviceId:personal.id,place:'Зал',currency:'RSD',amount:400000,date:'2024-10-08',note:''},400000);
+  const mixed=payment(state,'2024-10-09','RSD',1200000,[credit(group,'2024-10',800000),credit(personal,null,400000)]);
+  const archive={kind:'payment',block:'belgrade',date:'2024-10-03',month:'2024-10',owners:[client.id],values:{RSD:1200000},
+    packageParts:{RSD:{belgrade:800000,personal:400000}}};
+  state.ledger={rows:[archive]};
+  const history=A.clientAccountHistory(state,client.id,'2024-10-17');
+  const filtered=(kind,pkg)=>A.filterClientAccountHistory(state,history,client.id,kind,pkg);
+  assert.deepEqual(filtered('session','personal').map(item=>item.operation),[session]);
+  assert.deepEqual(filtered('session','belgrade'),[]);
+  assert.deepEqual(filtered('payment','personal').map(item=>item.operation ?? item.row.values),[mixed,paid,{RSD:400000}]);
+  assert.deepEqual(filtered('payment','belgrade').map(item=>item.operation ?? item.row.values),[mixed,{RSD:800000}]);
 });
 
 test('moving a due day preserves receipts and can apply for one month or from a selected month', () => {

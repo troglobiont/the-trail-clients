@@ -282,6 +282,43 @@ export function personalBalances(state, through = localDate()) {
   return result;
 }
 
+export function personalReceivables(state, through = localDate(), clientId) {
+  const accounts = new Map();
+  for (const service of Object.values(accounting(state).services)) {
+    if (service.kind !== 'personal' || (clientId && service.clientId !== clientId)) continue;
+    const advance = service.openingCredit;
+    accounts.set(service.id,{ service, sessions:[], targeted:new Map(), credit:advance?.date <= through ? advance.amount : 0 });
+  }
+  for (const operation of operations(state)) {
+    if (operation.date > through) continue;
+    if (operation.kind === 'session') accounts.get(operation.serviceId)?.sessions.push(operation);
+    if (operation.kind !== 'payment') continue;
+    for (const allocation of operation.allocations) {
+      const account = accounts.get(allocation.serviceId);
+      if (!account) continue;
+      account.credit += allocation.credit;
+      if (operation.sessionId) account.targeted.set(operation.sessionId,(account.targeted.get(operation.sessionId) ?? 0) + allocation.credit);
+    }
+  }
+  const result = [];
+  for (const {service,sessions,targeted,credit} of accounts.values()) {
+    let available = credit;
+    const open = sessions.sort((a,b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).map(session => {
+      const covered = Math.min(session.amount,targeted.get(session.id) ?? 0);
+      available -= covered;
+      return { session, remaining:session.amount - covered };
+    });
+    const unpaid = open.filter(item => {
+      const covered = Math.min(item.remaining,available);
+      available -= covered;
+      item.remaining -= covered;
+      return item.remaining > 0;
+    });
+    if (unpaid.length) result.push({service,unpaid,remaining:unpaid.reduce((sum,item) => sum + item.remaining,0)});
+  }
+  return result.sort((a,b) => a.unpaid[0].session.date.localeCompare(b.unpaid[0].session.date));
+}
+
 function addTotal(totals, currency, amount) {
   totals[currency] = (totals[currency] ?? 0) + amount;
 }
@@ -549,6 +586,32 @@ export function clientAccountHistory(state, clientId, today = localDate()) {
   }
   // Inferred coverage has no receipt date. Order it by period without showing an invented date.
   return history.sort((a,b) => b.date.localeCompare(a.date) || Number(a.type === 'coverage') - Number(b.type === 'coverage'));
+}
+
+export function filterClientAccountHistory(state, history, clientId, kind = 'all', pkg = 'all') {
+  const services = accounting(state).services;
+  const own = clientServices(state,clientId);
+  const matches = service => service?.clientId === clientId && (pkg === 'all' || servicePackage(service) === pkg);
+  return history.flatMap(item => {
+    if (item.type === 'coverage') return kind === 'all' && matches(item.service) ? [item] : [];
+    if (item.type === 'operation') {
+      const operation = item.operation;
+      if (kind !== 'all' && kind !== operation.kind) return [];
+      if (operation.kind === 'session') return matches(services[operation.serviceId]) ? [item] : [];
+      return operation.allocations.some(a => matches(services[a.serviceId])) ? [item] : [];
+    }
+    const source = item.row;
+    if (kind !== 'all' && kind !== (source.kind === 'session' ? 'session' : 'payment')) return [];
+    if (pkg === 'all') return [item];
+    const candidates = [...new Set(own.filter(s => s.block === source.block).map(servicePackage))];
+    const fallback = source.package ?? (candidates.length === 1 ? candidates[0] : candidates.length ? null : source.block);
+    const values = Object.fromEntries(Object.entries(source.values).flatMap(([currency,amount]) => {
+      const parts = source.packageParts?.[currency];
+      const matched = parts ? parts[pkg] : (source.kind === 'session' ? pkg === 'personal' : fallback === pkg) ? amount : 0;
+      return matched > 0 ? [[currency,matched]] : [];
+    }));
+    return Object.keys(values).length ? [{...item,row:{...source,values}}] : [];
+  });
 }
 
 export function paymentTiming(due, today) {

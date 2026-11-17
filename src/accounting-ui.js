@@ -13,6 +13,8 @@ const isMonthly = service => service.kind !== 'personal';
 export function createAccountingUI({ state, el, append, button, row, field, input, select, text, section, modal, commit, render, formatDate, openClient, navigate, message, importLedger, searchClients, activateClient }) {
   let month = today().slice(0, 7);
   let tab = 'summary';
+  let receivablePlace = 'all';
+  const historyFilters = new Map();
   const book = () => A.accounting(state());
   const findService = id => book().services[id];
   const serviceTitle = s => A.PACKAGES[A.servicePackage(s)];
@@ -639,7 +641,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     });
   }
 
-  function operationLine(operation, clientId) {
+  function operationLine(operation, clientId, packageFilter = 'all') {
     const { kind, date, note, currency, voided } = operation;
     const status = voided ? 'Отменена · ' : '';
     if (kind === 'expense') return line(operation.category, `${status}${formatDate(date)} · Расход${note ? ' · ' + note : ''}`, '−' + A.money(operation.amount, currency), () => editExpense(operation));
@@ -647,7 +649,10 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const service = findService(operation.serviceId);
       return line(clientId ? 'Занятие' : clientName(service.clientId), `${status}${formatDate(date)} · Занятие · ${operation.place}${note ? ' · ' + note : ''}`, A.money(operation.amount, currency), () => editSession({ existing: operation, fromAccount: !clientId }));
     }
-    const items = operation.allocations.filter(item => !clientId || findService(item.serviceId).clientId === clientId);
+    const items = operation.allocations.filter(item => {
+      const service = findService(item.serviceId);
+      return (!clientId || service.clientId === clientId) && (packageFilter === 'all' || A.servicePackage(service) === packageFilter);
+    });
     const names = [...new Set(items.map(item => clientName(findService(item.serviceId).clientId)))];
     const byService = new Map();
     for (const item of items) {
@@ -750,6 +755,41 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     });
   }
 
+  function receivableDetails({service,unpaid,remaining}) {
+    return append(el('div',null,'stack account-receivable-service'),
+      line(serviceCaption(service),'К оплате',A.money(remaining,service.currency)),
+      ...unpaid.map(({session,remaining}) => line(formatDate(session.date) + ' · ' + session.place,
+        remaining < session.amount ? 'Частично оплачено' : '',A.money(remaining,service.currency),() => editSession({existing:session}))),
+      button('Принять оплату',() => editPayment({clientId:service.clientId,serviceId:service.id,suggested:remaining}),'primary'));
+  }
+
+  function receivablesPage() {
+    const entries = A.personalReceivables(state(),today());
+    const places = append(el('div',null,'row catalog-quick'), ...[['all','Все'],['Зал','Зал'],['Улица','Улица']].map(([key,label]) => {
+      const control = button(label,()=>{receivablePlace=key;render();});
+      control.setAttribute('aria-pressed',String(receivablePlace === key));
+      return control;
+    }));
+    places.setAttribute('role','group');
+    places.setAttribute('aria-label','Место по тарифу');
+    const clients = new Map();
+    const total = {};
+    for (const item of entries) {
+      const {clientId,place,currency} = item.service;
+      if (receivablePlace !== 'all' && place !== receivablePlace) continue;
+      if (!clients.has(clientId)) clients.set(clientId,{items:[],sums:{}});
+      const client = clients.get(clientId);
+      client.items.push(item);
+      client.sums[currency] = (client.sums[currency] ?? 0) + item.remaining;
+      total[currency] = (total[currency] ?? 0) + item.remaining;
+    }
+    const list = [...clients].map(([clientId,{items,sums}]) => section(clientName(clientId) + ' · ' + totals(sums),
+      'account-receivable-'+clientId,[...items.map(receivableDetails),button('Открыть карточку',()=>openClient(clientId),'subtle')]));
+    return append(el('section',null,'stack'),el('h2','Проведено, не оплачено'),
+      text('За персональные занятия, записанные в приложении'),places,
+      clients.size ? line('Всего к получению','',totals(total)) : text('Неоплаченных занятий нет'),...list);
+  }
+
   function page() {
     const period = input('month', month);
     period.setAttribute('aria-label', 'Месяц учёта');
@@ -758,13 +798,14 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const tabs = el('div', null, 'segmented');
     tabs.setAttribute('role', 'group');
     tabs.setAttribute('aria-label', 'Раздел учёта');
-    for (const [key, label] of [['summary', 'Сводка'], ['operations', 'Операции'], ['movement', 'Движение']]) {
+    for (const [key, label] of [['summary','Сводка'],['operations','Операции'],['receivables','К получению'],['movement','Движение']]) {
       const control = button(label, () => { tab = key; render(); });
       control.setAttribute('aria-pressed', String(tab === key));
       tabs.append(control);
     }
-    const page = append(el('div', null, 'stack-lg'), append(el('div', null, 'row between'), el('h1', 'Учёт'), period),
+    const page = append(el('div', null, 'stack-lg'), append(el('div', null, 'row between'), el('h1', 'Учёт'), tab !== 'receivables' && period),
       row(button('Быстрая запись', quickClientPicker, 'primary')), tabs);
+    if (tab === 'receivables') return append(page,receivablesPage());
     if (tab === 'summary') {
       if (!choices().length) page.append(text('Начни с услуги в карточке клиента. Укажи тариф и день оплаты для напоминаний в ToDo.'), row(button('К клиентам', () => navigate('#clients'), 'subtle')));
       append(page, ...summary());
@@ -785,6 +826,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const unpaidVisits = services.filter(s=>s.oneOff).map(s=>({service:s,debt:-A.serviceBalance(state(),s.id).balance})).filter(x=>x.debt>0);
     const history = A.clientAccountHistory(state(),client.id,today());
     const statuses = A.currentPaymentStatuses(state(),today(),client.id);
+    const outstanding = new Map(A.personalReceivables(state(),today(),client.id).map(item => [item.service.id,item]));
     const tariffLine = s => line(serviceTitle(s), [!isMonthly(s) && s.place,
       s.startsOn > today() && 'С ' + formatDate(s.startsOn), s.endsOn && s.endsOn < today() && 'До ' + formatDate(s.endsOn)]
       .filter(Boolean).join(' · '), A.money(s.rate,s.currency) + (isMonthly(s) ? ' / мес.' : ' / зан.'), () => editService(client.id, s));
@@ -829,7 +871,10 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       return append(el('div', null, 'account-client-status'), item, previous &&
         line(previous.timing === 'overdue' ? 'Просрочено за прошлые месяцы' : 'К оплате за прошлый месяц',
           'Первый срок ' + formatDate(previous.due),A.money(previous.remaining,s.currency)),
-        isMonthly(s) && button('Перенести срок',()=>editPaymentDay(s,info.month),'subtle account-move-date'));
+        isMonthly(s) ? button('Перенести срок',()=>editPaymentDay(s,info.month),'subtle account-move-date') :
+          outstanding.has(s.id) && button('Неоплаченные занятия',() => modal('Проведено, не оплачено',form => {
+            form.append(receivableDetails(outstanding.get(s.id)));
+          },{saveLabel:null}),'subtle account-move-date'));
     };
     const actions = quickOptions(client.id, active, statuses);
     const primary = actions[0];
@@ -880,13 +925,38 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       pairs.set(payment.id, session);
       pairedSessions.add(session.id);
     }
-    const entries = history.filter(item => item.type !== 'operation' || !pairedSessions.has(item.operation.id));
-    if (!entries.length) return text('Платежей и занятий пока нет');
+    if (!history.length) return text('Платежей и занятий пока нет');
+    const pkgLabels = {belgrade:'Белград',personal:'Персональные',online:'Онлайн',coaching:'Премиум'};
+    const assigned = new Set(A.clientServices(state(),clientId).map(A.servicePackage));
+    const packages = Object.entries(A.PACKAGES).filter(([key]) => assigned.has(key) || A.filterClientAccountHistory(state(),history,clientId,'all',key).length)
+      .map(([key,label]) => [key,pkgLabels[key] ?? label]);
+    const filters = historyFilters.get(clientId) || {kind:'all',pkg:'all'};
+    historyFilters.set(clientId,filters);
+    if (!packages.some(([key]) => key === filters.pkg)) filters.pkg = 'all';
     const pageSize = 6;
     let limit = pageSize;
     const list = el('div',null,'account-history-list');
     const more = button('',()=>{limit += pageSize;draw();},'subtle');
+    function filterRow(key,label,options){
+      const controls = el('div',null,'row catalog-quick');
+      controls.setAttribute('role','group');
+      controls.setAttribute('aria-label',label);
+      for (const [value,name] of options) {
+        const control = button(name,()=>{
+          filters[key] = value;
+          limit = pageSize;
+          for (const item of controls.children) item.setAttribute('aria-pressed',String(item.dataset.filter === value));
+          draw();
+        });
+        control.dataset.filter = value;
+        control.setAttribute('aria-pressed',String(filters[key] === value));
+        controls.append(control);
+      }
+      return controls;
+    }
     function draw(){
+      const filtered = A.filterClientAccountHistory(state(),history,clientId,filters.kind,filters.pkg);
+      const entries = filters.kind === 'all' ? filtered.filter(item => item.type !== 'operation' || !pairedSessions.has(item.operation.id)) : filtered;
       list.replaceChildren(...entries.slice(0,limit).map(item => {
         if (item.type === 'coverage') {
           const { service } = item;
@@ -897,18 +967,20 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         }
         if (item.type === 'ledger') return importedHistoryLine(item.row);
         const operation = item.operation;
-        const session = pairs.get(operation.id);
-        if (!session) return operationLine(operation,clientId);
+        const session = filters.kind === 'all' && pairs.get(operation.id);
+        if (!session) return operationLine(operation,clientId,filters.pkg);
         return line('Занятие и оплата',formatDate(session.date) + ' · ' + session.place,A.money(operation.amount,operation.currency),() =>
           modal('Занятие и оплата',form => {
             append(form,operationLine(session,clientId),operationLine(operation,clientId));
           },{saveLabel:null}));
       }));
+      if (!entries.length) list.append(text('По этим фильтрам записей нет'));
       more.hidden = limit >= entries.length;
       more.textContent = 'Показать ещё · ' + (entries.length-limit);
     }
     draw();
-    return append(el('div',null,'stack'),list,more);
+    return append(el('div',null,'stack'),filterRow('kind','Что показать',[['all','Все записи'],['payment','Оплаты'],['session','Занятия']]),
+      packages.length > 1 && filterRow('pkg','Тариф',[['all','Все тарифы'],...packages]),list,more);
   }
 
   function settingsPanel() {
