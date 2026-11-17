@@ -861,8 +861,13 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const more = button('',()=>{limit += pageSize;draw();},'subtle');
     function draw(){
       list.replaceChildren(...entries.slice(0,limit).map(item => {
-        if (item.type === 'coverage') return line('Период закрыт',
-          serviceTitle(item.service) + ' · по ' + monthLabel(item.service.coveredThrough) + ' · без отдельной записи платежа');
+        if (item.type === 'coverage') {
+          const { service } = item;
+          const row = line('Оплачено по ' + monthLabel(service.coveredThrough),serviceTitle(service));
+          const note = service.note?.trim();
+          append(row.firstElementChild,note && el('small',note),el('small','Дата и сумма платежа не записаны'));
+          return row;
+        }
         if (item.type === 'ledger') return importedHistoryLine(item.row);
         const operation = item.operation;
         const session = pairs.get(operation.id);

@@ -220,6 +220,8 @@ button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opa
 .account-section h2{margin-bottom:4px}
 .account-line,button.account-line{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,max-content);align-items:center;gap:8px 16px;width:100%;min-height:44px;padding:8px 0;text-align:left}
 .account-line+.account-line,.account-reminder+.account-reminder{border-top:1px solid var(--line)}
+.account-history-list .account-line{position:relative;padding-inline-end:16px;color:var(--text);font-weight:400}
+.account-history-list button.account-line::after{content:"";position:absolute;right:3px;top:50%;width:6px;height:6px;border:solid var(--muted);border-width:1px 1px 0 0;transform:translateY(-50%) rotate(45deg)}
 .account-label{min-width:0;overflow-wrap:anywhere}
 .account-label small{display:block;color:var(--muted);font-weight:400}
 .account-value{text-align:right;font-weight:650;font-variant-numeric:tabular-nums;max-width:15ch;overflow-wrap:anywhere}
