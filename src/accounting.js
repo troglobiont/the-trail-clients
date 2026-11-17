@@ -7,6 +7,10 @@ export const SERVICES = {
 export const PACKAGES = { ...SERVICES, gym:'План Gym', trainingpeaks:'TrainingPeaks' };
 export const packageKind = key => key === 'gym' || key === 'trainingpeaks' ? 'coaching' : key;
 export const servicePackage = service => service.package || service.kind;
+export const TARIFF_LABELS = { belgrade:'Группа', 'personal-gym':'Зал', 'personal-outside':'Улица',
+  online:'Онлайн', coaching:'Премиум', gym:'План Gym', trainingpeaks:'TrainingPeaks' };
+export const tariffKey = service => service.kind === 'personal' ? service.place === 'Зал' ? 'personal-gym' : 'personal-outside' : servicePackage(service);
+export const tariffLabel = service => TARIFF_LABELS[tariffKey(service)];
 export const BLOCKS = { belgrade: 'Белград', online: 'Онлайн', personal: 'Персональные' };
 export const CURRENCIES = ['RSD', 'RUB', 'EUR', 'USD'];
 export const PLACES = ['Зал', 'Улица'];
@@ -231,8 +235,7 @@ export function matchingTariffClients(state, { packageFilter, tariffCurrency, pa
     const key = servicePackage(s);
     if (packageFilter === 'all') return true;
     if (packageFilter === 'all-online') return ['online', 'coaching'].includes(key);
-    if (packageFilter === 'personal-gym') return key === 'personal' && s.place === 'Зал';
-    return key === packageFilter;
+    return key === packageFilter || tariffKey(s) === packageFilter;
   };
   const tariffs = packageFilter !== 'all' || tariffCurrency !== 'all'
     ? new Set(Object.values(services).filter(s => !s.oneOff && activeService(s, today) && matchesPackage(s)
@@ -588,26 +591,33 @@ export function clientAccountHistory(state, clientId, today = localDate()) {
   return history.sort((a,b) => b.date.localeCompare(a.date) || Number(a.type === 'coverage') - Number(b.type === 'coverage'));
 }
 
-export function filterClientAccountHistory(state, history, clientId, kind = 'all', pkg = 'all') {
+export function filterClientAccountHistory(state, history, clientId, tariff = 'all') {
+  if (tariff === 'all') return history;
   const services = accounting(state).services;
   const own = clientServices(state,clientId);
-  const matches = service => service?.clientId === clientId && (pkg === 'all' || servicePackage(service) === pkg);
+  const matches = service => service?.clientId === clientId && tariffKey(service) === tariff;
+  const isPersonal = tariff === 'personal-gym' || tariff === 'personal-outside';
   return history.flatMap(item => {
-    if (item.type === 'coverage') return kind === 'all' && matches(item.service) ? [item] : [];
+    if (item.type === 'coverage') return matches(item.service) ? [item] : [];
     if (item.type === 'operation') {
       const operation = item.operation;
-      if (kind !== 'all' && kind !== operation.kind) return [];
       if (operation.kind === 'session') return matches(services[operation.serviceId]) ? [item] : [];
       return operation.allocations.some(a => matches(services[a.serviceId])) ? [item] : [];
     }
     const source = item.row;
-    if (kind !== 'all' && kind !== (source.kind === 'session' ? 'session' : 'payment')) return [];
-    if (pkg === 'all') return [item];
     const candidates = [...new Set(own.filter(s => s.block === source.block).map(servicePackage))];
-    const fallback = source.package ?? (candidates.length === 1 ? candidates[0] : candidates.length ? null : source.block);
+    const fallback = source.kind === 'session' ? 'personal' : source.package ??
+      (candidates.length === 1 ? candidates[0] : candidates.length ? null : source.block);
+    const pkg = isPersonal ? 'personal' : tariff;
+    if (isPersonal) {
+      const personal = own.filter(s => s.kind === 'personal');
+      const atPeriod = personal.filter(s => s.startsOn.slice(0,7) <= source.month && (!s.endsOn || s.endsOn.slice(0,7) >= source.month));
+      const keys = new Set((atPeriod.length ? atPeriod : personal).map(tariffKey));
+      if (keys.size !== 1 || !keys.has(tariff)) return [];
+    }
     const values = Object.fromEntries(Object.entries(source.values).flatMap(([currency,amount]) => {
       const parts = source.packageParts?.[currency];
-      const matched = parts ? parts[pkg] : (source.kind === 'session' ? pkg === 'personal' : fallback === pkg) ? amount : 0;
+      const matched = parts ? parts[pkg] : fallback === pkg ? amount : 0;
       return matched > 0 ? [[currency,matched]] : [];
     }));
     return Object.keys(values).length ? [{...item,row:{...source,values}}] : [];

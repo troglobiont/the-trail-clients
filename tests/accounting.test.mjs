@@ -212,7 +212,7 @@ test('client history merges old receipts with actual operations and replaces an 
   assert.deepEqual(history().map(item=>item.type),['coverage','operation','ledger','ledger']);
 });
 
-test('history filters intersect the record kind with the package, including a split archive receipt', () => {
+test('history keeps the group, gym and outdoor tariffs distinct, including split archive receipts', () => {
   const state=emptyState();
   const client=createClient(state,{name:'Клиент'},'2024-10-01');
   const group=enrollment(state,client);
@@ -223,11 +223,15 @@ test('history filters intersect the record kind with the package, including a sp
     packageParts:{RSD:{belgrade:800000,personal:400000}}};
   state.ledger={rows:[archive]};
   const history=A.clientAccountHistory(state,client.id,'2024-10-17');
-  const filtered=(kind,pkg)=>A.filterClientAccountHistory(state,history,client.id,kind,pkg);
-  assert.deepEqual(filtered('session','personal').map(item=>item.operation),[session]);
-  assert.deepEqual(filtered('session','belgrade'),[]);
-  assert.deepEqual(filtered('payment','personal').map(item=>item.operation ?? item.row.values),[mixed,paid,{RSD:400000}]);
-  assert.deepEqual(filtered('payment','belgrade').map(item=>item.operation ?? item.row.values),[mixed,{RSD:800000}]);
+  const filtered=tariff=>A.filterClientAccountHistory(state,history,client.id,tariff).map(item=>item.operation ?? item.row.values);
+  const gymHistory=filtered('personal-gym');
+  assert.deepEqual(new Set(gymHistory.filter(item=>item.kind)),new Set([mixed,paid,session]));
+  assert.deepEqual(gymHistory.filter(item=>item.RSD),[{RSD:400000}]);
+  assert.deepEqual(filtered('belgrade'),[mixed,{RSD:800000}]);
+  const outdoor=enrollment(state,client,{kind:'personal',block:'personal',place:'Улица',day:null,reminder:false,rate:400000});
+  assert.deepEqual([A.tariffLabel(group),A.tariffLabel(personal),A.tariffLabel(outdoor)],['Группа','Зал','Улица']);
+  assert.deepEqual(filtered('personal-outside'),[]);
+  assert.equal(filtered('personal-gym').filter(item=>item.RSD).length,0);
 });
 
 test('moving a due day preserves receipts and can apply for one month or from a selected month', () => {

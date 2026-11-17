@@ -1,6 +1,6 @@
 import * as C from './core.js';
 import { assistantKind, mentionsCompletedSession, suggestAssistantClients } from './assistant.js';
-import { CURRENCIES, PACKAGES, activeService, amountMinor, clientPaymentStatuses, clientServices, matchingTariffClients, serviceBalance } from './accounting.js';
+import { CURRENCIES, TARIFF_LABELS, activeService, amountMinor, clientPaymentStatuses, clientServices, matchingTariffClients, serviceBalance, tariffLabel } from './accounting.js';
 import {createStore,browserAdapter} from './store.js';
 import {createUpdater} from './updates.js';
 import {currentServiceOrigin,parseConnection} from './connection.js';
@@ -317,7 +317,7 @@ function activeCatalogFilters(search) {
   const extra = el('div',null,'filters');
   const currencyOptions = [['all','Любая'],...CURRENCIES];
   for (const [key,label,values] of [
-    ['packageFilter','Пакет',[['all','Любой'],['all-online','Весь онлайн'],...Object.entries(PACKAGES),['personal-gym','Персональная тренировка · зал']]],
+    ['packageFilter','Тариф',[['all','Любой'],['all-online','Весь онлайн'],...Object.entries(TARIFF_LABELS)]],
     ['tariffCurrency','Валюта тарифа',currencyOptions],
     ['paymentCurrency','Валюта поступления',currencyOptions],
     ['format','Формат сейчас',[['all','Любой'],['Очно','Очно'],['Дистанционно','Онлайн'],['Уточнить','Нужно уточнить']]],
@@ -822,8 +822,8 @@ function reviewAssistantFinance(client,type,value){
   modal('Выбрать тариф',form=>{
     for(const choice of matches){
       const service=choice.service;
-      form.append(button([service.oneOff?'Разовое занятие · '+formatDate(service.startsOn):PACKAGES[service.package||service.kind],
-        service.place,service.currency].filter(Boolean).join(' · '),()=>open(choice)));
+      form.append(button([tariffLabel(service),service.oneOff&&'разово '+formatDate(service.startsOn),service.currency]
+        .filter(Boolean).join(' · '),()=>open(choice)));
     }
   },{saveLabel:false});
 }
