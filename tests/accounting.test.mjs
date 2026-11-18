@@ -55,6 +55,64 @@ test('a reconciled imported session appears once in history and in monthly count
   assert.equal(A.combinedSummary(state,'2026-11').count,4);
 });
 
+test('recording payment from an imported visit uses the later matching tariff without changing its start', () => {
+  const state=emptyState(),client=createClient(state,{name:'Тестовый клиент'},'2026-11-06');
+  const tariff=enrollment(state,client,{kind:'personal',block:'personal',rate:400000,day:null,place:'Зал',reminder:false,startsOn:'2026-11-12'});
+  const source={id:'ledger-visit-6',kind:'session',month:'2026-11',date:'2026-11-06',owners:[client.id],block:'personal',
+    place:'Зал',detail:'1 зан. × 4000 RSD',values:{RSD:400000}};
+  state.ledger={rows:[source]};
+  const visit={...A.importedPersonalVisit(source),sourceId:source.id};
+  const entry={date:source.date,amount:400000,currency:'RSD'};
+  assert.throws(()=>A.saveSessionPayment(state,visit,{...entry,date:''}),/Проверь дату/);
+  assert.equal(A.operations(state).length,0);
+  const {payment}=A.saveSessionPayment(state,visit,entry);
+  assert.equal(payment.date,'2026-11-06');
+  assert.equal(payment.sessionId,source.id);
+  assert.deepEqual(payment.allocations,[credit(tariff,null,400000)]);
+  assert.equal(A.clientServices(state,client.id).length,1);
+  assert.equal(A.accounting(state).services[tariff.id].startsOn,'2026-11-12');
+  assert.equal(A.currentPaymentStatuses(state,'2026-11-18',client.id).get(tariff.id).type,'paid');
+  assert.equal(A.combinedSummary(state,'2026-11').count,1);
+  assert.deepEqual(A.combinedSummary(state,'2026-11').receipts,{RSD:400000});
+  assert.equal(A.clientAccountHistory(state,client.id).filter(item=>item.type==='ledger').length,0);
+  assert.deepEqual(A.saveSessionPayment(state,visit,entry),{alreadyReceived:true});
+  assert.equal(A.operations(state).length,2);
+});
+
+test('a receipt entered for an existing unpaid visit is linked to that visit and uses its actual payment date', () => {
+  const state=emptyState(),client=createClient(state,{name:'Тестовый клиент'},'2024-10-01');
+  const service=enrollment(state,client,{kind:'personal',block:'personal',day:null,rate:400000,place:'Улица',reminder:false});
+  const values={kind:'session',place:'Улица',currency:'RSD',amount:400000,serviceId:service.id,note:''};
+  const older=A.saveOperation(state,{...values,date:'2024-10-03'});
+  const session=A.saveOperation(state,{...values,date:'2024-10-30'});
+  const visit={...session,clientId:client.id};
+  const first={date:'2024-11-02',amount:200000,currency:'RSD',expectedRemaining:400000};
+  A.saveSessionPayment(state,visit,first);
+  assert.throws(()=>A.saveSessionPayment(state,visit,first),/Остаток к оплате изменился/);
+  const {payment}=A.saveSessionPayment(state,visit,{date:'2024-11-03',amount:1800,currency:'EUR',credit:200000,expectedRemaining:200000});
+  assert.equal(payment.sessionId,session.id);
+  assert.equal(A.operations(state).filter(o=>o.kind==='session').length,2);
+  const settlements=A.personalVisitSettlements(state,client.id,'2024-11-04');
+  assert.equal(settlements.get(older.id).remaining,400000);
+  assert.equal(settlements.get(session.id).remaining,0);
+  assert.equal(settlements.get(session.id).paidOn,'2024-11-03');
+  assert.deepEqual(A.combinedSummary(state,'2024-11').receipts,{EUR:1800,RSD:200000});
+});
+
+test('recording a historical visit without a tariff keeps one visit and reconciles an already imported receipt', () => {
+  const state=emptyState(),client=createClient(state,{name:'Тестовый клиент'},'2024-10-01');
+  const entry={month:'2026-10',date:'2026-10-05',owners:[client.id],block:'personal',values:{RSD:400000}};
+  const visit={...entry,id:'imported-visit',kind:'session',place:'Зал',detail:'1 зан. × 4000 RSD'};
+  state.ledger={rows:[visit,{...entry,id:'imported-receipt',kind:'payment'}]};
+  const {payment}=A.saveSessionPayment(state,{...A.importedPersonalVisit(visit),sourceId:visit.id},
+    {date:entry.date,amount:400000,currency:'RSD'});
+  assert.equal(payment.sourceReceipt.rowId,'imported-receipt');
+  assert.equal(A.clientServices(state,client.id)[0].oneOff,true);
+  assert.equal(A.combinedSummary(state,'2026-10').count,1);
+  assert.deepEqual(A.combinedSummary(state,'2026-10').receipts,{RSD:400000});
+  assert.equal(A.clientAccountHistory(state,client.id).filter(item=>item.type==='ledger').length,0);
+});
+
 test('a one-off visit leaves a payable balance without creating a recurring tariff', () => {
   const state=emptyState(), client=createClient(state,{name:'Тестовый клиент'},'2024-10-01');
   const [session]=A.savePersonalVisit(state,{clientId:client.id,oneOff:true,place:'Зал',currency:'RSD',rate:400000,date:'2024-10-10'});

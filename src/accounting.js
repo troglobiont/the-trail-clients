@@ -169,8 +169,12 @@ function prepareOperation(state, values, operationId) {
   if (operation.date > localDate()) throw Error('Укажи дату фактической операции');
   if (operation.kind === 'session' && (prior?.serviceId !== operation.serviceId || prior?.date !== operation.date)) {
     const service = book.services[operation.serviceId];
+    const source = operation.sourceLedgerRowId && state.ledger?.rows.find(row=>row.id===operation.sourceLedgerRowId);
     if (service.oneOff ? Object.values(book.operations).some(o=>o.kind==='session' && o.serviceId===service.id && o.id!==operationId)
-      : !activeService(service,operation.date)) throw Error(service.oneOff ? 'Разовое занятие уже записано' : 'На эту дату услуга не действовала');
+      : !activeService(service,operation.date) && !(operation.date < service.startsOn && source?.date===operation.date &&
+        source.place===operation.place && matchesImportedVisit(source,operation,service))) {
+      throw Error(service.oneOff ? 'Разовое занятие уже записано' : 'На эту дату услуга не действовала');
+    }
   }
   return operation;
 }
@@ -195,6 +199,105 @@ export function savePaidSession(state, values, received, paymentDate = values.da
   }, ids.payment ?? id('operation'));
   Object.assign(writable(state).operations, { [session.id]: session, [payment.id]: payment });
   return [session, payment];
+}
+
+export function importedPersonalVisit(row) {
+  if (row?.kind !== 'session' || row.block !== 'personal' || row.owners.length !== 1 ||
+      !/^1 зан\./.test(row.detail) || !validDate(row.date) || !PLACES.includes(row.place)) return null;
+  const amounts = Object.entries(row.values).filter(([,amount])=>amount!==0);
+  const [currency,amount] = amounts[0] ?? [];
+  if (amounts.length!==1 || !CURRENCIES.includes(currency) || !validMoney(amount)) return null;
+  return {clientId:row.owners[0], date:row.date,place:row.place,currency,amount};
+}
+
+function importVisitOperation(state, source, previous) {
+  const values = importedPersonalVisit(source);
+  if (!values || ['clientId','date','place','currency','amount'].some(key=>values[key]!==previous[key])) {
+    throw Error('Занятие изменилось. Открой его заново');
+  }
+  const {clientId,date,place,currency,amount} = values;
+  const client = state.clients[clientId];
+  if (!client || client.role!=='Клиент' || client.mergedInto) throw Error('Карточка клиента изменилась');
+  const book = accounting(state);
+  const existing = Object.values(book.operations).find(o=>o.kind==='session' && !o.voided && o.sourceLedgerRowId===source.id);
+  if (existing) {
+    if (!matchesImportedVisit(source,existing,book.services[existing.serviceId])) throw Error('Занятие изменилось. Открой его заново');
+    return existing;
+  }
+  const services = clientServices(state,clientId).filter(s=>s.kind==='personal' && s.currency===currency && s.place===place);
+  const serviceIds = new Set(services.map(s=>s.id));
+  const recorded = Object.values(book.operations).filter(o=>o.kind==='session' && !o.voided && !o.sourceLedgerRowId &&
+    serviceIds.has(o.serviceId) && o.date===date && o.place===place && o.amount===amount);
+  if (recorded.length) {
+    const similar = state.ledger.rows.filter(row=>matchesImportedVisit(row,recorded[0],book.services[recorded[0].serviceId]));
+    if (recorded.length!==1 || similar.length!==1) throw Error('На эту дату есть несколько занятий. Открой нужное занятие в истории');
+    return saveOperation(state,{...recorded[0],sourceLedgerRowId:source.id},recorded[0].id);
+  }
+  const previouslyVoided = book.operations[source.id];
+  if (previouslyVoided?.voided && previouslyVoided.sourceLedgerRowId===source.id &&
+      matchesImportedVisit(source,previouslyVoided,book.services[previouslyVoided.serviceId])) {
+    const restored = {...previouslyVoided,voided:false};
+    book.operations[restored.id] = restored;
+    return restored;
+  }
+  if (previouslyVoided) throw Error('Запись занятия уже существует. Открой историю заново');
+  const active = services.filter(s=>!s.oneOff && activeService(s,date));
+  const later = services.filter(s=>!s.oneOff && s.startsOn>date && s.rate===amount);
+  let service = active.length===1 ? active[0] : !active.length && later.length===1 && later[0];
+  if (!service) {
+    if (book.services[source.id]) throw Error('Услуга из истории уже существует. Открой историю заново');
+    service = saveService(state,{clientId,kind:'personal',block:'personal',place,currency,rate:amount,
+      startsOn:date, endsOn:date,oneOff:true,day:null,reminder:false},source.id);
+  }
+  return saveOperation(state,{kind:'session',serviceId:service.id,date,place,currency,amount,
+    note:source.detail.replace(/^1 зан\. × [\d.]+ \w+(?: · )?/u,'').slice(0,300),sourceLedgerRowId:source.id},source.id);
+}
+
+export function saveSessionPayment(state, visit, {date,amount,currency,credit=amount,paymentId,expectedRemaining}) {
+  const book = accounting(state);
+  const draft = {...state,accounting:{...book,services:{...book.services},operations:{...book.operations}}};
+  const session = visit.sourceId
+    ? importVisitOperation(draft,state.ledger?.rows.find(row=>row.id===visit.sourceId),visit)
+    : book.operations[visit.id];
+  const service = accounting(draft).services[session?.serviceId];
+  if (session?.kind!=='session' || session.voided || service?.clientId!==visit.clientId ||
+      ['date','place','currency','amount'].some(key=>session[key]!==visit[key])) throw Error('Занятие изменилось. Открой его заново');
+  const settlement = personalVisitSettlements(draft,visit.clientId).get(session.id);
+  if (!settlement?.remaining) {
+    if (visit.sourceId && settlement && [...settlement.receiptIds].some(id=>{
+      const payment = book.operations[id];
+      return payment?.date===date && payment.currency===currency && payment.amount===amount;
+    })) {
+      state.accounting = draft.accounting;
+      return {alreadyReceived:true};
+    }
+    throw Error('У занятия уже есть оплата. Открой историю заново');
+  }
+  if (!visit.sourceId && expectedRemaining!==undefined && settlement.remaining!==expectedRemaining) {
+    throw Error('Остаток к оплате изменился. Открой занятие заново');
+  }
+  const receipt = {kind:'payment',date,amount,currency,payer:'',note:'',sessionId:session.id,
+    allocations:[{serviceId:service.id,month:null,part:amount,credit}]};
+  const reconciled = reconciledReceipts(book);
+  const imported = (state.ledger?.rows || []).filter(row=>row.kind==='payment' && row.owners.length===1 &&
+    row.owners[0]===visit.clientId && row.date===date && row.values[currency]===amount &&
+    !reconciled.has(sourceReceiptKey(row,currency)));
+  if (imported.length) {
+    const [row] = imported;
+    if (imported.length!==1 || row.block!=='personal' || Object.entries(row.values).some(([unit,value])=>unit!==currency && value!==0) ||
+        Object.values(book.operations).some(o=>!o.voided && o.kind==='payment' &&
+          operationReceiptKey(book.services,o)===receiptKey(row.owners,date,currency,amount))) {
+      throw Error('В истории есть похожая оплата. Проверь поступления за эту дату');
+    }
+    receipt.sourceReceipt = {rowId:row.id,date,currency,amount};
+  }
+  if (paymentId && book.operations[paymentId] && !book.operations[paymentId].voided) {
+    throw Error('Эта оплата уже записана. Открой историю заново');
+  }
+  const stored = saveOperation(draft,receipt,paymentId);
+  stored.voided = false;
+  state.accounting = draft.accounting;
+  return {payment:stored};
 }
 
 export function hasManualSession(state, serviceId, date) {
@@ -582,16 +685,19 @@ function linkedReceiptForCorrection(state, book, prior, operation) {
   return {rowId:matching[0].id,date,currency,amount};
 }
 
+function matchesImportedVisit(row, session, service) {
+  return row?.kind === 'session' && /^1 зан\./.test(row.detail) && row.owners.length === 1 && row.owners[0] === service.clientId
+    && (!row.date || row.date === session.date) && session.date.slice(0,7) === row.month && row.values[session.currency] === session.amount
+    && Object.entries(row.values).every(([currency,value])=>currency===session.currency || !value);
+}
+
 function reconciledSessionRows(state, operations, rows) {
   const services = accounting(state).services;
   const sources = new Map(operations.filter(o => o.kind === 'session' && !o.voided && o.sourceLedgerRowId)
     .map(o => [o.sourceLedgerRowId,o]));
   return new Set(rows.filter(row => {
     const session = sources.get(row.id);
-    return row.kind === 'session' && /^1 зан\./.test(row.detail) && session
-      && row.owners.length === 1 && row.owners[0] === services[session.serviceId].clientId
-      && (!row.date || row.date === session.date) && session.date.slice(0,7) === row.month && row.values[session.currency] === session.amount
-      && Object.entries(row.values).every(([currency,value])=>currency===session.currency || !value);
+    return session && matchesImportedVisit(row,session,services[session.serviceId]);
   }).map(row=>row.id));
 }
 

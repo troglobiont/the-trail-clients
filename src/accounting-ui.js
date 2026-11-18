@@ -1152,7 +1152,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return node;
   }
 
-  function historyLine({title, status, context, details, amounts, displayAmounts = amounts, extra, notes = [], edit = [], voided = false}) {
+  function historyLine({title, status, context, details, amounts, displayAmounts = amounts, extra, notes = [], edit = [], recordPayment, voided = false}) {
     const values = append(el('span',null,'account-value history-amounts'),...displayAmounts.map(unit=>historyAmount(unit,voided)));
     if (voided) values.classList.add('history-voided');
     return line(title,[status,context].filter(Boolean).join(' · '),values,()=>modal(title,form=>{
@@ -1165,8 +1165,33 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const corrections = edit.length && append(el('details',null,'fold'),el('summary','Исправить запись'),
         append(el('div',null,'row fold-body'),...edit.map(([label,action])=>button(label,action,'subtle'))));
       append(form,text([status,context].filter(Boolean).join(' · ')),append(el('div',null,'history-details'),...amountRows),
-        details && text(details),extra?.(),...notes.filter(Boolean).map(note=>text(note)),corrections);
+        details && text(details),extra?.(),...notes.filter(Boolean).map(note=>text(note)),
+        recordPayment && button('Записать оплату',recordPayment,'primary'),corrections);
     },{saveLabel:null,cancelLabel:'Закрыть'}));
+  }
+
+  function editSessionPayment(visit, remaining) {
+    modal('Записать оплату',form=>{
+      const date = dateInput(visit.date);
+      const amount = moneyInput(remaining);
+      const currency = select(currencyOptions,visit.currency);
+      const credit = moneyInput(remaining);
+      const creditField = field('Зачесть в валюте занятия, '+visit.currency,credit);
+      const refresh = ()=>{creditField.hidden=currency.value===visit.currency;};
+      currency.addEventListener('change',refresh);
+      refresh();
+      append(form,text([clientName(visit.clientId),formatDate(visit.date),visit.place].join(' · ')),field('Дата получения',date),
+        append(el('div',null,'account-fields'),field('Получено',amount),field('Валюта платежа',currency)),creditField);
+      return async()=>{
+        const received = {date:recordedDate(date),amount:A.amountMinor(amount.value),currency:currency.value};
+        if (currency.value!==visit.currency) received.credit=A.amountMinor(credit.value);
+        const bytes = await crypto.subtle.digest('SHA-256',new TextEncoder().encode(
+          JSON.stringify([visit.sourceId ?? visit.id,remaining,received])));
+        received.paymentId = 'history-payment-'+Array.from(new Uint8Array(bytes),byte=>byte.toString(16).padStart(2,'0')).join('');
+        const result = await commit(s=>A.saveSessionPayment(s,visit,{...received,expectedRemaining:remaining}));
+        message(result.alreadyReceived?'Занятие связано с ранее записанной оплатой':'Оплата занятия записана');
+      };
+    });
   }
 
   function clientHistoryLine(operation, session, clientId, tariff, application, settlement) {
@@ -1204,6 +1229,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const amounts = [received,charged].filter(Boolean);
     return historyLine({title:when+(visit ? ' · '+visit.place : ''),status:voided ? 'Запись отменена' : status,
       context,details,amounts,displayAmounts:session ? [received] : amounts,extra,
+      recordPayment:!voided && visit && settlement?.remaining>0 && (()=>editSessionPayment({...visit,clientId},settlement.remaining)),
       notes:[...new Set([visit?.note,payment?.note])],voided,edit:[
         visit && ['Изменить занятие',()=>editSession({existing:visit})],
         payment && ['Изменить оплату',()=>editPayment({existing:payment})]
@@ -1241,12 +1267,14 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const amounts = A.CURRENCIES.filter(currency=>entry.values[currency]>0).map(currency=>({
       label:received?'Поступило':'Стоимость занятий',currency,amount:entry.values[currency],received}));
     const period = monthLabel(entry.month);
-    if (!received && entry.sourceLedgerRowId) {
+    const visit = A.importedPersonalVisit(entry);
+    if (!received && (entry.sourceLedgerRowId || visit)) {
       const when = entry.date ? formatDate(entry.date) : period;
       const title = [when,entry.place].filter(Boolean).join(' · ');
       const status = entry.date ? 'Проведено · оплата не сверена' : 'Занятие без даты · оплата не сверена';
-      const note = entry.detail.replace(/^1 зан\. × [\d.]+ RSD(?: · )?/u,'');
-      return historyLine({title,status,amounts,notes:[note]});
+      const note = entry.detail.replace(/^1 зан\. × [\d.]+ \w+(?: · )?/u,'');
+      return historyLine({title,status,amounts,notes:[note],
+        recordPayment:visit && visit.date<=today() && (()=>editSessionPayment({...visit,sourceId:entry.id},visit.amount))});
     }
     const source = state().ledger?.rows.find(row=>row.id===entry.id);
     const original = source && importedPaymentOriginal(source);
