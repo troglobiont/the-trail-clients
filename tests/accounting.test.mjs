@@ -271,6 +271,22 @@ test('history keeps the group, gym and outdoor tariffs distinct, including split
   assert.equal(filtered('personal-gym').filter(item=>item.RSD).length,0);
 });
 
+test('history exposes imported visits without an assigned tariff and omits tariffs without records', () => {
+  const state = emptyState(), client = createClient(state,{name:'Клиент'},'2026-08-01');
+  const group = enrollment(state,client,{startsOn:'2026-08-01'});
+  enrollment(state,client,{kind:'personal',block:'personal',place:'Улица',day:null,reminder:false,rate:400000});
+  const receipt = payment(state,'2026-08-01','RSD',800000,[credit(group,'2026-08',800000)]);
+  state.ledger = {rows:[{
+    id:'ledger-gym-visit',sourceLedgerRowId:'ledger-gym-month',kind:'session',date:'2026-07-22',month:'2026-07',
+    owners:[client.id],block:'personal',place:'Зал',values:{RSD:400000}
+  }]};
+  const history = A.clientAccountHistory(state,client.id,'2026-08-15');
+  const byTariff = A.clientHistoryByTariff(state,history,client.id);
+  assert.deepEqual([...byTariff.keys()],['belgrade','personal-gym']);
+  assert.deepEqual(byTariff.get('belgrade').map(item=>item.operation.id),[receipt.id]);
+  assert.deepEqual(byTariff.get('personal-gym').map(item=>item.row.date),['2026-07-22']);
+});
+
 test('moving a due day preserves receipts and can apply for one month or from a selected month', () => {
   const state = emptyState();
   const client = createClient(state,{name:'Клиент'},'2024-10-01');

@@ -720,6 +720,15 @@ export function filterClientAccountHistory(state, history, clientId, tariff = 'a
   });
 }
 
+export function clientHistoryByTariff(state, history, clientId) {
+  const result = new Map();
+  for (const tariff of Object.keys(TARIFF_LABELS)) {
+    const entries = filterClientAccountHistory(state, history, clientId, tariff);
+    if (entries.length) result.set(tariff, entries);
+  }
+  return result;
+}
+
 export function paymentTiming(due, today) {
   if (today < due) return 'upcoming';
   if (today === due) return 'today';

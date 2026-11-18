@@ -879,6 +879,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const active = services.filter(s => !s.oneOff && client.status === 'Активный' && A.activeService(s, today()));
     const unpaidVisits = services.filter(s=>s.oneOff).map(s=>({service:s,debt:-A.serviceBalance(state(),s.id).balance})).filter(x=>x.debt>0);
     const history = A.clientAccountHistory(state(),client.id,today());
+    const historyByTariff = A.clientHistoryByTariff(state(),history,client.id);
     const statuses = A.currentPaymentStatuses(state(),today(),client.id);
     const outstanding = new Map(A.personalReceivables(state(),today(),client.id).map(item => [item.service.id,item]));
     const tariffLine = s => line(serviceTitle(s), [s.startsOn > today() && 'С ' + formatDate(s.startsOn),
@@ -931,10 +932,27 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           },{saveLabel:null}),'subtle account-move-date'));
     };
     const payments = quickOptions(client.id,active,statuses);
-    const previous = services.filter(s => !s.oneOff && !active.includes(s));
+    const previous = services.filter(s => !s.oneOff && s.startsOn <= today() && !active.includes(s));
+    const future = services.filter(s => !s.oneOff && s.startsOn > today());
+    const shownTariffs = new Set([...active,...previous].map(A.tariffKey));
+    const previousFromHistory = [...historyByTariff].flatMap(([tariff,entries]) => {
+      if (shownTariffs.has(tariff)) return [];
+      const records = entries.flatMap(item => {
+        if (item.type === 'ledger') return [item.row];
+        if (item.type === 'operation' && !item.operation.voided) return [item.operation];
+        return [];
+      });
+      if (!records.length) return [];
+      const lastSession = records.find(record => record.kind === 'session' && record.date)?.date;
+      const lastPayment = records.find(record => ['payment','shared'].includes(record.kind) && record.date)?.date;
+      const label = A.TARIFF_LABELS[tariff] + (tariff.startsWith('personal-') ? ' · разовые занятия' : '');
+      return [line(label,lastSession ? 'Последнее занятие · '+formatDate(lastSession) :
+        lastPayment ? 'Последняя оплата · '+formatDate(lastPayment) : '')];
+    });
     const panel=section('Оплаты и занятия', `${client.id}-account`, [
       client.billingNote && text(client.billingNote),
-      ...active.map(currentStatus), !active.length && !client.billingNote && text(previous.length ? 'Нет действующих услуг' : 'Тарифы пока не заданы'),
+      ...active.map(currentStatus), !active.length && !client.billingNote &&
+        text(services.length || previousFromHistory.length ? 'Нет действующих услуг' : 'Тарифы пока не заданы'),
       ...unpaidVisits.map(({service,debt})=>{
         const visit = history.find(({operation}) => operation?.kind === 'session' && operation.serviceId === service.id);
         return line(serviceCaption(service),formatDate(visit?.date || service.startsOn)+' · К оплате',A.money(debt,service.currency),
@@ -942,11 +960,15 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       }),
       payments.length && button('Принять оплату',()=>quickEntry(client.id,null,false,{tariffs:payments}),'primary account-main-action'),
       section('Тарифы', `${client.id}-tariffs`, [
-        ...active.map(tariffLine), previous.length && text('Прежние и будущие тарифы'), ...previous.map(tariffLine),
-        previous.length && button('Оплата за прошлую услугу', () => editPayment({ clientId:client.id }), 'subtle'),
+        ...active.map(tariffLine),
+        (previous.length || previousFromHistory.length) && section('Ранее', `${client.id}-previous-tariffs`, [
+          ...previous.map(tariffLine), ...previousFromHistory,
+          previous.length && button('Оплата за прошлую услугу', () => editPayment({ clientId:client.id }), 'subtle')
+        ]),
+        future.length && text('Будущие тарифы'), ...future.map(tariffLine),
         button('Добавить услугу', () => editService(client.id), 'subtle')
       ]),
-      section('История оплат и занятий', `${client.id}-account-history`, [clientHistory(history,client.id,services)])
+      section('История оплат и занятий', `${client.id}-account-history`, [clientHistory(history,client.id,historyByTariff)])
     ]);
     panel.classList.add('client-accounting');
     return panel;
@@ -1019,7 +1041,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       context:entry.date ? 'за '+period : '',amounts,notes:[entry.detail]});
   }
 
-  function clientHistory(history, clientId, services) {
+  function clientHistory(history, clientId, historyByTariff) {
     const operationDetails = A.personalOperationHistory(state(),clientId);
     const recorded = history.filter(item => item.type === 'operation').map(item => item.operation);
     const byId = new Map(recorded.map(operation => [operation.id, operation]));
@@ -1034,16 +1056,15 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       pairs.set(payment.id, session);
       pairedSessions.add(session.id);
     }
-    const assigned = new Set(services.filter(s=>!s.oneOff&&A.activeService(s,today())).map(A.tariffKey));
-    const tariffs = Object.entries(A.TARIFF_LABELS).filter(([key])=>assigned.has(key));
+    const tariffs = [...historyByTariff.keys()].map(key=>[key,A.TARIFF_LABELS[key]]);
     let selected = historyFilters.get(clientId);
-    if (!assigned.has(selected)) selected = 'all';
+    if (!historyByTariff.has(selected)) selected = 'all';
     const pageSize = 6;
     let limit = pageSize;
     const list = el('div',null,'account-history-list');
     const more = button('',()=>{limit += pageSize;draw();},'subtle');
     function draw(){
-      const entries = A.filterClientAccountHistory(state(),history,clientId,selected)
+      const entries = (historyByTariff.get(selected) ?? history)
         .filter(item => item.type !== 'operation' || !pairedSessions.has(item.operation.id));
       list.replaceChildren(...entries.slice(0,limit).map(item => {
         if (item.type === 'coverage') {
