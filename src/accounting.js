@@ -29,9 +29,10 @@ const validPaymentDay = day => Number.isInteger(day) && day >= 1 && day <= 31;
 const validMonth = value => typeof value === 'string' && /^\d{4}-\d{2}$/.test(value) && validDate(value + '-01');
 const objectMap = value => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length <= 50000;
 
-function validServicePauses(pauses, startsOn) {
-  return Array.isArray(pauses) && pauses.every((pause,i) => pause && validDate(pause.from) && pause.from >= startsOn &&
+function validServicePauses(pauses) {
+  return Array.isArray(pauses) && pauses.every((pause,i) => pause && validDate(pause.from) &&
     (pause.until === null || validDate(pause.until) && pause.until > pause.from) &&
+    (pause.kind === undefined || pause.kind === 'freeze' && pause.until !== null) &&
     (i === 0 || pauses[i-1].until && pauses[i-1].until <= pause.from));
 }
 
@@ -59,11 +60,12 @@ function checkService(state, service) {
   const { clientId, kind, block, startsOn, endsOn, currency, rate, day, reminder, place } = service;
   if (!validKey(clientId) || !has(state.clients, clientId) || !has(SERVICES, kind) || !has(BLOCKS, block)) throw Error('Выбери клиента, услугу и раздел учёта');
   if (!validDate(startsOn) || (endsOn !== null && (!validDate(endsOn) || endsOn < addDays(startsOn,-1)))) throw Error('Проверь период действия услуги');
-  if (service.pauses !== undefined && (service.oneOff || !validServicePauses(service.pauses,startsOn))) throw Error('Проверь даты паузы услуги');
+  if (service.pauses !== undefined && (service.oneOff || !validServicePauses(service.pauses) ||
+      kind === 'personal' && service.pauses.some(pause=>pause.kind==='freeze'))) throw Error('Проверь даты паузы услуги');
   if (service.returnState !== undefined) {
     const { from, previous } = service.returnState ?? {};
     if (kind !== 'personal' || service.oneOff || !validDate(from) || from < startsOn || (previous !== null &&
-        (!previous || !validServicePauses(previous.pauses,startsOn) || (previous.endsOn !== null &&
+        (!previous || !validServicePauses(previous.pauses) || (previous.endsOn !== null &&
           (!validDate(previous.endsOn) || previous.endsOn < addDays(startsOn,-1)))))) throw Error('Проверь дату возврата услуги');
   }
   if (!CURRENCIES.includes(currency) || !validMoney(rate)) throw Error('Проверь тариф и валюту');
@@ -289,28 +291,50 @@ export function stopService(state, serviceId, mode, from, today = localDate()) {
   }
   const pauses = service.pauses ?? [];
   const last = pauses.at(-1);
-  if (!validDate(from) || from < service.startsOn || from > today || (last && from < (last.until ?? last.from))) {
+  if (!validDate(from) || from < service.startsOn || from > today) {
     throw Error('Проверь дату начала паузы или завершения');
   }
   if (mode === 'pause') {
     if (last && !last.until) throw Error('Услуга уже на паузе');
+    if (last && from < last.until) throw Error('Проверь дату начала паузы');
     return saveService(state,{...service,pauses:[...pauses,{from,until:null}]},serviceId);
   }
-  return saveService(state,{...service,endsOn:addDays(from,-1)},serviceId);
+  const completedPauses = pauses.filter(pause=>pause.from < from)
+    .map(pause=>pause.until > from ? {...pause,until:from} : pause);
+  return saveService(state,{...service,endsOn:addDays(from,-1),...(service.pauses && {pauses:completedPauses})},serviceId);
+}
+
+export function saveTariffPause(state, serviceId, {from, until = null, replaceFrom}, today = localDate()) {
+  const service = accounting(state).services[serviceId];
+  if (!service || service.oneOff || (service.endsOn && service.endsOn < today)) throw Error('Выбери действующий или приостановленный тариф');
+  const pauses = service.pauses ?? [];
+  if (replaceFrom && !pauses.some(item=>item.from === replaceFrom)) throw Error('Пауза изменилась. Открой тариф заново');
+  if (!validDate(from) || (!replaceFrom && from < service.startsOn) || (service.endsOn && from > service.endsOn) ||
+      (until !== null && (!validDate(until) || until <= from || service.kind === 'personal' || from < service.startsOn))) {
+    throw Error('Проверь даты начала паузы и возобновления');
+  }
+  const other = pauses.filter(item=>item.from !== replaceFrom);
+  const pause = {from,until,...(until && {kind:'freeze'})};
+  const updated = [...other,pause].sort((a,b)=>a.from.localeCompare(b.from));
+  if (!validServicePauses(updated)) throw Error('Этот период пересекается с другой паузой');
+  if (until && !paidServicePeriodEnd(state,{...service,pauses:other},from,today)) {
+    throw Error('Для заморозки укажи начало внутри оплаченного периода');
+  }
+  return saveService(state,{...service,pauses:updated},serviceId);
 }
 
 export function restoreService(state, serviceId, today = localDate()) {
   const service = accounting(state).services[serviceId];
   if (!service || service.oneOff || service.startsOn > today || activeService(service,today)) throw Error('Выбери услугу из истории');
-  const pauses = (service.pauses ?? []).slice();
-  const last = pauses.at(-1);
-  const from = last && !last.until ? last.from : addDays(service.endsOn,1);
+  const current = servicePause(service,today);
+  const from = current?.from ?? addDays(service.endsOn,1);
   if (clientServices(state,service.clientId).some(other => !other.oneOff && other.id !== serviceId &&
       tariffKey(other) === tariffKey(service) && (!other.endsOn || other.endsOn >= from))) {
     throw Error('У клиента уже есть другой период этого тарифа. Проверь список услуг');
   }
-  if (last && !last.until) pauses.pop();
-  if (from < today) pauses.push({from,until:today});
+  const pauses = (service.pauses ?? []).filter(pause=>pause!==current);
+  if (from < today) pauses.push({...current,from,until:today});
+  pauses.sort((a,b)=>a.from.localeCompare(b.from));
   const returnState = {from:today,previous:{endsOn:service.endsOn,pauses:service.pauses ?? []}};
   return saveService(state,{...service,endsOn:service.endsOn >= today ? service.endsOn : null,pauses,
     ...(service.kind === 'personal' && {returnState})},serviceId);
@@ -645,8 +669,14 @@ function dueDate(service, month) {
   const last = new Date(month + '-01T12:00:00Z');
   last.setUTCMonth(last.getUTCMonth() + 1, 0);
   const day = String(Math.min(paymentDay(service,month), last.getUTCDate())).padStart(2, '0');
-  const due = `${month}-${day}`;
-  return due < service.startsOn && !service.paymentDays?.[month] ? service.startsOn : due;
+  let due = `${month}-${day}`;
+  if (due < service.startsOn && !service.paymentDays?.[month]) due = service.startsOn;
+  for (const pause of service.pauses ?? []) {
+    if (pause.kind === 'freeze' && pause.from <= due) {
+      due = addDays(due,(Date.parse(pause.until)-Date.parse(pause.from))/86400000);
+    }
+  }
+  return due;
 }
 
 function monthlyCredits(state, today, replacedId) {
@@ -708,6 +738,17 @@ function chargeFor(credits, service, month, { settle = false, recordCovered = fa
 
 export function monthlyCharge(state, service, month, today = localDate()) {
   return chargeFor(monthlyCredits(state, today), service, month);
+}
+
+export function paidServicePeriodEnd(state, service, date = localDate(), today = localDate()) {
+  if (!validDate(date) || !activeService(service,date)) return null;
+  const credits = monthlyCredits(state,today);
+  const first = service.startsOn.slice(0,7);
+  let period = date.slice(0,7);
+  while (period >= first && dueDate(service,period) > date) period = nextMonth(period,-1);
+  if (chargeFor(credits,service,period)?.remaining !== 0) return null;
+  do period = nextMonth(period); while (chargeFor(credits,service,period)?.remaining === 0);
+  return dueDate(service,period);
 }
 
 export function settleMonths(state, { serviceId, firstMonth, lastMonth = firstMonth, part, recordCovered = false }, replacedId, today = localDate()) {
@@ -860,7 +901,7 @@ export function firstPastCharge(state, services, today = localDate()) {
 }
 
 export function currentPaymentStatuses(state, today = localDate(), clientId) {
-  const month = today.slice(0,7);
+  const calendarMonth = today.slice(0,7);
   const credits = monthlyCredits(state,today);
   const result = new Map();
   const movements = new Map();
@@ -880,6 +921,12 @@ export function currentPaymentStatuses(state, today = localDate(), clientId) {
     const events = movements.get(service.clientId);
     let previous;
     const first = billingStart(service);
+    let month = calendarMonth;
+    if (service.pauses?.some(pause=>pause.kind==='freeze')) {
+      for (let prior = nextMonth(month,-1); prior >= first && dueDate(service,prior) >= calendarMonth+'-01'; prior = nextMonth(month,-1)) {
+        month = prior;
+      }
+    }
     const earliest = service.coveredThrough >= first ? nextMonth(service.coveredThrough) : first;
     for (let period = earliest; period < month; period = nextMonth(period)) {
       const bill = chargeFor(credits,service,period);
@@ -896,7 +943,8 @@ export function currentPaymentStatuses(state, today = localDate(), clientId) {
         nextPeriod = nextMonth(nextPeriod);
         nextCharge = chargeFor(credits,service,nextPeriod);
       }
-      result.set(service.id,{ ...charge, month, type:charge?.remaining === 0 ? 'paid' : 'none', nextDue:nextCharge?.due, previous });
+      result.set(service.id,{ ...charge, month, type:charge?.remaining === 0 ? 'paid' : 'none', nextDue:nextCharge?.due,
+        ...(nextCharge && {nextPeriod}), previous });
       continue;
     }
     const timing = paymentTiming(charge.due,today);

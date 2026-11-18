@@ -360,6 +360,50 @@ test('pausing and ending a single tariff preserve receipts and skip dues while i
   assert.doesNotThrow(()=>parseImport(exportState(state)));
 });
 
+test('editing a reconstructed pause can restore a date before the tariff was re-created', () => {
+  const state = emptyState(), client = createClient(state,{name:'Клиент'},'2024-09-01');
+  const group = enrollment(state,client,{startsOn:'2024-11-18',day:1});
+  A.saveTariffPause(state,group.id,{from:'2024-11-18'},'2024-11-18');
+  const corrected = A.saveTariffPause(state,group.id,{from:'2024-10-01',replaceFrom:'2024-11-18'},'2024-11-18');
+  assert.equal(corrected.startsOn,'2024-11-18');
+  assert.equal(A.servicePause(corrected,'2024-11-18').from,'2024-10-01');
+  assert.equal(A.monthlyCharge(state,corrected,'2024-10','2024-11-18'),null);
+  assert.equal(A.activeService(A.restoreService(state,group.id,'2024-11-18'),'2024-11-18'),true);
+});
+
+test('a future pause begins at the first unpaid renewal and keeps the paid term available', () => {
+  const state = emptyState(), client = createClient(state,{name:'Клиент'},'2024-10-01');
+  const group = enrollment(state,client,{day:1});
+  payment(state,'2024-10-01','RSD',800000,[credit(group,'2024-10',800000)]);
+  assert.equal(A.paidServicePeriodEnd(state,group,'2024-10-17','2024-10-17'),'2024-11-01');
+  const paused = A.saveTariffPause(state,group.id,{from:'2024-11-01'},'2024-10-17');
+  assert.equal(A.activeService(paused,'2024-10-31'),true);
+  assert.equal(A.activeService(paused,'2024-11-01'),false);
+  assert.equal(A.monthlyCharge(state,paused,'2024-10','2024-11-01').remaining,0);
+  assert.equal(A.monthlyCharge(state,paused,'2024-11','2024-11-01'),null);
+});
+
+test('a paid-term freeze preserves days, crosses a calendar month, and moves the reminder and charge together', () => {
+  const state = emptyState(), client = createClient(state,{name:'Клиент'},'2024-10-01');
+  const group = enrollment(state,client,{startsOn:'2024-10-28',day:28});
+  const receipt = payment(state,'2024-10-28','RSD',800000,[credit(group,'2024-10',800000)]);
+  const options = {from:'2024-11-24',until:'2024-12-08'};
+  const frozen = A.saveTariffPause(state,group.id,options,'2024-11-24');
+  assert.equal(A.activeService(frozen,'2024-12-07'),false);
+  assert.equal(A.activeService(frozen,'2024-12-08'),true);
+  assert.equal(A.monthlyCharge(state,frozen,'2024-10','2024-12-08').remaining,0);
+  assert.equal(A.monthlyCharge(state,frozen,'2024-11','2024-12-08').due,'2024-12-12');
+  assert.equal(A.monthlyCharge(state,frozen,'2024-12','2024-12-08').due,'2025-01-11');
+  assert.deepEqual(A.paymentReminders(state,'2024-12-07'),[]);
+  assert.deepEqual(A.paymentReminders(state,'2024-12-12').map(({month,due})=>[month,due]),[['2024-11','2024-12-12']]);
+  const status = A.currentPaymentStatuses(state,'2024-12-09',client.id).get(group.id);
+  assert.deepEqual([status.month,status.due,status.timing],['2024-11','2024-12-12','upcoming']);
+  assert.deepEqual(A.accounting(state).operations[receipt.id],receipt);
+  assert.doesNotThrow(()=>parseImport(exportState(state)));
+  const early = A.restoreService(state,group.id,'2024-12-01');
+  assert.equal(A.monthlyCharge(state,early,'2024-11','2024-12-01').due,'2024-12-05');
+});
+
 test('ending and returning a personal tariff on its first day leaves its advance available', () => {
   const state = emptyState();
   const client = createClient(state,{name:'Клиент'},'2024-10-01');

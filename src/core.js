@@ -1,5 +1,5 @@
 import { addDays, id, localDate, validDate } from './model-utils.js';
-import { activeService, clientServices, mergeAccounting, stopService, validateAccounting } from './accounting.js';
+import { activeService, clientServices, mergeAccounting, saveTariffPause, validateAccounting } from './accounting.js';
 import { nameKey, validateStoredLedger } from './ledger-import.js';
 import { validateCloudState } from './cloud-state.js';
 import { raceById, raceCatalog, raceDefinition, raceGoal, sameRace, setProfile, setTraining } from './client-details.js';
@@ -109,10 +109,10 @@ export function editClient(s,clientId,values,day=localDate()){
   event(s,'client-edited',clientId,clientId);recordMovement(s,c,previous,day,previousPause);
 }
 
-export function pauseClientTariff(s, serviceId, from, today = localDate()) {
-  const tariff = stopService(s,serviceId,'pause',from,today);
+export function pauseClientTariff(s, serviceId, from, today = localDate(), until = null) {
+  const tariff = saveTariffPause(s,serviceId,{from,until},today);
   const client = s.clients[tariff.clientId];
-  if (client.status !== 'Активный') return false;
+  if (client.status !== 'Активный' || from > today || until) return false;
   const returned = s.events.findLast(item=>item.type === 'client-movement' && item.clientId === client.id);
   const returnedAt = Date.parse(returned?.at);
   if (returned?.movement !== 'returned' || returned.previous !== 'На паузе' || from < returned.day ||

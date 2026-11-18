@@ -84,9 +84,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const order = Object.keys(A.TARIFF_LABELS);
     return services.slice().sort((a,b) => order.indexOf(A.tariffKey(a)) - order.indexOf(A.tariffKey(b))).map(service => {
       const status = statuses.get(service.id);
-      const next = service.pauses?.length && status?.type === 'none' ? status.nextDue?.slice(0,7) : null;
+      const next = service.pauses?.length && status?.type === 'none' ? status.nextPeriod : null;
       return {kind:'payment',service,label:'Принять оплату',
-        period:isMonthly(service) ? status?.previous?.month ?? next ?? today().slice(0,7) : null};
+        period:isMonthly(service) ? status?.previous?.month ?? next ?? status?.month ?? today().slice(0,7) : null};
     });
   }
 
@@ -492,26 +492,61 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     });
   }
 
-  function changeServiceState(service, mode) {
-    const pause = mode === 'pause';
-    const title = pause ? 'Поставить на паузу' : 'Завершить тариф';
-    modal(title, form => {
-      const date = dateInput();
-      date.min = service.startsOn;
-      append(form,text(serviceTitle(service)),field(pause ? 'Пауза с' : 'Завершить с',date));
+  function editTariffPause(service, existing) {
+    const monthly = isMonthly(service);
+    const paidEnd = monthly && A.paidServicePeriodEnd(state(),service);
+    modal(existing ? 'Изменить паузу' : 'Поставить на паузу', form => {
+      const mode = select([['open','После оплаченного периода'],['freeze','Заморозка на срок']],existing?.until ? 'freeze' : 'open');
+      const from = dateInput(existing?.from || paidEnd || today(),false);
+      if (!existing) from.min = service.startsOn;
+      const until = dateInput(existing?.until || '',false);
+      const untilField = field('Возобновить с',until);
+      const hint = text('');
+      const sync = () => {
+        const freeze = monthly && mode.value === 'freeze';
+        untilField.hidden = !freeze;
+        until.min = from.value ? addDays(from.value,1) : '';
+        hint.textContent = freeze ? 'Дни заморозки продлят оплаченный период и сдвинут следующий срок оплаты.'
+          : paidEnd ? 'При действующем абонементе паузу можно начать с '+formatDate(paidEnd)+'.' : '';
+        hint.hidden = !hint.textContent;
+      };
+      mode.addEventListener('change',()=>{
+        if (!existing && paidEnd && mode.value==='freeze' && from.value===paidEnd) from.value = today();
+        else if (!existing && paidEnd && mode.value==='open' && from.value===today()) from.value = paidEnd;
+        sync();
+      });
+      from.addEventListener('change',sync);
+      sync();
+      append(form,text(serviceTitle(service)),monthly&&field('Вид паузы',mode),field('Пауза с',from),monthly&&untilField,hint);
       return async () => {
+        const resumes = monthly && mode.value==='freeze' ? until.value : null;
+        if (resumes === '') throw Error('Укажи дату возобновления после заморозки');
         const updatedClient = await commit(s=>{
-          if (pause) return pauseClientTariff(s,service.id,date.value);
-          A.stopService(s,service.id,mode,date.value);
+          if (!existing) return pauseClientTariff(s,service.id,from.value,today(),resumes);
+          A.saveTariffPause(s,service.id,{from:from.value,until:resumes,replaceFrom:existing.from});
           return false;
         });
-        message(updatedClient ? 'Клиент и тариф на паузе' : pause ? 'Тариф на паузе' : 'Тариф завершён');
+        message(existing ? 'Пауза обновлена' : updatedClient ? 'Клиент и тариф на паузе' :
+          from.value > today() ? 'Пауза запланирована' : resumes ? 'Тариф заморожен' : 'Тариф на паузе');
       };
-    }, {saveLabel:pause ? 'На паузу' : 'Завершить'});
+    },{saveLabel:existing ? 'Сохранить' : 'На паузу'});
   }
 
-  function serviceActions(service, paused) {
+  function endTariff(service) {
+    modal('Завершить тариф', form => {
+      const date = dateInput();
+      date.min = service.startsOn;
+      append(form,text(serviceTitle(service)),field('Завершить с',date));
+      return async () => {
+        await commit(s=>A.stopService(s,service.id,'end',date.value));
+        message('Тариф завершён');
+      };
+    },{saveLabel:'Завершить'});
+  }
+
+  function serviceActions(service) {
     const canCancel = A.canCancelServiceReturn(state(),service,today());
+    const pause = A.servicePause(service,today()) || service.pauses?.find(item=>item.from>today());
     modal(serviceTitle(service), form => {
       const rate = A.money(service.rate,service.currency) + (isMonthly(service) ? ' / мес.' : ' / зан.');
       append(form,text(rate),append(el('div',null,'stack'),
@@ -521,8 +556,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           form.closest('dialog').close();
           message('Возврат отменён');
         },'subtle'),
-        !canCancel && !paused && button('Поставить на паузу',()=>changeServiceState(service,'pause'),'subtle'),
-        !canCancel && button('Завершить тариф',()=>changeServiceState(service,'end'),'subtle')));
+        pause && button('Изменить паузу',()=>editTariffPause(service,pause),'subtle'),
+        !canCancel && !pause && button('Поставить на паузу',()=>editTariffPause(service),'subtle'),
+        !canCancel && button('Завершить тариф',()=>endTariff(service),'subtle')));
     },{saveLabel:null,cancelLabel:'Закрыть'});
   }
 
@@ -988,8 +1024,11 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const paused = s => (!s.endsOn || s.endsOn >= date) && A.servicePause(s,date);
     const tariffLine = (s, action) => {
       const pause = paused(s);
+      const scheduled = s.pauses?.find(item=>item.from>date);
+      const pauseDetail = pause?.kind === 'freeze' ? 'Заморозка с '+formatDate(pause.from)+' · Возобновление '+formatDate(pause.until)
+        : pause ? 'На паузе с '+formatDate(pause.from) : scheduled ? 'Пауза запланирована с '+formatDate(scheduled.from) : '';
       return line(serviceTitle(s), [s.startsOn > date && 'С ' + formatDate(s.startsOn),
-        pause && 'На паузе с ' + formatDate(pause.from),s.endsOn && s.endsOn < date && 'До ' + formatDate(s.endsOn)]
+        pauseDetail,s.endsOn && s.endsOn < date && 'До ' + formatDate(s.endsOn)]
         .filter(Boolean).join(' · '), A.money(s.rate,s.currency) + (isMonthly(s) ? ' / мес.' : ' / зан.'), action);
     };
     const currentStatus = s => {
@@ -1052,7 +1091,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const key = A.tariffKey(s);
       const action = mayReturn && !restorable.has(key) && (()=>returnTariff(client,key,{service:s}));
       restorable.add(key);
-      return withRestore(tariffLine(s,paused(s) && (()=>serviceActions(s,true))),serviceTitle(s),action);
+      return withRestore(tariffLine(s,paused(s) && (()=>serviceActions(s))),serviceTitle(s),action);
     });
     const prior = client.priorTariff;
     const priorKey = prior && A.tariffKey(prior);
@@ -1089,7 +1128,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       }),
       payments.length && button('Принять оплату',()=>quickEntry(client.id,null,false,{tariffs:payments}),'primary account-main-action'),
       section('Тарифы', `${client.id}-tariffs`, [
-        ...active.map(s=>tariffLine(s,()=>serviceActions(s,false))),
+        ...active.map(s=>tariffLine(s,()=>serviceActions(s))),
         (previous.length || previousFromHistory.length) && section('Ранее', `${client.id}-previous-tariffs`, [
           ...restoreAssigned, ...previousFromHistory,
           previousDebt && button('Записать оплату долга', () => editPayment({clientId:client.id,serviceId:previousDebt.service.id,
