@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as C from '../src/core.js';
 import * as A from '../src/accounting.js';
 import { cloudData } from '../src/cloud-state.js';
-import { birthdayGreeting, birthdayReminders, pingActivity, raceCatalog, raceCategory, raceParticipants, telegramReminders } from '../src/client-details.js';
+import { birthdayGreeting, birthdayReminders, instagramProfileLink, pingActivity, profileTelegramUsername, raceCatalog, raceCategory, raceParticipants, telegramReminders } from '../src/client-details.js';
 
 test('temporary online does not remove a client from the in-person list; archive and aliases preserve identity',()=>{
   const state=C.emptyState();
@@ -75,6 +75,35 @@ test('birthday greeting uses the Telegram handle and completing it dismisses onl
   assert.equal(restored.events.filter(e=>e.type==='birthday-greeted').length,1);
   assert.equal(birthdayReminders(restored,'2026-11-14',90).length,0);
   assert.equal(birthdayReminders(restored,'2027-11-14').length,1);
+});
+
+test('birthdays for paused and archived clients are separate from active reminders',()=>{
+  const state=C.emptyState();
+  const add=(name,status,birthday)=>{
+    const client=C.createClient(state,{name,status});
+    C.saveProfile(state,client.id,{birthday});
+    return client;
+  };
+  const active=add('Тестов Активный','Активный','12-01');
+  const paused=add('Тестов Пауза','На паузе','11-26');
+  const archive=add('Тестов Архив','Завершил','11-19');
+  const later=add('Тестов Позже','Завершил','01-15');
+  const ids=(scope,days)=>birthdayReminders(state,'2026-11-18',days,scope).map(item=>item.client.id);
+  assert.deepEqual(ids('active',30),[active.id]);
+  assert.deepEqual(ids('other',30),[archive.id,paused.id]);
+  assert.deepEqual(ids('other',90),[archive.id,paused.id,later.id]);
+  C.completeBirthday(state,archive.id,'2026-11-19');
+  assert.deepEqual(ids('other',30),[paused.id]);
+});
+
+test('social profile links resolve saved handles without opening arbitrary domains or posts',()=>{
+  assert.equal(profileTelegramUsername({profile:{telegram:'https://t.me/test_runner/?start=profile'}}),'test_runner');
+  assert.equal(profileTelegramUsername({telegram:{username:'linked_runner'},profile:{telegram:'@other_runner'}}),'linked_runner');
+  assert.equal(profileTelegramUsername({profile:{telegram:'https://example.test/test_runner'}}),undefined);
+  assert.equal(instagramProfileLink('@test.runner'),'https://www.instagram.com/test.runner/');
+  assert.equal(instagramProfileLink('https://instagram.com/test.runner/?igsh=abc'),'https://www.instagram.com/test.runner/');
+  assert.equal(instagramProfileLink('https://instagram.com/p/abc/'),'');
+  assert.equal(instagramProfileLink('https://instagram.com.example.test/test.runner/'),'');
 });
 
 test('new client contacts require a valid birthday without a year and preserve optional fields',()=>{

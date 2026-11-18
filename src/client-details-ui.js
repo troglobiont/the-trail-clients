@@ -1,5 +1,5 @@
 import * as C from './core.js';
-import { GOAL_TYPES, RACE_STAGES, REQUIRED_PROFILE_FIELDS, goalType, normalizeClientCity, raceById, raceCatalog, raceCategory, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
+import { GOAL_TYPES, RACE_STAGES, REQUIRED_PROFILE_FIELDS, goalType, instagramProfileLink, normalizeClientCity, profileTelegramUsername, raceById, raceCatalog, raceCategory, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
 
 export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard}) {
   const trainingFields = [
@@ -14,6 +14,12 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
   ];
   function link(label,href,className='inline-link') {
     const a=el('a',label,className);a.href=href;return a;
+  }
+  function socialLink(label,href,name) {
+    const a=link(label,href);
+    a.setAttribute('aria-label','Открыть '+name+' · '+label);
+    if(!window.TrailNative?.native){a.target='_blank';a.rel='noopener noreferrer';}
+    return a;
   }
   function profileEditor(data = {}) {
     const element=el('div',null,'stack');
@@ -70,11 +76,29 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
   function profile(c) {
     const data=c.profile||{};
     const items=profileFields.map(([key,label])=>{
+      if(key==='telegram'){
+        const username=profileTelegramUsername(c);
+        const href=telegramLink({username});
+        const bound=telegramPeer(c.telegram?.peerId);
+        if(!href&&bound) return append(el('div',null,'detail-line'),text(label),button('Открыть переписку',()=>openTelegram(c),'subtle'));
+        if(href){
+          const account=socialLink('@'+username,href,'Telegram');
+          if(bound&&window.TrailNative?.openTelegram)account.addEventListener('click',event=>{
+            if(event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return;
+            event.preventDefault();
+            openTelegram(c,href).catch(()=>window.location.assign(href));
+          });
+          return append(el('div',null,'detail-line'),text(label),account);
+        }
+      }
       const value=key==='city'?normalizeClientCity(data.city)
-        :key==='telegram'&&c.telegram?.username?'@'+c.telegram.username:data[key]||(key==='telegram'?c.telegramHint:null);
+        :data[key]||(key==='telegram'?c.telegramHint:null);
       if(!value)return null;
-      const href=key==='phone'||key==='secondPhone'?'tel:'+value.replace(/[^+\d]/g,''):key==='email'?'mailto:'+value:null;
-      return append(el('div',null,'detail-line'),text(label),href?link(value,href):el('div',value));
+      const href=key==='phone'||key==='secondPhone'?'tel:'+value.replace(/[^+\d]/g,'')
+        :key==='email'?'mailto:'+value:key==='instagram'?instagramProfileLink(value):null;
+      const account=href && key==='instagram' ? socialLink('@'+href.split('/').at(-2),href,'Instagram')
+        : href ? link(value,href) : el('div',value);
+      return append(el('div',null,'detail-line'),text(label),account);
     }).filter(Boolean);
     if(data.birthday)items.push(append(el('div',null,'detail-line'),text('День рождения'),el('div',formatDate('2000-'+data.birthday.slice(-5))+(data.birthday.length===10?' '+data.birthday.slice(0,4):''))));
     return [...(items.length?items:[text('Контактные данные пока не внесены')]),button('Изменить данные',()=>editProfile(c),'subtle')];
@@ -151,16 +175,16 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     return section('Журнал',c.id+'-journal',[button('+ Запись',()=>editJournal(c),'subtle'),
       ...(items.length?items:[text('Записей пока нет')])]);
   }
-  async function openTelegram(c) {
+  async function openTelegram(c,href=telegramLink(c.telegram)) {
     const binding=c.telegram;
-    const href=telegramLink(binding);
     if(!telegramPeer(binding?.peerId))throw Error('Сначала привяжи переписку');
     const result=await window.TrailNative?.openTelegram?.(binding);
     if(result?.opened){
       await commit(s=>C.noteTelegramOpen(s,c.id,binding.peerId),false);
       render();
     }else if(href){
-      window.open(href,'_blank','noopener');
+      if(window.TrailNative?.native) window.location.assign(href);
+      else window.open(href,'_blank','noopener');
     }else throw Error('Для открытия переписки по ID установи новый Android APK.');
   }
   function telegramOptions(c) {

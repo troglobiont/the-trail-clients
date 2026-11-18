@@ -13,6 +13,19 @@ export function telegramLink(binding) {
   return telegramUsername(binding?.username) ? 'https://t.me/' + binding.username : '';
 }
 
+export function profileTelegramUsername(client) {
+  return [client.telegram?.username,client.profile?.telegram,client.telegramHint].map(value=>
+    String(value || '').trim().replace(/^(?:https?:\/\/)?(?:t\.me|telegram\.me)\/([^/?#]+)\/?(?:[?#].*)?$/i,'$1').replace(/^@/,'')
+  ).find(telegramUsername);
+}
+
+export function instagramProfileLink(value) {
+  const username = String(value || '').trim()
+    .replace(/^(?:https?:\/\/)?(?:www\.)?instagram\.com\/([^/?#]+)\/?(?:[?#].*)?$/i,'$1').replace(/^@/,'');
+  return /^[a-z0-9_][a-z0-9_.]{0,29}$/i.test(username) && !username.endsWith('.') &&
+    !/^(p|reel|reels|stories|explore|accounts|direct|tv)$/i.test(username) ? 'https://www.instagram.com/' + username + '/' : '';
+}
+
 export function birthdayValid(birthday) {
   return !birthday || /^\d{2}-\d{2}$/.test(birthday) && validDate('2000-' + birthday)
     || /^\d{4}-\d{2}-\d{2}$/.test(birthday) && validDate(birthday);
@@ -56,12 +69,13 @@ export function setProfile(client, values, { required = false } = {}) {
   client.profile = data;
 }
 
-export function birthdayReminders(state, today = localDate(), days = 14) {
+export function birthdayReminders(state, today = localDate(), days = 14, scope = 'active') {
   const horizon = addDays(today,days), output = [];
   const completed = new Set(state.events.filter(event=>event.type==='birthday-greeted').map(event=>event.clientId+'|'+event.day));
   for (const client of Object.values(state.clients)) {
     const birthday = client.profile?.birthday;
-    if (!birthday || !birthdayValid(birthday) || client.mergedInto || !['Активный','На паузе'].includes(client.status) && client.role === 'Клиент') continue;
+    const active = client.role === 'Клиент' && client.status === 'Активный';
+    if (!birthday || !birthdayValid(birthday) || client.mergedInto || (scope === 'active') !== active) continue;
     const monthDay = birthday.slice(-5);
     for (let year = Number(today.slice(0,4)); year <= Number(horizon.slice(0,4)); year++) {
       const day = year + '-' + monthDay;
@@ -72,8 +86,7 @@ export function birthdayReminders(state, today = localDate(), days = 14) {
 }
 
 export function birthdayGreeting(client) {
-  const username = [client.telegram?.username,client.profile?.telegram,client.telegramHint]
-    .map(value=>String(value||'').trim().replace(/^@/,'')).find(telegramUsername);
+  const username = profileTelegramUsername(client);
   const name = client.name.trim().split(/\s+/)[1] || client.name.trim();
   return [username&&'@'+username,name+', с днём рождения! 🎉\n\nПусть в новом году будет больше любимых маршрутов, хорошей компании и пробежек в удовольствие!']
     .filter(Boolean).join('\n');

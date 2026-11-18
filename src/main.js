@@ -506,12 +506,27 @@ function editBirthdayGreeting(client,day){
   },{saveLabel:'Поздравил',saveClass:'subtle'});
 }
 
+function todoTiles(entries,today){
+  const list=el('div',null,'stack');
+  for(const item of entries){
+    const b=button('',item.open,item.birthday?'task-tile birthday-tile':'task-tile');
+    const due=item.due===today?'Сегодня':item.due?formatDate(item.due):'Без срока';
+    append(b,append(el('span',null,'task-tile-top'),el('span',item.name,'task-client-name'),
+      item.payment&&el('span','◈ Оплата','chip payment-chip'),item.birthday&&el('span','🎂 День рождения','chip birthday-chip')),
+      !item.birthday&&el('span',item.title,'task-title'),text([due,item.next].filter(Boolean).join(' · ')));
+    if(item.warning)b.append(text(item.warning.text,item.warning.level==='danger'?'danger-text small':'warning-text small'));
+    list.append(b);
+  }
+  return list;
+}
+
 function renderTodo(routeFilter){
   const page=el('div',null,'stack-lg');
   const today=C.localDate(),days=ui.birthdayDays||30;
   const filter=routeFilter||ui.taskFilter;
-  const birthdayEntries=horizon=>birthdayReminders(state(),today,horizon).map(({client,day})=>({
-    name:client.name,due:day,birthday:true,open:()=>editBirthdayGreeting(client,day)
+  const birthdayEntries=(horizon,scope)=>birthdayReminders(state(),today,horizon,scope).map(({client,day})=>({
+    name:client.name,due:day,birthday:true,next:scope==='other'?catalogViews[C.clientSection(client)]:'',
+    open:()=>editBirthdayGreeting(client,day)
   }));
   const tasks=C.clientTasks(state()).map(t=>({
     name:state().clients[t.clientId].name,title:t.title,due:C.taskDate(t),
@@ -543,18 +558,16 @@ function renderTodo(routeFilter){
   page.append(filters);
   if(filter==='schedule')return append(page,calendarUI.schedule());
   if(!Object.keys(state().clients).length)return append(page,emptyDatabase());
-  const list=el('div',null,'stack');
-  for(const item of entries){
-    const b=button('',item.open,item.birthday?'task-tile birthday-tile':'task-tile');
-    const due=item.due===today?'Сегодня':item.due?formatDate(item.due):'Без срока';
-    append(b,append(el('span',null,'task-tile-top'),el('span',item.name,'task-client-name'),
-      item.payment&&el('span','◈ Оплата','chip payment-chip'),item.birthday&&el('span','🎂 День рождения','chip birthday-chip')),
-      !item.birthday&&el('span',item.title,'task-title'),text([due,item.next].filter(Boolean).join(' · ')));
-    if(item.warning)b.append(text(item.warning.text,item.warning.level==='danger'?'danger-text small':'warning-text small'));
-    list.append(b);
+  if(filter==='birthdays'){
+    const others=birthdayEntries(days,'other');
+    append(page,birthdayPeriods(days),
+      entries.length?todoTiles(entries,today):text('На ближайшие '+days+' дней у активных клиентов нет дней рождения.'),
+      section('Другие категории'+(others.length?' · '+others.length:''),'birthday-other',[
+        others.length?todoTiles(others,today):text('Нет дней рождения на ближайшие '+days+' дней.')
+      ]));
+  }else{
+    page.append(entries.length?todoTiles(entries,today):text('Открытых задач в этом разделе нет.'));
   }
-  append(page,filter==='birthdays'&&birthdayPeriods(days),
-    list.children.length?list:text(filter==='birthdays'?'На ближайшие '+days+' дней нет дней рождения.':'Открытых задач в этом разделе нет.'));
   return page;
 }
 function editTask(t){
