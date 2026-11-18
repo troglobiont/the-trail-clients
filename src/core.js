@@ -1,5 +1,5 @@
 import { addDays, id, localDate, validDate } from './model-utils.js';
-import { mergeAccounting, validateAccounting } from './accounting.js';
+import { activeService, clientServices, mergeAccounting, stopService, validateAccounting } from './accounting.js';
 import { nameKey, validateStoredLedger } from './ledger-import.js';
 import { validateCloudState } from './cloud-state.js';
 import { raceById, raceCatalog, raceDefinition, raceGoal, sameRace, setProfile, setTraining } from './client-details.js';
@@ -79,7 +79,7 @@ export function filterClients(s, f = {}) {
       && (!f.personal || f.personal === 'all' || c.personal === f.personal);
   }).sort((a,b) => directorySort.compare(a.name, b.name) || a.id.localeCompare(b.id));
 }
-function recordMovement(s, client, previous, day) {
+function recordMovement(s, client, previous, day, previousPause) {
   if (client.role !== 'Клиент' || client.status === previous) return;
   if (!validDate(day) || day > localDate()) throw Error('Проверь дату изменения статуса');
   const history = s.events.filter(e => e.type === 'client-movement' && e.clientId === client.id);
@@ -88,7 +88,9 @@ function recordMovement(s, client, previous, day) {
   const movement = client.status === 'Активный'
     ? (!previouslyActive && [null, 'Ожидает старта'].includes(previous) ? 'new' : 'returned')
     : ({ 'На паузе': 'paused', 'Завершил': 'ended' })[client.status] ?? null;
-  event(s, 'client-movement', client.id, client.id, { day, status: client.status, previous, movement });
+  const resumedPause = movement === 'returned' && previous === 'На паузе' && previousPause;
+  event(s, 'client-movement', client.id, client.id, { day, status: client.status, previous, movement,
+    ...(resumedPause && {previousPause:clone(resumedPause)}) });
 }
 export function createClient(s,values,day=localDate()){
   const name=String(values.name||'').trim();if(!name||name.length>180)throw Error('Введи имя клиента');
@@ -100,10 +102,25 @@ export function createClient(s,values,day=localDate()){
 export function editClient(s,clientId,values,day=localDate()){
   const c=s.clients[clientId];if(!c)throw Error('Клиент не найден');
   const previous=c.role==='Клиент'?c.status:null;
+  const previousPause=c.pause;
   if (values.name && nameKey(values.name) !== nameKey(c.name)) ensureUniqueName(s,values.name,clientId);
   const allowed=['name','role','status','format','currentFormat','group','personal','basis','level','context','rules','telegram','engagement','teamRole','pause','billingNote'];
   for(const k of allowed)if(k in values)c[k]=values[k];
-  event(s,'client-edited',clientId,clientId);recordMovement(s,c,previous,day);
+  event(s,'client-edited',clientId,clientId);recordMovement(s,c,previous,day,previousPause);
+}
+
+export function pauseClientTariff(s, serviceId, from, today = localDate()) {
+  const tariff = stopService(s,serviceId,'pause',from,today);
+  const client = s.clients[tariff.clientId];
+  if (client.status !== 'Активный') return false;
+  const returned = s.events.findLast(item=>item.type === 'client-movement' && item.clientId === client.id);
+  const returnedAt = Date.parse(returned?.at);
+  if (returned?.movement !== 'returned' || returned.previous !== 'На паузе' || from < returned.day ||
+      !Number.isFinite(returnedAt) || localDate(new Date(returnedAt)) !== today ||
+      clientServices(s,client.id).some(service=>!service.oneOff && activeService(service,today))) return false;
+  const pause = returned.previousPause ? clone(returned.previousPause) : {kind:'open',returnWindow:'',contactOn:null};
+  editClient(s,client.id,{status:'На паузе',pause},from);
+  return true;
 }
 function ensureUniqueName(s,name,except) {
   const key = nameKey(name);

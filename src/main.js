@@ -57,6 +57,7 @@ const detailsUI=createClientDetailsUI({state,ui,el,append,button,row,field,input
 const accountingUI=createAccountingUI({state,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,navigate,message,importLedger:()=>importDatabase(true),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   activateClient:(s,id,day)=>C.editClient(s,id,{status:'Активный',engagement:null,pause:null},day),
+  pauseClientTariff:C.pauseClientTariff,
   openClient(clientId){ui.open.add(clientId+'-account');openClient(clientId);}
 });
 const scheduleRoute='#todo/schedule';

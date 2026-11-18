@@ -10,7 +10,7 @@ const monthLabel = month => new Intl.DateTimeFormat('ru-RU', { month: 'long', ye
   .format(new Date(month + '-15T12:00:00Z')).replace(/\s*г\.$/, '');
 const isMonthly = service => service.kind !== 'personal';
 
-export function createAccountingUI({ state, el, append, button, row, field, input, select, text, section, modal, commit, render, formatDate, openClient, navigate, message, importLedger, searchClients, activateClient }) {
+export function createAccountingUI({ state, el, append, button, row, field, input, select, text, section, modal, commit, render, formatDate, openClient, navigate, message, importLedger, searchClients, activateClient, pauseClientTariff }) {
   let month = today().slice(0, 7);
   let tab = 'summary';
   let receivablePlace = 'all';
@@ -500,8 +500,12 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       date.min = service.startsOn;
       append(form,text(serviceTitle(service)),field(pause ? 'Пауза с' : 'Завершить с',date));
       return async () => {
-        await commit(s=>A.stopService(s,service.id,mode,date.value));
-        message(pause ? 'Тариф на паузе' : 'Тариф завершён');
+        const updatedClient = await commit(s=>{
+          if (pause) return pauseClientTariff(s,service.id,date.value);
+          A.stopService(s,service.id,mode,date.value);
+          return false;
+        });
+        message(updatedClient ? 'Клиент и тариф на паузе' : pause ? 'Тариф на паузе' : 'Тариф завершён');
       };
     }, {saveLabel:pause ? 'На паузу' : 'Завершить'});
   }

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as C from '../src/core.js';
+import * as A from '../src/accounting.js';
 import {createStore} from '../src/store.js';
 function fixture(){const s=C.emptyState();const a=C.createClient(s,{name:'Клиент А',format:'Дистанционно',level:'Премиум',personal:'none',basis:'С нуля'});const b=C.createClient(s,{name:'Клиент Б',format:'Очно',level:'Обычное',personal:'gym',basis:'Hard'});return {s,a,b};}
 test('client directory keeps pauses, archives, occasional clients and leads out of the active list', () => {
@@ -30,6 +31,36 @@ test('returning clients can be followed without a return date, including when mi
   C.editClient(s,b.id,{pause:{...b.pause,returning:false,contactOn:'2026-11-25'}});
   assert.deepEqual(C.filterClients(s,{pauseGroup:'unplanned'}).map(c=>c.id),[b.id]);
   assert.deepEqual(C.pauseContacts(s).map(c=>c.id),[b.id]);
+});
+
+test('pausing the last tariff immediately after a return restores the client pause and follow-up date', () => {
+  const {s,a} = fixture();
+  const today = C.localDate();
+  const pause = {kind:'open',returning:true,returnWindow:'',contactOn:C.addDays(today,2)};
+  C.editClient(s,a.id,{status:'На паузе',pause},today);
+  const group = A.saveService(s,{clientId:a.id,kind:'belgrade',block:'belgrade',startsOn:today,endsOn:null,
+    currency:'RSD',rate:800000,day:1,reminder:true,place:null});
+  C.editClient(s,a.id,{status:'Активный',pause:null},today);
+  assert.equal(C.pauseClientTariff(s,group.id,today),true);
+  assert.equal(C.clientSection(a),'paused');
+  assert.deepEqual(a.pause,pause);
+  assert.equal(C.pauseContacts(s)[0].id,a.id);
+  assert.equal(A.activeService(A.accounting(s).services[group.id],today),false);
+  assert.deepEqual(A.paymentReminders(s,today),[]);
+  assert.doesNotThrow(()=>C.parseImport(C.exportState(s)));
+});
+
+test('pausing a single tariff after a return keeps the client active when another tariff is active', () => {
+  const {s,a} = fixture();
+  const today = C.localDate();
+  C.editClient(s,a.id,{status:'На паузе'},today);
+  C.editClient(s,a.id,{status:'Активный'},today);
+  const group = A.saveService(s,{clientId:a.id,kind:'belgrade',block:'belgrade',startsOn:today,endsOn:null,
+    currency:'RSD',rate:800000,day:1,reminder:true,place:null});
+  const hall = A.restoreHistoricalVisitTariff(s,a.id,'Зал','RSD',400000,today);
+  assert.equal(C.pauseClientTariff(s,group.id,today),false);
+  assert.equal(C.clientSection(a),'active');
+  assert.equal(A.activeService(hall,today),true);
 });
 test('classification fields are independent and Cyrillic aliases searchable',()=>{const {s,a,b}=fixture();s.clients[a.id].aliases=['Shalaev'];assert.equal(C.filterClients(s,{format:'Дистанционно',level:'Премиум'})[0].id,a.id);assert.equal(C.filterClients(s,{personal:'gym'})[0].id,b.id);assert.equal(C.filterClients(s,{query:'Шалаев'})[0].id,a.id);assert.equal(C.filterClients(s,{status:'На паузе'}).length,0);C.validateState(s);});
 test('unlinking and restoring a Telegram recipient preserves client history and tasks across persistence',async()=>{
