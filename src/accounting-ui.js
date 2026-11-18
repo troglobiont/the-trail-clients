@@ -82,10 +82,12 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   function quickOptions(clientId, services = activeServices().filter(s => s.clientId === clientId),
       statuses = A.currentPaymentStatuses(state(),today(),clientId)) {
     const order = Object.keys(A.TARIFF_LABELS);
-    return services.slice().sort((a,b) => order.indexOf(A.tariffKey(a)) - order.indexOf(A.tariffKey(b))).map(service => ({
-      kind:'payment',service,label:'Принять оплату',
-      period:isMonthly(service) ? statuses.get(service.id)?.previous?.month ?? today().slice(0,7) : null
-    }));
+    return services.slice().sort((a,b) => order.indexOf(A.tariffKey(a)) - order.indexOf(A.tariffKey(b))).map(service => {
+      const status = statuses.get(service.id);
+      const next = service.pauses?.length && status?.type === 'none' ? status.nextDue?.slice(0,7) : null;
+      return {kind:'payment',service,label:'Принять оплату',
+        period:isMonthly(service) ? status?.previous?.month ?? next ?? today().slice(0,7) : null};
+    });
   }
 
   function quickClientPicker(confirmation) {
@@ -383,11 +385,12 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     });
   }
 
-  function editService(clientId, existing, { resume = false, scheduled } = {}) {
+  function editService(clientId, existing, { resume = false, scheduled, restoreKey } = {}) {
     const client = state().clients[clientId];
-    modal(resume ? 'Возобновить сотрудничество' : existing ? 'Условия услуги' : 'Добавить услугу', form => {
-      const initial = scheduled ? 'personal' : client.group === 'Да' ? 'belgrade' : ['gym', 'outside'].includes(client.personal) ? 'personal'
-        : client.level === 'Премиум' ? 'coaching' : 'online';
+    const previousPlace = {'personal-gym':'Зал','personal-outside':'Улица'}[restoreKey];
+    modal(resume ? 'Возобновить сотрудничество' : restoreKey ? 'Вернуть услугу' : existing ? 'Условия услуги' : 'Добавить услугу', form => {
+      const initial = scheduled || previousPlace ? 'personal' : restoreKey || (client.group === 'Да' ? 'belgrade' : ['gym', 'outside'].includes(client.personal) ? 'personal'
+        : client.level === 'Премиум' ? 'coaching' : 'online');
       const options = Object.entries(A.PACKAGES).map(([key,label]) => [key,A.TARIFF_LABELS[key] ?? label]);
       if (resume) options.unshift(['','Без тарифа']);
       const kind = select(options, existing ? A.servicePackage(existing) : resume ? '' : initial);
@@ -403,7 +406,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         : starts.value.slice(0,7) > thisMonth ? starts.value.slice(0,7) : thisMonth;
       const day = numberInput(managesSchedule ? A.paymentDay(existing,period) : existing?.day ?? Number(starts.value.slice(-2)), 1, 31);
       day.readOnly = Boolean(managesSchedule);
-      const place = select(A.PLACES, existing?.place || scheduled?.place || (client.personal === 'outside' ? 'Улица' : 'Зал'));
+      const place = select(A.PLACES, existing?.place || scheduled?.place || previousPlace || (client.personal === 'outside' ? 'Улица' : 'Зал'));
       const reminder = input('checkbox');
       reminder.checked = existing?.reminder ?? true;
       const monthlyFields = append(el('div', null, 'stack'), field('День оплаты', day), append(el('label', null, 'checkbox'), reminder, el('span', 'Напоминать в ToDo')));
@@ -444,19 +447,25 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           currency: currency.value, rate: A.amountMinor(rate.value), day: personal ? null : managesSchedule ? existing.day : Number(day.value),
           reminder: !personal && reminder.checked, place: personal ? place.value : null,
           ...(!resume && !personal && existing?.paymentDays ? {paymentDays:existing.paymentDays} : {}),
+          ...(!resume && existing?.pauses ? {pauses:existing.pauses} : {}),
           ...(!personal && cover.value ? { coveredThrough:cover.value } : {}),
           ...(!personal && billingStart.value ? { billingFrom:billingStart.value } : {}),
           ...(!resume && personal && existing?.openingCredit ? { openingCredit:existing.openingCredit } : {}),
           ...(!resume && existing?.note ? { note:existing.note } : {})
         };
         await commit(s => {
-          if (!resume) return A.saveService(s, values, existing?.id);
-          const current = A.clientServices(s, clientId).find(service => A.servicePackage(service) === values.package
-            && service.place === values.place && A.activeService(service, values.startsOn));
+          if (!resume) {
+            if (restoreKey && A.clientServices(s,clientId).some(service => !service.oneOff && A.tariffKey(service) === A.tariffKey(values) &&
+                (!service.endsOn || service.endsOn >= values.startsOn))) throw Error('У клиента уже есть этот тариф');
+            return A.saveService(s, values, existing?.id);
+          }
+          const current = A.clientServices(s, clientId).find(service => !service.oneOff && A.servicePackage(service) === values.package
+            && service.place === values.place && service.startsOn <= values.startsOn && (!service.endsOn || service.endsOn >= values.startsOn));
           if (current) {
             const sameTerms = ['block','currency','rate','day'].every(key => current[key] === values[key]);
             if (sameTerms || personal && current.block === values.block && current.currency === values.currency) {
-              A.saveService(s, { ...current, rate:values.rate, endsOn:values.endsOn, reminder:values.reminder,
+              const restored = A.servicePause(current,values.startsOn) ? A.restoreService(s,current.id,values.startsOn) : current;
+              A.saveService(s, { ...restored, rate:values.rate, endsOn:values.endsOn, reminder:values.reminder,
                 billingFrom:values.billingFrom ?? current.billingFrom, coveredThrough:values.coveredThrough ?? null }, current.id);
               return activateClient(s, clientId, starts.value);
             }
@@ -468,6 +477,37 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         });
       };
     });
+  }
+
+  function changeServiceState(service, mode) {
+    const pause = mode === 'pause';
+    const title = pause ? 'Поставить на паузу' : 'Завершить тариф';
+    modal(title, form => {
+      const date = dateInput();
+      date.min = service.startsOn;
+      append(form,text(serviceTitle(service)),field(pause ? 'Пауза с' : 'Завершить с',date));
+      return async () => {
+        await commit(s=>A.stopService(s,service.id,mode,date.value));
+        message(pause ? 'Тариф на паузе' : 'Тариф завершён');
+      };
+    }, {saveLabel:pause ? 'На паузу' : 'Завершить'});
+  }
+
+  function serviceActions(service, paused) {
+    modal(serviceTitle(service), form => {
+      const rate = A.money(service.rate,service.currency) + (isMonthly(service) ? ' / мес.' : ' / зан.');
+      append(form,text(rate),append(el('div',null,'stack'),
+        button('Условия услуги',()=>editService(service.clientId,service),'subtle'),
+        !paused && button('Поставить на паузу',()=>changeServiceState(service,'pause'),'subtle'),
+        button('Завершить тариф',()=>changeServiceState(service,'end'),'subtle')));
+    },{saveLabel:null,cancelLabel:'Закрыть'});
+  }
+
+  function withRestore(entry, label, action) {
+    if (!action) return entry;
+    const restore = button('+',action,'subtle tariff-restore');
+    restore.setAttribute('aria-label','Вернуть тариф «'+label+'»');
+    return append(el('div',null,'tariff-with-restore'),entry,restore);
   }
 
   function resumeClient(client) {
@@ -875,16 +915,21 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   }
 
   function clientPanel(client) {
+    const date = today();
     const services = A.clientServices(state(), client.id);
-    const active = services.filter(s => !s.oneOff && client.status === 'Активный' && A.activeService(s, today()));
+    const active = services.filter(s => !s.oneOff && client.status === 'Активный' && A.activeService(s,date));
     const unpaidVisits = services.filter(s=>s.oneOff).map(s=>({service:s,debt:-A.serviceBalance(state(),s.id).balance})).filter(x=>x.debt>0);
     const history = A.clientAccountHistory(state(),client.id,today());
     const historyByTariff = A.clientHistoryByTariff(state(),history,client.id);
     const statuses = A.currentPaymentStatuses(state(),today(),client.id);
     const outstanding = new Map(A.personalReceivables(state(),today(),client.id).map(item => [item.service.id,item]));
-    const tariffLine = s => line(serviceTitle(s), [s.startsOn > today() && 'С ' + formatDate(s.startsOn),
-      s.endsOn && s.endsOn < today() && 'До ' + formatDate(s.endsOn)]
-      .filter(Boolean).join(' · '), A.money(s.rate,s.currency) + (isMonthly(s) ? ' / мес.' : ' / зан.'), () => editService(client.id, s));
+    const paused = s => (!s.endsOn || s.endsOn >= date) && A.servicePause(s,date);
+    const tariffLine = (s, action) => {
+      const pause = paused(s);
+      return line(serviceTitle(s), [s.startsOn > date && 'С ' + formatDate(s.startsOn),
+        pause && 'На паузе с ' + formatDate(pause.from),s.endsOn && s.endsOn < date && 'До ' + formatDate(s.endsOn)]
+        .filter(Boolean).join(' · '), A.money(s.rate,s.currency) + (isMonthly(s) ? ' / мес.' : ' / зан.'), action);
+    };
     const currentStatus = s => {
       const info = statuses.get(s.id);
       if (!info) return null;
@@ -932,9 +977,20 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           },{saveLabel:null}),'subtle account-move-date'));
     };
     const payments = quickOptions(client.id,active,statuses);
-    const previous = services.filter(s => !s.oneOff && s.startsOn <= today() && !active.includes(s));
-    const future = services.filter(s => !s.oneOff && s.startsOn > today());
+    const previous = services.filter(s => !s.oneOff && s.startsOn <= date && !active.includes(s))
+      .sort((a,b) => b.startsOn.localeCompare(a.startsOn));
+    const future = services.filter(s => !s.oneOff && s.startsOn > date);
     const shownTariffs = new Set([...active,...previous].map(A.tariffKey));
+    const restorable = new Set([...active,...future].map(A.tariffKey));
+    const restoreAssigned = previous.map(s => {
+      const key = A.tariffKey(s);
+      const action = !restorable.has(key) && client.status === 'Активный' && !A.activeService(s,date) && (async () => {
+        await commit(snapshot=>A.restoreService(snapshot,s.id));
+        message('Тариф возвращён');
+      });
+      restorable.add(key);
+      return withRestore(tariffLine(s,paused(s) && (()=>serviceActions(s,true))),serviceTitle(s),action);
+    });
     const previousFromHistory = [...historyByTariff].flatMap(([tariff,entries]) => {
       if (shownTariffs.has(tariff)) return [];
       const records = entries.flatMap(item => {
@@ -943,11 +999,20 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         return [];
       });
       if (!records.length) return [];
-      const lastSession = records.find(record => record.kind === 'session' && record.date)?.date;
+      const lastVisit = records.find(record => record.kind === 'session' && record.date);
+      const lastSession = lastVisit?.date;
       const lastPayment = records.find(record => ['payment','shared'].includes(record.kind) && record.date)?.date;
       const label = A.TARIFF_LABELS[tariff] + (tariff.startsWith('personal-') ? ' · разовые занятия' : '');
-      return [line(label,lastSession ? 'Последнее занятие · '+formatDate(lastSession) :
-        lastPayment ? 'Последняя оплата · '+formatDate(lastPayment) : '')];
+      const prices = lastVisit?.values && Object.entries(lastVisit.values).filter(([,value])=>value>0);
+      const price = lastVisit?.currency ? [lastVisit.currency,lastVisit.amount] :
+        lastVisit?.sourceLedgerRowId && prices?.length===1 ? prices[0] : null;
+      const restore = !restorable.has(tariff) && client.status === 'Активный' && (async () => {
+        if (!lastVisit?.place || !price) return editService(client.id,undefined,{restoreKey:tariff});
+        await commit(snapshot=>A.restoreHistoricalVisitTariff(snapshot,client.id,lastVisit.place,...price));
+        message('Тариф возвращён');
+      });
+      return [withRestore(line(label,lastSession ? 'Последнее занятие · '+formatDate(lastSession) :
+        lastPayment ? 'Последняя оплата · '+formatDate(lastPayment) : ''),A.TARIFF_LABELS[tariff],restore)];
     });
     const panel=section('Оплаты и занятия', `${client.id}-account`, [
       client.billingNote && text(client.billingNote),
@@ -960,12 +1025,12 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       }),
       payments.length && button('Принять оплату',()=>quickEntry(client.id,null,false,{tariffs:payments}),'primary account-main-action'),
       section('Тарифы', `${client.id}-tariffs`, [
-        ...active.map(tariffLine),
+        ...active.map(s=>tariffLine(s,()=>serviceActions(s,false))),
         (previous.length || previousFromHistory.length) && section('Ранее', `${client.id}-previous-tariffs`, [
-          ...previous.map(tariffLine), ...previousFromHistory,
+          ...restoreAssigned, ...previousFromHistory,
           previous.length && button('Оплата за прошлую услугу', () => editPayment({ clientId:client.id }), 'subtle')
         ]),
-        future.length && text('Будущие тарифы'), ...future.map(tariffLine),
+        future.length && text('Будущие тарифы'), ...future.map(s=>tariffLine(s,()=>editService(client.id,s))),
         button('Добавить услугу', () => editService(client.id), 'subtle')
       ]),
       section('История оплат и занятий', `${client.id}-account-history`, [clientHistory(history,client.id,historyByTariff)])

@@ -284,6 +284,8 @@ input.account-month{width:auto;max-width:100%}
 .client-accounting>.fold-body>.fold{border-top:0;background:var(--soft);border-radius:9px;padding:0 10px}
 .client-accounting>.fold-body>.fold>summary{padding-block:9px;font-size:.9rem}
 .client-accounting .fold .fold{margin-left:8px;padding-left:9px;border-left:1px solid var(--line)}
+.tariff-with-restore{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px}
+.tariff-with-restore .tariff-restore{min-width:42px;min-height:42px;font-size:1.2rem}
 .settings-folds .settings-section{padding:0;border:0;background:none}
 .detail-line{display:grid;grid-template-columns:minmax(100px,.85fr) minmax(0,1.15fr);gap:10px;align-items:baseline}
 .detail-line>*{overflow-wrap:anywhere}

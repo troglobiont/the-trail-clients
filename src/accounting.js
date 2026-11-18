@@ -52,7 +52,11 @@ function writable(state) {
 function checkService(state, service) {
   const { clientId, kind, block, startsOn, endsOn, currency, rate, day, reminder, place } = service;
   if (!validKey(clientId) || !has(state.clients, clientId) || !has(SERVICES, kind) || !has(BLOCKS, block)) throw Error('Выбери клиента, услугу и раздел учёта');
-  if (!validDate(startsOn) || (endsOn !== null && (!validDate(endsOn) || endsOn < startsOn))) throw Error('Проверь период действия услуги');
+  if (!validDate(startsOn) || (endsOn !== null && (!validDate(endsOn) || endsOn < addDays(startsOn,-1)))) throw Error('Проверь период действия услуги');
+  if (service.pauses !== undefined && (!Array.isArray(service.pauses) || service.oneOff ||
+      service.pauses.some((pause,i,pauses) => !pause || !validDate(pause.from) || pause.from < startsOn ||
+        (pause.until !== null && (!validDate(pause.until) || pause.until <= pause.from)) ||
+        (i > 0 && (!pauses[i-1].until || pauses[i-1].until > pause.from))))) throw Error('Проверь даты паузы услуги');
   if (!CURRENCIES.includes(currency) || !validMoney(rate)) throw Error('Проверь тариф и валюту');
   const key = servicePackage(service);
   if (!has(PACKAGES, key) || packageKind(key) !== kind) throw Error('Проверь пакет');
@@ -261,8 +265,51 @@ export function clientServices(state, clientId) {
   return Object.values(accounting(state).services).filter(s => s.clientId === clientId);
 }
 
+export function servicePause(service, date) {
+  return service.pauses?.find(pause => pause.from <= date && (!pause.until || date < pause.until));
+}
+
 export function activeService(service, date) {
-  return service.startsOn <= date && (!service.endsOn || service.endsOn >= date);
+  return service.startsOn <= date && (!service.endsOn || service.endsOn >= date) && !servicePause(service,date);
+}
+
+export function stopService(state, serviceId, mode, from, today = localDate()) {
+  const service = accounting(state).services[serviceId];
+  if (!service || service.oneOff || !['pause','end'].includes(mode) || (service.endsOn && service.endsOn < today)) {
+    throw Error('Выбери действующую услугу');
+  }
+  const pauses = service.pauses ?? [];
+  const last = pauses.at(-1);
+  if (!validDate(from) || from < service.startsOn || from > today || (last && from < (last.until ?? last.from))) {
+    throw Error('Проверь дату начала паузы или завершения');
+  }
+  if (mode === 'pause') {
+    if (last && !last.until) throw Error('Услуга уже на паузе');
+    return saveService(state,{...service,pauses:[...pauses,{from,until:null}]},serviceId);
+  }
+  return saveService(state,{...service,endsOn:addDays(from,-1)},serviceId);
+}
+
+export function restoreService(state, serviceId, today = localDate()) {
+  const service = accounting(state).services[serviceId];
+  if (!service || service.oneOff || service.startsOn > today || activeService(service,today)) throw Error('Выбери услугу из истории');
+  const pauses = (service.pauses ?? []).slice();
+  const last = pauses.at(-1);
+  const from = last && !last.until ? last.from : addDays(service.endsOn,1);
+  if (clientServices(state,service.clientId).some(other => !other.oneOff && other.id !== serviceId &&
+      tariffKey(other) === tariffKey(service) && (!other.endsOn || other.endsOn >= from))) {
+    throw Error('У клиента уже есть другой период этого тарифа. Проверь список услуг');
+  }
+  if (last && !last.until) pauses.pop();
+  if (from < today) pauses.push({from,until:today});
+  return saveService(state,{...service,endsOn:service.endsOn >= today ? service.endsOn : null,pauses},serviceId);
+}
+
+export function restoreHistoricalVisitTariff(state, clientId, place, currency, rate, today = localDate()) {
+  if (clientServices(state,clientId).some(service => !service.oneOff && service.kind === 'personal' && service.place === place &&
+      (!service.endsOn || service.endsOn >= today))) throw Error('У клиента уже есть тариф для этого места');
+  return saveService(state,{clientId,kind:'personal',package:'personal',block:'personal',place,currency,rate,
+    startsOn:today,endsOn:null,day:null,reminder:false});
 }
 
 export function matchingTariffClients(state, { packageFilter, tariffCurrency, paymentCurrency, paymentMonth }, today = localDate()) {
@@ -579,8 +626,8 @@ function monthlyCredits(state, today, replacedId) {
   }
   for (const row of state.ledger?.rows || []) {
     if (row.kind !== 'payment' || row.owners.length !== 1 || !validDate(row.date) || row.date > today) continue;
-    const candidates = (recurring.get(`${row.owners[0]}/${row.block}`) || []).filter(service =>
-      service.startsOn.slice(0,7) <= row.month && (!service.endsOn || dueDate(service,row.month) <= service.endsOn));
+    const candidates = (recurring.get(`${row.owners[0]}/${row.block}`) || []).filter(service => activeService(service,dueDate(service,row.month)) &&
+      service.startsOn.slice(0,7) <= row.month);
     for (const [currency, amount] of Object.entries(row.values)) {
       if (amount <= 0) continue;
       const receipt = receiptKey(row.owners,row.date,currency,amount);
@@ -599,7 +646,7 @@ function monthlyCredits(state, today, replacedId) {
 function chargeFor(credits, service, month, { settle = false, recordCovered = false } = {}) {
   if (!validMonth(month) || service.kind === 'personal') return null;
   const due = dueDate(service, month);
-  if (month < service.startsOn.slice(0, 7) || (service.endsOn && due > service.endsOn)) return null;
+  if (month < service.startsOn.slice(0, 7) || (service.endsOn && due > service.endsOn) || servicePause(service,due)) return null;
   const payment = credits.get(`${service.id}/${month}`);
   const covered = Boolean(service.coveredThrough && month <= service.coveredThrough);
   const received = (payment?.amount ?? 0) >= service.rate;

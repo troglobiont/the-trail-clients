@@ -319,6 +319,41 @@ test('pauses stay distinct from endings and suppress charges due during a record
   assert.deepEqual(A.paymentReminders(state, '2024-11-27').map(r => [r.service.id, r.due]), [[service.id, '2024-11-30']]);
 });
 
+test('pausing and ending a single tariff preserve receipts and skip dues while it is inactive', () => {
+  const state = emptyState();
+  const client = createClient(state,{name:'Клиент'},'2024-10-01');
+  const group = enrollment(state,client,{day:15});
+  const hall = A.restoreHistoricalVisitTariff(state,client.id,'Зал','RSD',400000,'2024-10-01');
+  const receipt = payment(state,'2024-10-15','RSD',800000,[credit(group,'2024-10',800000)]);
+  A.stopService(state,group.id,'pause','2024-11-01','2024-11-10');
+  assert.equal(A.activeService(hall,'2024-11-10'),true);
+  assert.equal(state.clients[client.id].status,'Активный');
+  assert.deepEqual(A.paymentReminders(state,'2024-11-15'),[]);
+  const restored = A.restoreService(state,group.id,'2024-12-01');
+  assert.equal(A.monthlyCharge(state,restored,'2024-11','2024-12-01'),null);
+  assert.equal(A.monthlyCharge(state,restored,'2024-10','2024-12-01').remaining,0);
+  assert.equal(A.monthlyCharge(state,restored,'2024-12','2024-12-01').due,'2024-12-15');
+  A.stopService(state,group.id,'end','2024-12-04','2024-12-04');
+  const returned = A.restoreService(state,group.id,'2025-01-04');
+  assert.equal(A.monthlyCharge(state,returned,'2024-12','2025-01-04'),null);
+  assert.equal(A.monthlyCharge(state,returned,'2025-01','2025-01-04').remaining,800000);
+  assert.deepEqual(A.accounting(state).operations[receipt.id],receipt);
+  assert.throws(()=>A.restoreHistoricalVisitTariff(state,client.id,'Зал','RSD',400000,'2025-01-04'),/уже есть тариф/);
+  assert.doesNotThrow(()=>parseImport(exportState(state)));
+});
+
+test('ending and returning a personal tariff on its first day leaves its advance available', () => {
+  const state = emptyState();
+  const client = createClient(state,{name:'Клиент'},'2024-10-01');
+  const hall = A.restoreHistoricalVisitTariff(state,client.id,'Зал','RSD',400000,'2024-10-01');
+  payment(state,'2024-10-01','RSD',800000,[credit(hall,null,800000)]);
+  const ended = A.stopService(state,hall.id,'end','2024-10-01','2024-10-01');
+  assert.equal(A.activeService(ended,'2024-10-01'),false);
+  const returned = A.restoreService(state,hall.id,'2024-10-01');
+  assert.equal(A.activeService(returned,'2024-10-01'),true);
+  assert.equal(A.serviceBalance(state,returned.id,'2024-10-01').balance,800000);
+});
+
 test('sessions consume advances without increasing receipts and expenses affect only the balance', () => {
   const state = emptyState();
   const client = createClient(state, { name: 'Клиент' }, '2024-10-01');
