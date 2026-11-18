@@ -84,6 +84,24 @@ test('receivables apply linked receipts to their own sessions and general paymen
   assert.deepEqual(A.personalReceivables(state,'2024-10-17'),[]);
 });
 
+test('past due sessions settle on receipt date and remaining cash covers later sessions from advance', () => {
+  const state = emptyState(), client = createClient(state,{name:'Клиент'},'2024-10-01');
+  const service = enrollment(state,client,{kind:'personal',block:'personal',place:'Улица',day:null,reminder:false,rate:400000});
+  const data = {serviceId:service.id,place:service.place,currency:'RSD',amount:400000,note:''};
+  const sessions = ['2024-10-04','2024-10-06','2024-10-12','2024-10-18'].map(date=>A.saveOperation(state,{...data,kind:'session',date}));
+  const receipt = payment(state,'2024-10-10','RSD',1300000,[credit(service,null,1300000)]);
+  const settlements = A.personalVisitSettlements(state,client.id,'2024-10-19');
+  const outcomes = sessions.map(session=>{
+    const {fromAdvance,paidOn,remaining,receiptIds} = settlements.get(session.id);
+    return [fromAdvance,paidOn,remaining,[...receiptIds]];
+  });
+  assert.deepEqual(outcomes,[[0,receipt.date,0,[receipt.id]],[0,receipt.date,0,[receipt.id]],
+    [400000,receipt.date,0,[receipt.id]],[100000,receipt.date,300000,[receipt.id]]]);
+  assert.equal(A.personalReceivables(state,'2024-10-19',client.id)[0].remaining,300000);
+  A.setVoided(state,receipt.id,true);
+  assert.equal(A.personalVisitSettlements(state,client.id,'2024-10-19').get(sessions[0].id).remaining,400000);
+});
+
 test('assistant commits a new tariff and dated operations together', () => {
   const state=emptyState(), client=createClient(state,{name:'Тестовый клиент'},'2024-10-01');
   const visit={clientId:client.id,oneOff:false,place:'Зал',currency:'RSD',rate:400000,date:'2024-10-10'};

@@ -8,6 +8,7 @@ export { TIMEZONE, id, localDate, validDate, addDays } from './model-utils.js';
 export const SCHEMA=1;
 export const STATUSES=['Активный','На паузе','Завершил','Ожидает старта','Нужно уточнить'];
 export const PAUSE_KINDS={ planned:'С ориентиром', open:'Без срока' };
+export const PAUSE_GROUPS={ returning:'К возврату', unplanned:'Без плана возврата' };
 export const BASES=['Beginners','Middle','Hard','Simple','Online','Gym','С нуля','Сейчас плана нет'];
 export const GOAL_STATUSES=['Желание клиента','Согласовано','Предложение тренера','Рабочая цель тренера'];
 export const TEMPLATES=['Привет! Как дела?','Привет! Как самочувствие?','Привет! Как прошла тренировка?'];
@@ -47,6 +48,7 @@ export function completeBirthday(s,clientId,day) {
 const directorySort = new Intl.Collator('ru', { sensitivity: 'base' });
 export const clientRole = client => client.teamRole === 'Организатор' ? 'Организатор' : client.role;
 export const pauseKind = client => client.pause?.kind === 'planned' ? 'planned' : 'open';
+export const pauseGroup = client => (client.pause?.returning ?? (pauseKind(client) === 'planned')) ? 'returning' : 'unplanned';
 export function clientSection(client) {
   if (client.mergedInto) return null;
   if (client.role !== 'Клиент') return 'team';
@@ -67,6 +69,7 @@ export function filterClients(s, f = {}) {
     return !c.mergedInto && words.every(word => labels.some(label => label.includes(word)))
       && (!f.section || clientSection(c) === f.section)
       && (!f.pauseKind || pauseKind(c) === f.pauseKind)
+      && (!f.pauseGroup || clientSection(c) === 'paused' && pauseGroup(c) === f.pauseGroup)
       && (!f.role || f.role === 'all' || c.role === f.role)
       && (!f.status || f.status === 'all' || c.status === f.status)
       && (!f.format || f.format === 'all' || format === f.format)

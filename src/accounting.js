@@ -431,38 +431,60 @@ export function personalBalances(state, through = localDate()) {
   return result;
 }
 
-export function personalReceivables(state, through = localDate(), clientId) {
+function personalSettlements(state, through, clientId) {
   const accounts = new Map();
   for (const service of Object.values(accounting(state).services)) {
     if (service.kind !== 'personal' || (clientId && service.clientId !== clientId)) continue;
     const advance = service.openingCredit;
-    accounts.set(service.id,{ service, sessions:[], targeted:new Map(), credit:advance?.date <= through ? advance.amount : 0 });
+    const credits = advance?.date <= through ? [{date:advance.date,remaining:advance.amount}] : [];
+    accounts.set(service.id,{service,visits:new Map(),credits});
   }
-  for (const operation of operations(state)) {
+  const entries = operations(state).sort((a,b)=>a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+  for (const operation of entries) {
     if (operation.date > through) continue;
-    if (operation.kind === 'session') accounts.get(operation.serviceId)?.sessions.push(operation);
+    if (operation.kind === 'session') accounts.get(operation.serviceId)?.visits.set(operation.id,{
+      session:operation,remaining:operation.amount,fromAdvance:0,paidOn:null,receiptIds:new Set()
+    });
     if (operation.kind !== 'payment') continue;
     for (const allocation of operation.allocations) {
-      const account = accounts.get(allocation.serviceId);
-      if (!account) continue;
-      account.credit += allocation.credit;
-      if (operation.sessionId) account.targeted.set(operation.sessionId,(account.targeted.get(operation.sessionId) ?? 0) + allocation.credit);
+      accounts.get(allocation.serviceId)?.credits.push({date:operation.date,remaining:allocation.credit,receiptId:operation.id,sessionId:operation.sessionId});
     }
   }
+  const apply = (visit, credit) => {
+    const amount = Math.min(visit.remaining,credit.remaining);
+    if (!amount) return;
+    visit.remaining -= amount;
+    credit.remaining -= amount;
+    if (credit.date < visit.session.date || !credit.receiptId && credit.date === visit.session.date) visit.fromAdvance += amount;
+    if (!visit.paidOn || credit.date > visit.paidOn) visit.paidOn = credit.date;
+    if (credit.receiptId) visit.receiptIds.add(credit.receiptId);
+  };
+  for (const {visits,credits} of accounts.values()) {
+    credits.sort((a,b)=>a.date.localeCompare(b.date));
+    for (const credit of credits) {
+      const targeted = visits.get(credit.sessionId);
+      if (targeted) apply(targeted,credit);
+    }
+    let index = 0;
+    for (const visit of visits.values()) {
+      while (visit.remaining && index < credits.length) {
+        const credit = credits[index];
+        apply(visit,credit);
+        if (!credit.remaining) index++;
+      }
+    }
+  }
+  return accounts;
+}
+
+export function personalVisitSettlements(state, clientId, through = localDate()) {
+  return new Map([...personalSettlements(state,through,clientId).values()].flatMap(({visits})=>[...visits]));
+}
+
+export function personalReceivables(state, through = localDate(), clientId) {
   const result = [];
-  for (const {service,sessions,targeted,credit} of accounts.values()) {
-    let available = credit;
-    const open = sessions.sort((a,b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).map(session => {
-      const covered = Math.min(session.amount,targeted.get(session.id) ?? 0);
-      available -= covered;
-      return { session, remaining:session.amount - covered };
-    });
-    const unpaid = open.filter(item => {
-      const covered = Math.min(item.remaining,available);
-      available -= covered;
-      item.remaining -= covered;
-      return item.remaining > 0;
-    });
+  for (const {service,visits} of personalSettlements(state,through,clientId).values()) {
+    const unpaid = [...visits.values()].filter(item=>item.remaining>0).map(({session,remaining})=>({session,remaining}));
     if (unpaid.length) result.push({service,unpaid,remaining:unpaid.reduce((sum,item) => sum + item.remaining,0)});
   }
   return result.sort((a,b) => a.unpaid[0].session.date.localeCompare(b.unpaid[0].session.date));

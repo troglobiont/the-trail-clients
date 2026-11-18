@@ -20,6 +20,17 @@ test('client directory keeps pauses, archives, occasional clients and leads out 
   C.editClient(s,b.id,{status:'Активный',pause:null});
   assert.deepEqual(C.pauseContacts(s),[]);
 });
+
+test('returning clients can be followed without a return date, including when migrated from a planned pause', () => {
+  const {s,a,b} = fixture();
+  C.editClient(s,a.id,{status:'На паузе',pause:{kind:'open',returning:true,returnWindow:'',contactOn:null}});
+  C.editClient(s,b.id,{status:'На паузе',pause:{kind:'planned',returnWindow:'В январе',contactOn:null}});
+  assert.deepEqual(C.filterClients(s,{pauseGroup:'returning'}).map(c=>c.id),[a.id,b.id]);
+  assert.deepEqual(C.pauseContacts(s),[]);
+  C.editClient(s,b.id,{pause:{...b.pause,returning:false,contactOn:'2026-11-25'}});
+  assert.deepEqual(C.filterClients(s,{pauseGroup:'unplanned'}).map(c=>c.id),[b.id]);
+  assert.deepEqual(C.pauseContacts(s).map(c=>c.id),[b.id]);
+});
 test('classification fields are independent and Cyrillic aliases searchable',()=>{const {s,a,b}=fixture();s.clients[a.id].aliases=['Shalaev'];assert.equal(C.filterClients(s,{format:'Дистанционно',level:'Премиум'})[0].id,a.id);assert.equal(C.filterClients(s,{personal:'gym'})[0].id,b.id);assert.equal(C.filterClients(s,{query:'Шалаев'})[0].id,a.id);assert.equal(C.filterClients(s,{status:'На паузе'}).length,0);C.validateState(s);});
 test('unlinking and restoring a Telegram recipient preserves client history and tasks across persistence',async()=>{
   const {s,a,b}=fixture(),binding={peerId:'123456',displayName:'Тестовый получатель',accountPeerId:'654321'};

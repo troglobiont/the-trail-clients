@@ -1101,16 +1101,16 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   }
 
   function historyAmount({label, amount, currency, received}, voided) {
-    const value = (received ? '+' : '−')+A.money(Math.abs(amount),currency);
+    const value = (received ? '+' : '')+A.money(amount,currency);
     const node = el('span',value,'money-amount'+(received && !voided ? ' history-received' : ''));
     node.setAttribute('aria-label',label+' '+value);
     return node;
   }
 
-  function historyLine({title, status, context, details, amounts, notes = [], edit = [], voided = false}) {
-    const values = append(el('span',null,'account-value history-amounts'),...amounts.map(unit=>historyAmount(unit,voided)));
+  function historyLine({title, status, context, details, amounts, displayAmounts = amounts, extra, notes = [], edit = [], voided = false}) {
+    const values = append(el('span',null,'account-value history-amounts'),...displayAmounts.map(unit=>historyAmount(unit,voided)));
     if (voided) values.classList.add('history-voided');
-    return line(title,[status,context,details].filter(Boolean).join(' · '),values,()=>modal(title,form=>{
+    return line(title,[status,context].filter(Boolean).join(' · '),values,()=>modal(title,form=>{
       const amountRows = amounts.map(unit => {
         const value = el('span',null,'account-value');
         if (voided) value.classList.add('history-voided');
@@ -1120,11 +1120,11 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const corrections = edit.length && append(el('details',null,'fold'),el('summary','Исправить запись'),
         append(el('div',null,'row fold-body'),...edit.map(([label,action])=>button(label,action,'subtle'))));
       append(form,text([status,context].filter(Boolean).join(' · ')),append(el('div',null,'history-details'),...amountRows),
-        details && text(details),...notes.filter(Boolean).map(note=>text(note)),corrections);
+        details && text(details),extra?.(),...notes.filter(Boolean).map(note=>text(note)),corrections);
     },{saveLabel:null,cancelLabel:'Закрыть'}));
   }
 
-  function clientHistoryLine(operation, session, clientId, tariff, application) {
+  function clientHistoryLine(operation, session, clientId, tariff, application, settlement) {
     const payment = operation.kind==='payment' ? operation : null;
     const visit = session || (operation.kind==='session' ? operation : null);
     const voided = operation.voided;
@@ -1132,18 +1132,33 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const info = payment && paymentBreakdown(payment,clientId,tariff);
     const received = payment && {label:'Поступило',amount:info.amount,currency:payment.currency,received:true};
     const charged = visit && {label:'Стоимость занятия',amount:visit.amount,currency:visit.currency,received:false};
-    const status = session ? 'Проведено и оплачено' : visit ? 'Проведено' : 'Поступление';
+    let status;
+    if (session) status = 'Проведено и оплачено';
+    else if (!visit) status = application?.advance > 0
+      ? application.covered ? 'Поступление · часть в аванс' : 'Получен аванс' : 'Поступление';
+    else if (!settlement) status = 'Проведено';
+    else if (settlement.remaining === visit.amount) status = 'Проведено · к оплате';
+    else if (settlement.remaining) status = 'Проведено · частично оплачено';
+    else if (settlement.paidOn > visit.date) status = 'Проведено · оплачено позже';
+    else if (settlement.fromAdvance === visit.amount) status = 'Проведено · оплачено из аванса';
+    else status = 'Проведено и оплачено';
     let details;
     if (application && payment) {
       details = [application.covered>0 && 'Погашено '+A.money(application.covered,application.currency),
-        application.advance>0 && 'В аванс '+A.money(application.advance,application.currency)].filter(Boolean).join(' · ');
-    } else if (application && visit) {
-      details = [application.fromAdvance>0 && 'Из аванса '+A.money(application.fromAdvance,application.currency),
-        application.due>0 && 'К оплате на эту дату '+A.money(application.due,application.currency)].filter(Boolean).join(' · ');
+        application.advance>0 && application.covered>0 && 'В аванс '+A.money(application.advance,application.currency)].filter(Boolean).join(' · ');
+    } else if (settlement && visit) {
+      details = [settlement.fromAdvance>0 && 'Зачтено из аванса '+A.money(settlement.fromAdvance,visit.currency),
+        settlement.remaining>0 && 'К оплате '+A.money(settlement.remaining,visit.currency),
+        !settlement.remaining && settlement.paidOn > visit.date && 'Оплачено '+formatDate(settlement.paidOn)].filter(Boolean).join(' · ');
     }
+    const extra = !payment && settlement?.fromAdvance>0 ? () => {
+      const {balance} = A.serviceBalance(state(),visit.serviceId,visit.date);
+      return line('Аванс на конец дня','',A.money(Math.max(0,balance),visit.currency));
+    } : null;
     const context = visit ? '' : info.tariffs;
+    const amounts = [received,charged].filter(Boolean);
     return historyLine({title:when+(visit ? ' · '+visit.place : ''),status:voided ? 'Запись отменена' : status,
-      context,details,amounts:[received,charged].filter(Boolean),
+      context,details,amounts,displayAmounts:session ? [received] : amounts,extra,
       notes:[...new Set([visit?.note,payment?.note])],voided,edit:[
         visit && ['Изменить занятие',()=>editSession({existing:visit})],
         payment && ['Изменить оплату',()=>editPayment({existing:payment})]
@@ -1169,16 +1184,17 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
 
   function clientHistory(history, clientId, historyByTariff) {
     const operationDetails = A.personalOperationHistory(state(),clientId);
+    const settlements = A.personalVisitSettlements(state(),clientId,today());
     const recorded = history.filter(item => item.type === 'operation').map(item => item.operation);
     const byId = new Map(recorded.map(operation => [operation.id, operation]));
     const pairs = new Map();
     const pairedSessions = new Set();
-    for (const payment of recorded) {
-      const session = byId.get(payment.sessionId);
-      const allocation = payment.allocations?.[0];
-      if (!session || session.kind !== 'session' || payment.kind !== 'payment' || payment.voided || session.voided
-          || pairedSessions.has(session.id) || payment.date !== session.date || payment.currency !== session.currency
-          || payment.allocations.length !== 1 || allocation?.serviceId !== session.serviceId || payment.amount !== session.amount) continue;
+    for (const {session,remaining,receiptIds,fromAdvance} of settlements.values()) {
+      if (remaining || fromAdvance || receiptIds.size !== 1) continue;
+      const payment = byId.get([...receiptIds][0]);
+      const allocation = payment?.allocations?.[0];
+      if (!payment || payment.date !== session.date || payment.currency !== session.currency || payment.amount !== session.amount
+          || payment.allocations.length !== 1 || allocation?.serviceId !== session.serviceId || allocation.credit !== session.amount) continue;
       pairs.set(payment.id, session);
       pairedSessions.add(session.id);
     }
@@ -1202,7 +1218,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         }
         if (item.type === 'ledger') return importedHistoryLine(item.row);
         const operation = item.operation;
-        return clientHistoryLine(operation,pairs.get(operation.id),clientId,selected,operationDetails.get(operation.id));
+        return clientHistoryLine(operation,pairs.get(operation.id),clientId,selected,operationDetails.get(operation.id),settlements.get(operation.id));
       }));
       if (!entries.length) list.append(text(selected === 'all' ? 'Платежей и занятий пока нет' : 'По этому тарифу записей нет'));
       more.hidden = limit >= entries.length;

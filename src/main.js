@@ -45,7 +45,7 @@ function select(values,value){const s=el('select');for(const item of values){con
 function clientStatus(c) {
   if (c.role !== 'Клиент') return C.clientRole(c);
   if (C.clientSection(c) === 'occasional') return 'Разово';
-  if (c.status === 'На паузе') return 'На паузе · ' + C.PAUSE_KINDS[C.pauseKind(c)].toLowerCase();
+  if (c.status === 'На паузе' && C.pauseGroup(c) === 'returning') return 'На паузе · к возврату';
   return c.status;
 }
 function chips(c){const list=el('span',null,'row');for(const value of c.role==='Клиент'?[clientStatus(c),c.format,'Основа: '+planBasisLabel(c.basis)]:[C.clientRole(c)])list.append(el('span',value,'chip'));if(c.level==='Премиум')list.append(el('span','Премиум','chip emphasis'));if(['gym','outside'].includes(c.personal))list.append(el('span',c.personal==='gym'?'Персональный зал с Сергеем':'Персонально с Сергеем · улица','chip emphasis'));return list;}
@@ -146,6 +146,17 @@ function startCloud(){
   renderCloudStatus();
   run(()=>cloud.restore());
 }
+function pauseEditor(client) {
+  const group = select(Object.entries(C.PAUSE_GROUPS),C.pauseGroup(client ?? {}));
+  const returnWindow = input('text',client?.pause?.returnWindow || '','Например, в январе');
+  returnWindow.maxLength = 140;
+  const contactOn = input('date',client?.pause?.contactOn || '');
+  const element = append(el('div',null,'stack'),field('Группа паузы',group),field('Ориентир возврата',returnWindow),field('Связаться',contactOn));
+  const values = () => ({kind:returnWindow.value.trim() ? 'planned' : 'open',returning:group.value === 'returning',
+    returnWindow:returnWindow.value.trim(),contactOn:contactOn.value || null});
+  return {element,values};
+}
+
 function editClient(clientId=null) {
   const c = clientId ? state().clients[clientId] : null;
   modal(c ? 'Данные клиента' : 'Новый клиент', form => {
@@ -153,11 +164,8 @@ function editClient(clientId=null) {
     name.maxLength = 180;
     const role = select(['Клиент','Тренер','Организатор'], c ? C.clientRole(c) : 'Клиент');
     const status = select([...C.STATUSES, ['occasional','Разово']], c?.engagement === 'occasional' ? 'occasional' : C.STATUSES.includes(c?.status) ? c.status : 'Активный');
-    const pauseType = select(Object.entries(C.PAUSE_KINDS), c ? C.pauseKind(c) : 'open');
-    const returnWindow = input('text', c?.pause?.returnWindow || '', 'Например, в январе');
-    returnWindow.maxLength = 140;
-    const contactOn = input('date', c?.pause?.contactOn || '');
-    const pauseFields = append(el('div',null,'stack'), field('Вид паузы',pauseType), field('Ориентир возврата',returnWindow), field('Связаться',contactOn));
+    const pause = pauseEditor(c);
+    const pauseFields = pause.element;
     const date = input('date', C.localDate());
     date.max = C.localDate();
     const effective = field('Дата изменения статуса',date);
@@ -201,7 +209,7 @@ function editClient(clientId=null) {
         name:name.value.trim(), context:context.value.trim(), rules:rules.value.split('\n').map(r=>r.trim()).filter(Boolean), role:isClient ? 'Клиент' : 'Тренер', teamRole:role.value === 'Организатор' ? 'Организатор' : null,
         status:isClient ? actualStatus() : 'Тренер', currentFormat:controls.currentFormat.value || null,
         engagement:isClient && status.value === 'occasional' ? 'occasional' : null,
-        pause:!pauseFields.hidden ? {kind:pauseType.value,returnWindow:returnWindow.value.trim(),contactOn:contactOn.value || null} : null
+        pause:!pauseFields.hidden ? pause.values() : null
       };
       if (!values.name) throw Error('Введи имя');
       if (profileEditor) values.profile = profileEditor.values();
@@ -271,10 +279,10 @@ function renderCatalog(scope) {
 function pauseFilters() {
   const filters = el('div',null,'row catalog-quick');
   filters.setAttribute('role','group');
-  filters.setAttribute('aria-label','Вид паузы');
+  filters.setAttribute('aria-label','Группа паузы');
   const paused = C.filterClients(state(),{ section:'paused' });
-  for (const [key,label] of Object.entries(C.PAUSE_KINDS)) {
-    const count = paused.filter(c=>C.pauseKind(c) === key).length;
+  for (const [key,label] of Object.entries(C.PAUSE_GROUPS)) {
+    const count = paused.filter(c=>C.pauseGroup(c) === key).length;
     const control = button(label + ' · ' + count,()=>{
       ui.pauseFilter = ui.pauseFilter === key ? null : key;
       ui.catalogLimit = CATALOG_PAGE_SIZE;
@@ -392,7 +400,7 @@ function renderCatalogResults() {
   const scope = ui.catalogScope;
   const tariffs = scope === 'active' ? matchingTariffClients(state(),ui.filters) : null;
   const payment = scope === 'active' && ui.filters.paymentStatus !== 'all' ? clientPaymentStatuses(state()) : null;
-  const clients = C.filterClients(state(),{ ...ui.filters,section:scope,pauseKind:ui.pauseFilter })
+  const clients = C.filterClients(state(),{ ...ui.filters,section:scope,pauseGroup:ui.pauseFilter })
     .filter(c=>(!tariffs || tariffs.has(c.id)) && (!payment || payment.get(c.id) === ui.filters.paymentStatus));
   const byContact=scope==='active'&&ui.contactOrder;
   if(byContact)clients.sort((a,b)=>(a.lastContact?.at||'').localeCompare(b.lastContact?.at||''));
@@ -405,8 +413,9 @@ function renderCatalogResults() {
     const item = button(c.name,()=>openClient(c.id),'client-directory-item');
     item.setAttribute('aria-label','Открыть клиента: '+c.name);
     const category = C.clientSection(c);
-    const detail = category !== scope ? catalogViews[category]
-      : scope === 'paused' ? c.pause?.returnWindow || (c.pause?.contactOn && 'Связаться ' + formatDate(c.pause.contactOn))
+    const detail = category !== scope ? category === 'paused' ? clientStatus(c) : catalogViews[category]
+      : scope === 'paused' ? [C.pauseGroup(c)==='returning' && 'К возврату', c.pause?.returnWindow,
+        c.pause?.contactOn && 'Связаться ' + formatDate(c.pause.contactOn)].filter(Boolean).join(' · ')
       : scope === 'team' ? C.clientRole(c) : byContact ? c.lastContact?.at ? 'Контакт '+formatDate(c.lastContact.at)+' '+c.lastContact.at.slice(0,4) : 'Контакт не записан' : '';
     if (detail) item.append(text(detail));
     const quick = accountingClients.has(c.id) && button('Учёт',()=>accountingUI.quickEntry(c.id),'directory-account');
@@ -606,10 +615,21 @@ function renderFeatures(client) {
 }
 
 function pauseDetails(client) {
-  if (!['paused','archive'].includes(C.clientSection(client))) return null;
+  const category = C.clientSection(client);
+  if (!['paused','archive'].includes(category)) return null;
   return append(el('section',null,'stack'),
     client.pause?.returnWindow&&text('Ориентир возврата · '+client.pause.returnWindow),
-    row(button('Возобновить',()=>accountingUI.resumeClient(client))));
+    client.pause?.contactOn&&text('Связаться · '+formatDate(client.pause.contactOn)),
+    row(button('Возобновить',()=>accountingUI.resumeClient(client)),category==='paused' &&
+      button('Настроить паузу',()=>modal('Пауза',form=>{
+        const pause = pauseEditor(client);
+        form.append(pause.element);
+        return ()=>commit(s=>{
+          const current = s.clients[client.id];
+          if (C.clientSection(current)!=='paused') throw Error('Статус клиента изменился. Открой карточку заново');
+          C.editClient(s,client.id,{pause:pause.values()});
+        });
+      }),'subtle')));
 }
 
 function focusCard(type,id){
