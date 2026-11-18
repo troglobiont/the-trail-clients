@@ -26,7 +26,7 @@ const paymentFilters = [['all','Оплаты'],['paid','Оплачено'],['pen
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
   packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7),paymentStatus:'all'});
 const ui={filters:defaultFilters(),catalogScope:'active',pauseFilter:null,catalogLimit:CATALOG_PAGE_SIZE,
-  contactOrder:false, recentlyCompleted:new Set(), taskFilter:'all',returnTo:'#clients',open:new Set(),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
+  contactOrder:false, recentlyCompleted:new Set(), birthdayPeriod:7, paymentPeriod:-1,returnTo:'#clients',open:new Set(),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
 const state=()=>store.state();
 function el(tag,text,className){const node=document.createElement(tag);if(text!==undefined&&text!==null)node.textContent=text;if(className)node.className=className;return node;}
 function append(parent,...children){parent.append(...children.filter(Boolean));return parent;}
@@ -62,7 +62,7 @@ const accountingUI=createAccountingUI({state,el,append,button,row,field,input,se
   openClient(clientId){ui.open.add(clientId+'-account');openClient(clientId);}
 });
 const scheduleRoute='#todo/schedule';
-const calendarUI=createCalendarUI({state,service,el,append,button,row,field,input,select,text,modal,commit,formatDate,navigate,openClient,
+const calendarUI=createCalendarUI({state,service,el,append,button,row,field,input,select,text,section,modal,commit,formatDate,navigate,openClient,message,
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   scheduledSession:accountingUI.scheduledSession,addScheduledTariff:accountingUI.addScheduledTariff});
 function modal(title,build,{saveLabel='Сохранить',saveClass='primary',cancelLabel='Отмена',onSaved}={}){
@@ -464,13 +464,14 @@ function renderCatalogResults() {
 }
 function emptyDatabase(){return append(el('div',null,'empty'),el('h2','Твоя клиентская база'),el('p','Импортируй подготовленный файл или добавь первого клиента. База хранится на этом устройстве.'),row(button('Импортировать базу',()=>importDatabase(),'primary'),button('Добавить клиента',()=>editClient())));}
 function taskStateLabel(t){if(!t.needsReply)return 'Моё действие';if(t.phase==='todo')return 'Нужно написать клиенту';return (t.checkOn<=C.localDate()?'Проверить переписку':'Жду ответа клиента')+' · '+formatDate(t.checkOn);}
-function birthdayPeriods(days){
-  const periods=el('div',null,'row catalog-quick');
+function todoPeriods(label,selected,options,onChange){
+  const periods=el('div',null,'row catalog-quick todo-periods');
   periods.setAttribute('role','group');
-  periods.setAttribute('aria-label','Период дней рождения');
-  for(const count of [7,30,90]){
-    const control=button(count+' дней',()=>{ui.birthdayDays=count;render();});
-    control.setAttribute('aria-pressed',String(count===days));
+  periods.setAttribute('aria-label',label);
+  for(const [value,caption,hint] of options){
+    const control=button(caption,()=>{onChange(value);render();});
+    if(hint)control.title=hint;
+    control.setAttribute('aria-pressed',String(value===selected));
     periods.append(control);
   }
   return periods;
@@ -526,11 +527,11 @@ function todoTiles(entries,today){
   return list;
 }
 
-function renderTodo(routeFilter){
+function renderTodo(filter='all'){
   const page=el('div',null,'stack-lg');
-  const today=C.localDate(),days=ui.birthdayDays||30;
-  const filter=routeFilter||ui.taskFilter;
-  const birthdayEntries=(horizon,scope)=>birthdayReminders(state(),today,horizon,scope).map(({client,day})=>({
+  const today=C.localDate(),days=ui.birthdayPeriod;
+  const past=days<0;
+  const birthdayEntries=(horizon,scope,from=today)=>birthdayReminders(state(),from,horizon,scope).map(({client,day})=>({
     name:client.name,due:day,birthday:true,next:scope==='other'?catalogViews[C.clientSection(client)]:'',
     open:()=>editBirthdayGreeting(client,day)
   }));
@@ -538,26 +539,11 @@ function renderTodo(routeFilter){
     name:state().clients[t.clientId].name,title:t.title,due:C.taskDate(t),
     next:taskStateLabel(t),reply:t.needsReply,warning:C.taskWarning(t),open:()=>openClient(t.clientId,'task',t.id)
   }));
-  const payment=accountingUI.todoItems();
-  const telegram=telegramReminders(state()).map(({client,day})=>({
-    name:client.name,title:'Давно не открывал переписку',due:day,next:'Проверить Telegram',reminder:true,open:()=>openClient(client.id,'telegram')
-  }));
-  const all=[...tasks,...payment,...birthdayEntries(14),...telegram];
-  const entries=(filter==='birthdays'?birthdayEntries(days):filter==='mine'?tasks.filter(e=>!e.reply):all)
-    .sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
   append(page,append(el('div',null,'page-title'),el('h1','ToDo')));
   const filters=el('div',null,'row catalog-quick todo-filters');
   filters.setAttribute('role','group');filters.setAttribute('aria-label','Фильтры ToDo');
-  for(const [value,label] of [['all','Все'],['mine','Мои действия'],['birthdays','ДР'],['schedule','Расписание']]){
-    const b=button(label,()=>{
-      if(value==='birthdays'||value==='schedule'){
-        if(location.hash!=='#todo/'+value)navigate('#todo/'+value);
-        return;
-      }
-      ui.taskFilter=value;
-      if(routeFilter)navigate('#todo');
-      else render();
-    });
+  for(const [value,label] of [['all','Все'],['payments','Оплата'],['birthdays','ДР'],['schedule','Расписание']]){
+    const b=button(label,()=>navigate(value==='all'?'#todo':'#todo/'+value));
     if(value==='birthdays')b.setAttribute('aria-label','ДР · Дни рождения');
     b.setAttribute('aria-pressed',String(filter===value));filters.append(b);
   }
@@ -565,15 +551,30 @@ function renderTodo(routeFilter){
   if(filter==='schedule')return append(page,calendarUI.schedule());
   if(!Object.keys(state().clients).length)return append(page,emptyDatabase());
   if(filter==='birthdays'){
-    const others=birthdayEntries(days,'other');
-    append(page,birthdayPeriods(days),
-      entries.length?todoTiles(entries,today):text('На ближайшие '+days+' дней у активных клиентов нет дней рождения.'),
+    const from=past?C.addDays(today,-7):today;
+    const entries=birthdayEntries(past?6:days,'active',from);
+    const others=birthdayEntries(past?6:days,'other',from);
+    if(past){entries.reverse();others.reverse();}
+    const empty=past?'За последние 7 дней все поздравления отмечены.':'Нет дней рождения на ближайшие '+days+' дней.';
+    append(page,todoPeriods('Период дней рождения',days,[[7,'7 дней'],[30,'30 дней'],[-7,'Прошли','Дни рождения за последние 7 дней без поздравления']],value=>{ui.birthdayPeriod=value;}),
+      entries.length?todoTiles(entries,today):text(empty),
       section('Другие категории'+(others.length?' · '+others.length:''),'birthday-other',[
-        others.length?todoTiles(others,today):text('Нет дней рождения на ближайшие '+days+' дней.')
+        others.length?todoTiles(others,today):text(empty)
       ]));
-  }else{
-    page.append(entries.length?todoTiles(entries,today):text('Открытых задач в этом разделе нет.'));
+    return page;
   }
+  if(filter==='payments'){
+    const period=ui.paymentPeriod;
+    const entries=accountingUI.todoItems(period);
+    return append(page,todoPeriods('Период оплаты',period,[[7,'7 дней'],[30,'30 дней'],[-1,'Долги','Неоплаченные счета с прошедшим сроком']],value=>{ui.paymentPeriod=value;}),
+      entries.length?todoTiles(entries,today):text(period<0?'Просроченных оплат нет.':'Нет предстоящих оплат на ближайшие '+period+' дней.'));
+  }
+  const telegram=telegramReminders(state()).map(({client,day})=>({
+    name:client.name,title:'Давно не открывал переписку',due:day,next:'Проверить Telegram',reminder:true,open:()=>openClient(client.id,'telegram')
+  }));
+  const entries=[...tasks,...accountingUI.todoItems(),...birthdayEntries(14),...telegram]
+    .sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
+  page.append(entries.length?todoTiles(entries,today):text('Открытых задач в этом разделе нет.'));
   return page;
 }
 function editTask(t){
@@ -1284,7 +1285,7 @@ function render(){
   const openCard=hash.startsWith('#client/')?hash.split('/')[1]:null;
   if(ui.openCard!==openCard){ui.recentlyCompleted.clear();ui.openCard=openCard;}
   const birthdayRoute=route=>['#todo/birthdays','#clients/birthdays'].includes(route);
-  const sectionTab=route=>birthdayRoute(route)||route===scheduleRoute||route.startsWith(scheduleRoute+'/')?'#todo':route.startsWith('#clients/')?'#clients':route;
+  const sectionTab=route=>birthdayRoute(route)||route.startsWith('#todo/')?'#todo':route.startsWith('#clients/')?'#clients':route;
   const activeTab=sectionTab(hash.startsWith('#client/')?ui.returnTo:hash);
   root.replaceChildren();
   document.querySelectorAll('.app-nav a, .gear-link').forEach(a=>a.setAttribute('aria-current',a.hash===activeTab?'page':'false'));
@@ -1293,6 +1294,7 @@ function render(){
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
     root.append(renderClient(id,type,target));
   }else if(birthdayRoute(hash))root.append(renderTodo('birthdays'));
+  else if(hash==='#todo/payments')root.append(renderTodo('payments'));
   else if(hash===scheduleRoute)root.append(renderTodo('schedule'));
   else if(hash.startsWith(scheduleRoute+'/')){
     try{root.append(calendarUI.session(decodeURIComponent(hash.slice(scheduleRoute.length+1))));}

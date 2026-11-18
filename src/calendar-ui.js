@@ -3,6 +3,8 @@ import {linkCalendarTask, normalizeSearch} from './core.js';
 import {accounting, activeService, clientServices, money, serviceBalance, tariffLabel} from './accounting.js';
 
 const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit'});
+const monthName = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE,month:'long'});
+const hasEnded = event => Date.parse(event.end) <= Date.now();
 
 export function isSchedulingTask(task) {
   return !task.pauseContact && (task.calendarEvent ||
@@ -47,19 +49,28 @@ export function calendarPlace(location) {
   return null;
 }
 
-export function createCalendarUI({state, service, el, append, button, row, field, input, select, text, modal, commit, formatDate,
-    navigate, openClient, searchClients, scheduledSession, addScheduledTariff}) {
+export function createCalendarUI({state, service, el, append, button, row, field, input, select, text, section, modal, commit, formatDate,
+    navigate, openClient, message, searchClients, scheduledSession, addScheduledTariff}) {
   let cached, loading;
   const selectedClients = new Map();
   const aligning = new Set();
+  const readCalendar = async (from,to) => {
+    const value = await service('/calendar/list', {from,to});
+    if (value.error) throw Error(value.error);
+    if (!Array.isArray(value.events)) throw Error('Не удалось прочитать расписание');
+    return value;
+  };
   const load = (force = false) => {
     if (loading) return loading;
-    if (!force && cached?.until > Date.now()) return Promise.resolve(cached.value);
-    const from = localDate(), to = addDays(from, 30);
-    loading = service('/calendar/list', {from, to}).then(value => {
-      if (value.error) throw Error(value.error);
-      if (!Array.isArray(value.events)) throw Error('Не удалось прочитать расписание');
-      cached = {value, until:Date.now() + 60_000};
+    const today = localDate(), firstDay = today.slice(0,7)+'-01';
+    if (!force && cached?.today === today && cached.until > Date.now()) return Promise.resolve(cached.value);
+    loading = Promise.all([
+      readCalendar(today,addDays(today,30)),
+      readCalendar(firstDay,addDays(today,1)).catch(error=>({events:[],error:error.message}))
+    ]).then(([upcoming,history]) => {
+      const events = new Map([...history.events,...upcoming.events].map(event=>[event.id,event]));
+      const value = {...upcoming,events:[...events.values()].sort((a,b)=>Date.parse(a.start)-Date.parse(b.start)),historyError:history.error};
+      cached = {value,today,until:Date.now() + 60_000};
       return value;
     }).finally(() => { loading = null; });
     return loading;
@@ -106,18 +117,25 @@ export function createCalendarUI({state, service, el, append, button, row, field
       list.replaceChildren();
       try {
         const data = await load(force);
-        status.textContent = modeHint(data) || (data.events.length ? '' : 'На ближайшие 30 дней персональных тренировок нет.');
-        let previousDay;
         const entries = data.events.map(event=>({event,client:resolveClient(event)}));
-        for (const {event,client} of entries) {
-          const day = localDate(new Date(event.start));
-          if (day !== previousDay) list.append(el('h3', formatDate(day), 'calendar-day'));
-          previousDay = day;
-          list.append(append(button('',()=>navigate('#todo/schedule/'+encodeURIComponent(event.id)),'panel calendar-event'),
-            text(timeRange(event), 'calendar-time'),
-            append(el('div'),el('strong',client?.name || calendarName(event)),event.location&&text(event.location))));
-        }
-        for (const {event,client} of entries) {
+        const upcoming = entries.filter(({event})=>!hasEnded(event));
+        const month = localDate().slice(0,7);
+        const past = entries.filter(({event})=>hasEnded(event) && localDate(new Date(event.start)).startsWith(month)).reverse();
+        const operations = accounting(state()).operations;
+        await Promise.all(past.map(async item=>{
+          const operation = operations[(await sessionIds(item.event.id)).sessionId];
+          item.recorded = Boolean(operation && !operation.voided);
+        }));
+        status.textContent = modeHint(data);
+        const monthLabel = monthName.format(new Date(month+'-15T12:00:00Z'));
+        const pastSection = section('Прошлые · '+monthLabel,'calendar-past-'+month,
+          data.historyError ? [text(data.historyError,'danger-text small')] : past.length ? [
+            text('В расписании · '+past.length+'  /  Отмечено через расписание · '+past.filter(item=>item.recorded).length),
+            calendarEntries(past,true)
+          ] : [text('В этом месяце прошедших тренировок в расписании нет.')]);
+        append(list,pastSection,upcoming.length ? calendarEntries(upcoming) :
+          data.mode === 'live' && text('На ближайшие 30 дней персональных тренировок нет.'));
+        for (const {event,client} of upcoming) {
           if (!list.isConnected) break;
           await align(event,client).catch(()=>{
             status.textContent = 'Имена в приложении актуальны. Обновить названия в Google Календаре можно повторным нажатием «Обновить».';
@@ -132,10 +150,72 @@ export function createCalendarUI({state, service, el, append, button, row, field
     return box;
   }
 
+  function calendarEntries(entries, past = false) {
+    const list = el('div',null,'stack');
+    let previousDay;
+    for (const {event,client,recorded} of entries) {
+      const day = localDate(new Date(event.start));
+      if (day !== previousDay) list.append(el('h3',formatDate(day),'calendar-day'));
+      previousDay = day;
+      list.append(append(button('',()=>navigate('#todo/schedule/'+encodeURIComponent(event.id)),'panel calendar-event'),
+        text(timeRange(event),'calendar-time'),
+        append(el('div'),el('strong',client?.name || calendarName(event)),event.location&&text(event.location),
+          past&&el('span',recorded?'Проведена':'Без отметки','chip'))));
+    }
+    return list;
+  }
+
+  async function changeEvent(event, action, changes) {
+    const {start,end,location} = event;
+    const response = await service('/calendar/change',{eventId:event.id,action,expected:{start,end,location:location||''},...changes});
+    if (response.error) throw Error(response.error);
+    if (action==='edit' && response.event?.id!==event.id || action==='cancel' && response.status!=='cancelled') {
+      throw Error('Не удалось сохранить изменения в календаре');
+    }
+    cached = null;
+    if (Object.values(state().tasks).some(task=>task.calendarEvent?.id===event.id)) await commit(s=>{
+      for (const task of Object.values(s.tasks)) if (task.calendarEvent?.id===event.id) {
+        if (action==='cancel') task.calendarEvent.cancelled = true;
+        else {
+          const {id,start,end,location,url} = response.event;
+          task.calendarEvent = {id,start,end,location,url};
+        }
+      }
+    },false);
+    return response.event;
+  }
+
+  function editEvent(event, onSaved) {
+    let updated;
+    modal('Изменить тренировку',form=>{
+      const date = input('date',localDate(new Date(event.start)));
+      const time = input('time',clock.format(new Date(event.start)));
+      const minutes = input('number',String(Math.round((Date.parse(event.end)-Date.parse(event.start))/60_000)));
+      const location = input('text',event.location||'');
+      date.required = time.required = minutes.required = true;
+      minutes.min = '1'; minutes.max = '1440'; location.maxLength = 180;
+      append(form,row(field('Дата',date),field('Время Белграда',time)),field('Длительность, мин',minutes),field('Место',location));
+      return async()=>{
+        if (!form.reportValidity()) throw Error('Проверь дату, время и длительность');
+        updated = await changeEvent(event,'edit',{day:date.value,time:time.value,minutes:Number(minutes.value),location:location.value});
+      };
+    },{onSaved:()=>{onSaved(updated);message('Тренировка обновлена в календаре');}});
+  }
+
+  function cancelEvent(event) {
+    modal('Отменить тренировку',form=>{
+      append(form,text([formatDate(localDate(new Date(event.start))),timeRange(event)].join(' · ')),
+        text('Встреча будет убрана из расписания и Google Календаря.'));
+      return ()=>changeEvent(event,'cancel');
+    },{saveLabel:'Отменить тренировку',saveClass:'danger',cancelLabel:'Назад',onSaved:()=>{
+      navigate('#todo/schedule');message('Тренировка отменена');
+    }});
+  }
+
   function session(eventId) {
     const content = el('section',null,'stack-lg');
     const page = append(el('div',null,'stack-lg'),button('← К расписанию',()=>navigate('#todo/schedule'),'back subtle'),content);
-    const display = (event, ids) => {
+    const display = (event, ids, mode) => {
       const s = state(), date = localDate(new Date(event.start));
       const {services,operations} = accounting(s);
       const operation = operations[ids.sessionId];
@@ -156,7 +236,7 @@ export function createCalendarUI({state, service, el, append, button, row, field
           const found = searchClients(query.value).slice(0,10);
           matches.replaceChildren(...found.map(person=>button(person.name,async()=>{
             selectedClients.set(event.id,person.id);
-            form.closest('dialog').close();display(event,ids);
+            form.closest('dialog').close();display(event,ids,mode);
             await align(event,person);
           },'client-tile')), ...(!found.length?[text('Клиенты не найдены')]:[]));
         };
@@ -171,7 +251,10 @@ export function createCalendarUI({state, service, el, append, button, row, field
           text([date===localDate()?'Сегодня':null,formatDate(date),timeRange(event)].filter(Boolean).join(' · '),'calendar-time'),
           event.location && el('p',event.location),
           !client && button('Выбрать клиента',pickClient,'subtle'),
-          eventLink(event,'Открыть в Google Календаре')));
+          eventLink(event,'Открыть в Google Календаре'),
+          !recorded && mode==='live' && event.canEdit && row(
+            button('Изменить',()=>editEvent(event,updated=>display(updated,ids,mode)),'subtle'),
+            button('Отменить тренировку',()=>cancelEvent(event),'subtle danger'))));
       if (!client) return;
       const actions = el('section',null,'stack calendar-actions');
       append(actions,tariff && append(el('div',null,'row between'),el('h2',tariffLabel(tariff)),
@@ -194,7 +277,7 @@ export function createCalendarUI({state, service, el, append, button, row, field
     void Promise.all([load(),sessionIds(eventId)]).then(([data,ids])=>{
       const event = data.events.find(item=>item.id===eventId);
       if (!event) throw Error('Тренировка не найдена в расписании');
-      display(event,ids);
+      display(event,ids,data.mode);
     }).catch(error=>content.replaceChildren(text(error.message)));
     return page;
   }
@@ -220,7 +303,7 @@ export function createCalendarUI({state, service, el, append, button, row, field
       queueMicrotask(refresh);
       void load().then(data => {
         const s = state();
-        choices = taskCalendarChoices(data.events, s.clients, task, s.tasks);
+        choices = taskCalendarChoices(data.events.filter(event=>!hasEnded(event)), s.clients, task, s.tasks);
         const items = choices.map(event => [event.id, [formatDate(event.start), timeRange(event), event.location].filter(Boolean).join(' · ')]);
         if (data.mode === 'live') items.push(['new','Создать в Google Календаре']);
         for (const [value,label] of items) {
@@ -250,7 +333,8 @@ export function createCalendarUI({state, service, el, append, button, row, field
   function linked(task) {
     if (!Number.isFinite(Date.parse(task.calendarEvent?.start))) return null;
     const event = task.calendarEvent;
-    return append(el('div',null,'row'),text(formatDate(event.start,true)+' · Тренировка'),eventLink(event,'Календарь'));
+    return append(el('div',null,'row'),text(formatDate(event.start,true)+(event.cancelled?' · Тренировка отменена':' · Тренировка')),
+      !event.cancelled&&eventLink(event,'Календарь'));
   }
 
   return {schedule, session, book, linked};

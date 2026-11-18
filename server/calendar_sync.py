@@ -27,6 +27,7 @@ def event_view(raw):
         return None
     return {'id': raw['id'], 'title': title, 'start': start, 'end': end,
             'location': raw.get('location', ''), 'clientId': raw.get('extendedProperties', {}).get('private', {}).get('trailClientId'),
+            'canEdit': bool(raw.get('etag') and not raw.get('recurrence')),
             'canAlign': not bool(raw.get('attendees') or raw.get('recurringEventId') or raw.get('recurrence'))}
 
 
@@ -54,7 +55,8 @@ def google_request(path='', params=None, body=None, method=None, etag=None):
         headers['If-Match'] = etag
     request = Request(url, data=None if body is None else json.dumps(body).encode(), headers=headers, method=method)
     with urlopen(request, timeout=15) as response:
-        return json.load(response)
+        data = response.read()
+        return json.loads(data) if data else {}
 
 
 def calendar_connected():
@@ -130,15 +132,9 @@ def calendar_book(payload, request=google_request):
     if not calendar_connected():
         return {'error': 'Сначала подключи Google Календарь'}
     name, location = (payload[key].strip() for key in ('clientName', 'location'))
-    starts = datetime.combine(date.fromisoformat(payload['day']), time.fromisoformat(payload['time']), BELGRADE)
-    duration = payload['minutes']
-    if not (0 < len(name) <= 180 and len(location) <= 180 and '·' not in name
-            and type(duration) is int and 15 <= duration <= 180):
-        raise ValueError('Проверь имя, время и длительность занятия')
-    utc_start = starts.astimezone(timezone.utc)
-    if utc_start.astimezone(BELGRADE) != starts or starts.replace(fold=1).utcoffset() != starts.utcoffset():
-        raise ValueError('Выбери другое время из-за перехода на летнее или зимнее время')
-    ends = (utc_start + timedelta(minutes=duration)).astimezone(BELGRADE)
+    if not (0 < len(name) <= 180 and len(location) <= 180 and '·' not in name):
+        raise ValueError('Проверь имя и место тренировки')
+    starts, ends = session_times(payload, 15, 180)
     event_id = hashlib.sha256((client_id + ':' + task_id).encode()).hexdigest()[:32]
     body = {'id': event_id, 'summary': f'Персональная · {name} · Сергей', 'location': location,
             'description': 'Тип: персональная тренировка. Тренер: Сергей.', 'colorId': '10',
@@ -157,3 +153,63 @@ def calendar_book(payload, request=google_request):
         return {'error': 'Для задачи уже есть тренировка с другим временем. Проверь календарь.'}
     event['url'] = event_link(event_id)
     return {'event': event}
+
+
+def session_times(payload, minimum, maximum):
+    duration = payload['minutes']
+    if type(duration) is not int or not minimum <= duration <= maximum:
+        raise ValueError('Проверь длительность тренировки')
+    start_time = time.fromisoformat(payload['time'])
+    if start_time.tzinfo or start_time.second or start_time.microsecond:
+        raise ValueError('Укажи время Белграда с точностью до минуты')
+    starts = datetime.combine(date.fromisoformat(payload['day']), start_time, BELGRADE)
+    utc_start = starts.astimezone(timezone.utc)
+    if utc_start.astimezone(BELGRADE) != starts or starts.replace(fold=1).utcoffset() != starts.utcoffset():
+        raise ValueError('Выбери другое время из-за перехода на летнее или зимнее время')
+    return starts, (utc_start + timedelta(minutes=duration)).astimezone(BELGRADE)
+
+
+def calendar_change(payload, request=google_request):
+    event_id, action = (payload[key] for key in ('eventId', 'action'))
+    if action not in ('edit', 'cancel') or not re.fullmatch(r'[a-zA-Z0-9_-]{1,300}', event_id):
+        raise ValueError('Некорректное событие')
+    if not calendar_connected():
+        return {'error': 'Сначала подключи Google Календарь'}
+    expected = payload['expected']
+    path = '/' + quote(event_id, safe='')
+    conflict = {'error': 'Тренировка изменилась в Google Календаре. Обнови расписание.'}
+    try:
+        raw = request(path=path, params={'fields': EVENT_FIELDS})
+        if action == 'cancel' and raw.get('status') == 'cancelled':
+            return {'status': 'cancelled'}
+        event = event_view(raw)
+        if not event or not event['canEdit']:
+            return {'error': 'Открой тренировку в Google Календаре, чтобы изменить её.'}
+        if action == 'edit':
+            start, end = session_times(payload, 1, 1440)
+            location = payload['location'].strip()
+            if len(location) > 180:
+                raise ValueError('Слишком длинное место тренировки')
+            if (datetime.fromisoformat(event['start']) == start and datetime.fromisoformat(event['end']) == end
+                    and event['location'] == location):
+                return {'event': {**event, 'url': event_link(event_id)}}
+        if any(event[key] != expected[key] for key in ('start', 'end', 'location')):
+            return conflict
+        params = {'sendUpdates': 'none'}
+        if action == 'cancel':
+            request(path=path, method='DELETE', etag=raw['etag'], params=params)
+            return {'status': 'cancelled'}
+        body = {'start': {'dateTime': start.isoformat(), 'timeZone': 'Europe/Belgrade'},
+                'end': {'dateTime': end.isoformat(), 'timeZone': 'Europe/Belgrade'}, 'location': location}
+        params['fields'] = EVENT_FIELDS
+        changed = event_view(request(path=path, method='PATCH', etag=raw['etag'], params=params, body=body))
+        if not changed:
+            return conflict
+        return {'event': {**changed, 'url': event_link(event_id)}}
+    except HTTPError as error:
+        if error.code in (404, 410, 412):
+            error.close()
+            if action == 'cancel' and error.code in (404, 410):
+                return {'status': 'cancelled'}
+            return conflict
+        raise

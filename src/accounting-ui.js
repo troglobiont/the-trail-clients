@@ -883,8 +883,10 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return group('По оплатам', ...list);
   }
 
-  function todoItems() {
-    return A.paymentReminders(state()).map(({service,month:period,due,remaining})=>({
+  function todoItems(days) {
+    const date = today();
+    return A.paymentReminders(state(),date,days).filter(({due})=>days === undefined || days < 0 || due >= date)
+      .map(({service,month:period,due,remaining})=>({
       name:clientName(service.clientId), title:'Оплата · '+serviceTitle(service),
       due, next:A.money(remaining,service.currency), reminder:true, payment:true,
       open:()=>editPayment({clientId:service.clientId,serviceId:service.id,period,suggested:remaining})

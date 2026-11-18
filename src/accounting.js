@@ -1017,14 +1017,14 @@ export function clientPaymentStatuses(state, today = localDate()) {
   return result;
 }
 
-export function paymentReminders(state, today = localDate()) {
+export function paymentReminders(state, today = localDate(), days) {
   const book = accounting(state);
   const credits = monthlyCredits(state, today);
   const next = [];
   for (const service of Object.values(book.services)) {
     const client = state.clients[service.clientId];
     if (service.kind === 'personal' || !service.reminder || client.role !== 'Клиент' || client.status !== 'Активный') continue;
-    const horizon = addDays(today, book.reminders[service.block] ?? DEFAULT_REMINDERS[service.block]);
+    const horizon = addDays(today, days ?? book.reminders[service.block] ?? DEFAULT_REMINDERS[service.block]);
     const events = clientMovements(state,service.clientId);
     const first = billingStart(service);
     for (let month = first; month <= horizon.slice(0, 7); month = nextMonth(month)) {
