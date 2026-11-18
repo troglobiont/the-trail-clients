@@ -21,6 +21,7 @@ const catalogViews = { active:'Клиенты', occasional:'Разовые', pau
 const planBasisLabel = basis => basis === 'С нуля' ? 'Вне когорты' : basis;
 const planBasisOptions = C.BASES.map(basis=>[basis,planBasisLabel(basis)]);
 const CATALOG_PAGE_SIZE = 12;
+const CLIENTS_DOUBLE_TAP_MS = 450;
 const paymentFilters = [['all','Оплаты'],['paid','Оплачено'],['pending','К оплате'],['overdue','Просрочено']];
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
   packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7),paymentStatus:'all'});
@@ -219,6 +220,35 @@ function editClient(clientId=null) {
   });
 }
 
+function clearCatalogSearch() {
+  const search = document.getElementById('catalog-search-input');
+  if (search) {
+    search.value = '';
+    search.dispatchEvent(new Event('input'));
+  } else {
+    ui.filters.query = '';
+    ui.catalogLimit = CATALOG_PAGE_SIZE;
+  }
+}
+
+function bindClientsTab() {
+  const tab = document.querySelector('.app-nav a[href="#clients"]');
+  let previousTap = -Infinity;
+  document.addEventListener('click',event=>{
+    if (!tab.contains(event.target) || event.detail === 0 || event.button !== 0 ||
+        event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+      previousTap = -Infinity;
+      return;
+    }
+    if (event.timeStamp - previousTap > CLIENTS_DOUBLE_TAP_MS) {
+      previousTap = event.timeStamp;
+      return;
+    }
+    previousTap = -Infinity;
+    clearCatalogSearch();
+  });
+}
+
 function renderCatalog(scope) {
   if (scope !== ui.catalogScope) {
     ui.catalogScope = scope;
@@ -236,12 +266,10 @@ function renderCatalog(scope) {
   }
 
   const search = input('search',ui.filters.query,'Поиск (фамилия имя)');
+  search.id = 'catalog-search-input';
   search.setAttribute('aria-label','Поиск (фамилия имя)');
   search.maxLength = 100;
-  const clear = button('×',()=>{
-    search.value = '';
-    updateSearch();
-  },'catalog-search-clear');
+  const clear = button('×',clearCatalogSearch,'catalog-search-clear');
   clear.setAttribute('aria-label','Очистить поиск');
   clear.hidden = !search.value;
   function updateSearch(){
@@ -1284,6 +1312,7 @@ async function start(){
       }
     }});
     if(!location.hash)history.replaceState(null,'','#todo');
+    bindClientsTab();
     window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});
     document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});
     render();
