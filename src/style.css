@@ -316,9 +316,14 @@ input.account-month{width:auto;max-width:100%}
 .calendar-detail .calendar-link{justify-self:start;padding-block:8px;font-size:13px;font-weight:500}
 .calendar-client{font-weight:650;font-size:18px;text-align:left;padding-inline:0;text-decoration:underline;text-underline-offset:3px}
 .calendar-actions .primary{justify-self:start}
-.task-tile-top{display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;width:100%}
+.task-tile-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px;width:100%}
+.task-tile-top .task-client-name{min-width:0;overflow-wrap:anywhere}
+.task-tile-top .chip{flex:none;white-space:nowrap}
+.task-tile-overdue{border-inline-start:3px solid var(--danger)}
 .birthday-tile{border-inline-start:3px solid var(--warn)}
 .birthday-chip{color:var(--warn);font-weight:600}
+.birthday-action{display:flex;align-items:baseline;justify-content:space-between;width:100%}
+.birthday-arrow{color:var(--accent);font-size:19px;line-height:1}
 .race-page{gap:10px}
 .race-page .page-title{margin-bottom:0}
 .race-filter-box{display:grid;gap:6px;margin-bottom:8px}

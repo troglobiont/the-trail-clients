@@ -468,7 +468,7 @@ function birthdayPeriods(days){
   const periods=el('div',null,'row catalog-quick');
   periods.setAttribute('role','group');
   periods.setAttribute('aria-label','Период дней рождения');
-  for(const count of [30,90]){
+  for(const count of [7,30,90]){
     const control=button(count+' дней',()=>{ui.birthdayDays=count;render();});
     control.setAttribute('aria-pressed',String(count===days));
     periods.append(control);
@@ -511,9 +511,15 @@ function todoTiles(entries,today){
   for(const item of entries){
     const b=button('',item.open,item.birthday?'task-tile birthday-tile':'task-tile');
     const due=item.due===today?'Сегодня':item.due?formatDate(item.due):'Без срока';
+    const overdue=item.payment&&item.due&&item.due<today;
+    if(overdue)b.classList.add('task-tile-overdue');
+    const title=item.birthday
+      ? append(el('span',null,'task-title birthday-action'),el('span','Поздравить'),el('span','›','birthday-arrow'))
+      : el('span',item.title,'task-title');
+    if(item.birthday)title.lastElementChild.setAttribute('aria-hidden','true');
     append(b,append(el('span',null,'task-tile-top'),el('span',item.name,'task-client-name'),
-      item.payment&&el('span','◈ Оплата','chip payment-chip'),item.birthday&&el('span','🎂 День рождения','chip birthday-chip')),
-      !item.birthday&&el('span',item.title,'task-title'),text([due,item.next].filter(Boolean).join(' · ')));
+      item.payment&&el('span','$ Оплата','chip payment-chip'),item.birthday&&el('span','🎂 ДР','chip birthday-chip')),
+      title,text([overdue&&'Просрочено',due,item.next].filter(Boolean).join(' · '),overdue?'danger-text small':undefined));
     if(item.warning)b.append(text(item.warning.text,item.warning.level==='danger'?'danger-text small':'warning-text small'));
     list.append(b);
   }
