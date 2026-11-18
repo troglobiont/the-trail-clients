@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as C from '../src/core.js';
 import * as A from '../src/accounting.js';
 import { cloudData } from '../src/cloud-state.js';
-import { birthdayGreeting, birthdayReminders, raceCatalog, raceCategory, raceParticipants, telegramReminders } from '../src/client-details.js';
+import { birthdayGreeting, birthdayReminders, pingActivity, raceCatalog, raceCategory, raceParticipants, telegramReminders } from '../src/client-details.js';
 
 test('temporary online does not remove a client from the in-person list; archive and aliases preserve identity',()=>{
   const state=C.emptyState();
@@ -42,6 +42,23 @@ test('birthday crosses year boundary and opening Telegram does not count as conf
   assert.equal(telegramReminders(state,'2026-12-16').length,0);
   assert.equal(c.lastContact,null);
   assert.equal(state.events.at(-1).type,'telegram-opened');
+});
+
+test('Ping uses the latest Telegram opening or confirmed contact while keeping their labels distinct',()=>{
+  const state = C.emptyState();
+  const client = C.createClient(state,{name:'Тестовый Клиент'});
+  assert.equal(pingActivity(client),null);
+  C.setTelegramBinding(state,client.id,{peerId:'12345'});
+  C.noteTelegramOpen(state,client.id,'12345','2026-11-13T12:00:00Z');
+  assert.deepEqual(pingActivity(client),{at:'2026-11-13T12:00:00Z',time:Date.parse('2026-11-13T12:00:00Z'),kind:'telegram-opened'});
+  assert.equal(client.lastContact,null);
+  C.confirmedContact(state,client.id,{at:'2026-11-18T10:00:00Z'});
+  assert.equal(pingActivity(client).kind,'contact');
+  C.noteTelegramOpen(state,client.id,'12345','2026-11-18T10:15:00+01:00');
+  assert.equal(pingActivity(client).kind,'contact');
+  C.noteTelegramOpen(state,client.id,'12345','2026-11-18T11:00:01+01:00');
+  assert.equal(pingActivity(client).kind,'telegram-opened');
+  assert.equal(C.parseImport(C.exportState(state)).clients[client.id].lastContact.at,'2026-11-18T10:00:00Z');
 });
 
 test('birthday greeting uses the Telegram handle and completing it dismisses only this occurrence',()=>{

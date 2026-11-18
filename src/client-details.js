@@ -79,6 +79,17 @@ export function birthdayGreeting(client) {
     .filter(Boolean).join('\n');
 }
 
+export function pingActivity(client) {
+  const contactAt = client.lastContact?.at;
+  const openedAt = client.telegramOpenedAt;
+  const contact = Date.parse(contactAt);
+  const opened = Date.parse(openedAt);
+  if (Number.isFinite(opened) && (!Number.isFinite(contact) || opened > contact)) {
+    return {at:openedAt,time:opened,kind:'telegram-opened'};
+  }
+  return Number.isFinite(contact) ? {at:contactAt,time:contact,kind:'contact'} : null;
+}
+
 export function telegramReminders(state, today = localDate()) {
   return Object.values(state.clients).flatMap(client => {
     const { days, since } = client.telegramCheck || {};

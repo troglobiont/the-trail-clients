@@ -11,7 +11,7 @@ import {applyLedger, LEDGER_FORMAT, parseLedgerImport} from './ledger-import.js'
 import {createCloudAPI} from './cloud-api.js';
 import {createCloudSync} from './cloud-sync.js';
 import {createClientDetailsUI} from './client-details-ui.js';
-import {birthdayGreeting,birthdayReminders,telegramReminders,GOAL_TYPES} from './client-details.js';
+import {birthdayGreeting,birthdayReminders,pingActivity,telegramReminders,GOAL_TYPES} from './client-details.js';
 import {cloudConfig} from './cloud-config.js';
 import {createCalendarUI,isSchedulingTask} from './calendar-ui.js';
 const VERSION=__APP_VERSION__;
@@ -432,7 +432,9 @@ function renderCatalogResults() {
   const clients = C.filterClients(state(),{ ...ui.filters,section:scope,pauseGroup:ui.pauseFilter })
     .filter(c=>(!tariffs || tariffs.has(c.id)) && (!payment || payment.get(c.id) === ui.filters.paymentStatus));
   const byContact=scope==='active'&&ui.contactOrder;
-  if(byContact)clients.sort((a,b)=>(a.lastContact?.at||'').localeCompare(b.lastContact?.at||''));
+  const activities = byContact ? new Map(clients.map(client=>[client.id,pingActivity(client)])) : null;
+  if (activities) clients.sort((a,b)=>(activities.get(a.id)?.time ?? Number.MIN_SAFE_INTEGER) -
+    (activities.get(b.id)?.time ?? Number.MIN_SAFE_INTEGER));
   if (scope === 'active' && ui.filters.query.trim()) {
     clients.push(...C.filterClients(state(),{query:ui.filters.query}).filter(c=>C.clientSection(c)!=='active'));
   }
@@ -442,10 +444,13 @@ function renderCatalogResults() {
     const item = button(c.name,()=>openClient(c.id),'client-directory-item');
     item.setAttribute('aria-label','Открыть клиента: '+c.name);
     const category = C.clientSection(c);
+    const activity = activities?.get(c.id);
+    const pingDetail = activity ? `${activity.kind === 'telegram-opened' ? 'Чат открыт' : 'Контакт'} ${formatDate(activity.at)} ${C.localDate(new Date(activity.time)).slice(0,4)}`
+      : 'Контакт не записан';
     const detail = category !== scope ? category === 'paused' ? clientStatus(c) : catalogViews[category]
       : scope === 'paused' ? [C.pauseGroup(c)==='returning' && 'К возврату', c.pause?.returnWindow,
         c.pause?.contactOn && 'Связаться ' + formatDate(c.pause.contactOn)].filter(Boolean).join(' · ')
-      : scope === 'team' ? C.clientRole(c) : byContact ? c.lastContact?.at ? 'Контакт '+formatDate(c.lastContact.at)+' '+c.lastContact.at.slice(0,4) : 'Контакт не записан' : '';
+      : scope === 'team' ? C.clientRole(c) : byContact ? pingDetail : '';
     if (detail) item.append(text(detail));
     const quick = accountingClients.has(c.id) && button('Учёт',()=>accountingUI.quickEntry(c.id),'directory-account');
     if (quick) quick.setAttribute('aria-label','Учёт · '+c.name);
