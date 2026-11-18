@@ -112,6 +112,11 @@ function checkOperation(book, operation) {
   if (kind === 'payment') {
     const { payer, allocations } = operation;
     if (operation.sessionId !== undefined && !validKey(operation.sessionId)) throw Error('Некорректная связь с занятием');
+    if (operation.sourceReceipt !== undefined) {
+      const source = operation.sourceReceipt;
+      if (!source || !validKey(source.rowId) || !validDate(source.date) || !CURRENCIES.includes(source.currency) ||
+          !validMoney(source.amount)) throw Error('Некорректная связь с платежом из бухгалтерии');
+    }
     if (!validNote(payer) || !Array.isArray(allocations) || !allocations.length || allocations.length > 120) throw Error('Укажи, что покрывает оплата');
     let allocated = 0;
     const targets = new Set();
@@ -172,6 +177,12 @@ function prepareOperation(state, values, operationId) {
 
 export function saveOperation(state, values, operationId = id('operation')) {
   const operation = prepareOperation(state, values, operationId);
+  const book = accounting(state);
+  const prior = book.operations[operationId];
+  if (operation.kind === 'payment' && prior) {
+    const source = prior.sourceReceipt ?? linkedReceiptForCorrection(state,book,prior,operation);
+    if (source) operation.sourceReceipt = source;
+  }
   writable(state).operations[operationId] = operation;
   return operation;
 }
@@ -381,8 +392,10 @@ export function matchingTariffClients(state, { packageFilter, tariffCurrency, pa
     if (o.kind !== 'payment' || o.currency !== paymentCurrency) continue;
     for (const item of o.allocations) paid.add(services[item.serviceId].clientId);
   }
+  const reconciled = reconciledReceipts(accounting(state));
   for (const entry of state.ledger?.rows || []) {
-    if (['payment','shared'].includes(entry.kind) && entry.date.startsWith(paymentMonth + '-') && entry.values[paymentCurrency] > 0) {
+    if (['payment','shared'].includes(entry.kind) && entry.date.startsWith(paymentMonth + '-') && entry.values[paymentCurrency] > 0 &&
+        !reconciled.has(sourceReceiptKey(entry,paymentCurrency))) {
       for (const owner of entry.owners) paid.add(owner);
     }
   }
@@ -550,6 +563,25 @@ const operationReceiptKey = (services, operation) => receiptKey(
   operation.allocations.map(item => services[item.serviceId].clientId),
   operation.date,operation.currency,operation.amount);
 
+const sourceReceiptKey = (row,currency) => JSON.stringify([row.id,row.date,currency,row.values[currency]]);
+
+function reconciledReceipts(book) {
+  return new Set(Object.values(book.operations).flatMap(({sourceReceipt}) => sourceReceipt ?
+    [JSON.stringify([sourceReceipt.rowId,sourceReceipt.date,sourceReceipt.currency,sourceReceipt.amount])] : []));
+}
+
+function linkedReceiptForCorrection(state, book, prior, operation) {
+  if (prior.voided) return null;
+  const key = operationReceiptKey(book.services,prior);
+  if (key === operationReceiptKey(book.services,operation)) return null;
+  const {date,currency,amount} = prior;
+  const matching = (state.ledger?.rows || []).filter(row => ['payment','shared'].includes(row.kind) &&
+    receiptKey(row.owners,row.date,currency,row.values[currency]) === key);
+  if (matching.length !== 1 || Object.values(book.operations).some(item => item.id !== prior.id && item.kind === 'payment' &&
+      !item.voided && operationReceiptKey(book.services,item) === key)) return null;
+  return {rowId:matching[0].id,date,currency,amount};
+}
+
 function reconciledSessionRows(state, operations, rows) {
   const services = accounting(state).services;
   const sources = new Map(operations.filter(o => o.kind === 'session' && !o.voided && o.sourceLedgerRowId)
@@ -578,6 +610,7 @@ export function combinedSummary(state, month) {
   const recorded = operations(state,{month});
   const imported = state.ledger?.rows || [];
   const reconciled = reconciledSessionRows(state,recorded,imported);
+  const correctedReceipts = reconciledReceipts(book);
   for (const operation of recorded) {
     if (operation.kind !== 'payment') continue;
     const key = operationReceiptKey(book.services,operation);
@@ -591,6 +624,10 @@ export function combinedSummary(state, month) {
     if (row.kind === 'payment' || row.kind === 'shared') {
       if (!validDate(row.date) || !row.date.startsWith(month+'-')) continue;
       for (const [currency,amount] of Object.entries(row.values)) if (amount > 0) {
+        if (correctedReceipts.has(sourceReceiptKey(row,currency))) {
+          result.imported.skippedDuplicates++;
+          continue;
+        }
         const key = receiptKey(row.owners,row.date,currency,amount);
         if (key) ledgerByKey.set(key,(ledgerByKey.get(key)||0)+1);
         payments.push({row,currency,amount,key});
@@ -681,6 +718,7 @@ function dueDate(service, month) {
 
 function monthlyCredits(state, today, replacedId) {
   const book = accounting(state);
+  const correctedReceipts = reconciledReceipts(book);
   const credits = new Map();
   const receipts = new Set();
   const add = (serviceId, month, amount, date) => {
@@ -708,14 +746,22 @@ function monthlyCredits(state, today, replacedId) {
     const candidates = (recurring.get(`${row.owners[0]}/${row.block}`) || []).filter(service => activeService(service,dueDate(service,row.month)) &&
       service.startsOn.slice(0,7) <= row.month);
     for (const [currency, amount] of Object.entries(row.values)) {
-      if (amount <= 0) continue;
+      if (amount <= 0 || correctedReceipts.has(sourceReceiptKey(row,currency))) continue;
       const receipt = receiptKey(row.owners,row.date,currency,amount);
       if (receipts.has(receipt)) continue;
       receipts.add(receipt);
       const parts = row.packageParts?.[currency];
       for (const [pkg, part] of parts ? Object.entries(parts) : [[row.package,amount]]) {
-        const matches = candidates.filter(s => s.currency === currency && (!pkg || servicePackage(s) === pkg));
-        if (matches.length === 1) add(matches[0].id,row.month,part,row.date);
+        const services = candidates.filter(s => !pkg || servicePackage(s) === pkg);
+        const matches = services.filter(s => s.currency === currency);
+        if (matches.length === 1) {
+          add(matches[0].id,row.month,part,row.date);
+        } else if (!matches.length && row.paymentCredits?.[currency]) {
+          const credit = row.paymentCredits[currency];
+          const previous = services.filter(s=>s.currency === credit.currency);
+          const credited = parts ? credit.parts?.[pkg] : credit.amount;
+          if (previous.length === 1 && credited) add(previous[0].id,row.month,credited,row.date);
+        }
       }
     }
   }
@@ -783,7 +829,9 @@ export function settleMonths(state, { serviceId, firstMonth, lastMonth = firstMo
 }
 
 export function clientAccountHistory(state, clientId, today = localDate()) {
-  const services = accounting(state).services;
+  const book = accounting(state);
+  const {services} = book;
+  const correctedReceipts = reconciledReceipts(book);
   const recorded = operations(state,{clientId,includeVoided:true});
   const history = recorded.map(operation => ({ type:'operation', date:operation.date, operation }));
   const nativeReceipts = new Map();
@@ -798,6 +846,7 @@ export function clientAccountHistory(state, clientId, today = localDate()) {
   for (const row of imports) {
     if (row.kind === 'session') continue;
     for (const [currency,amount] of Object.entries(row.values)) {
+      if (correctedReceipts.has(sourceReceiptKey(row,currency))) continue;
       const key = receiptKey(row.owners,row.date,currency,amount);
       if (key && amount > 0) importedReceipts.set(key,(importedReceipts.get(key) ?? 0) + 1);
     }
@@ -806,7 +855,8 @@ export function clientAccountHistory(state, clientId, today = localDate()) {
     if (reconciled.has(row.id)) continue;
     const values = row.kind === 'session' ? row.values : Object.fromEntries(Object.entries(row.values).filter(([currency,amount]) => {
       const key = receiptKey(row.owners,row.date,currency,amount);
-      return amount > 0 && !(nativeReceipts.get(key) === 1 && importedReceipts.get(key) === 1);
+      return amount > 0 && !correctedReceipts.has(sourceReceiptKey(row,currency)) &&
+        !(nativeReceipts.get(key) === 1 && importedReceipts.get(key) === 1);
     }));
     if (!Object.keys(values).length && row.kind !== 'session') continue;
     history.push({ type:'ledger',date:row.date || row.month+'-31',row:{...row,values} });

@@ -1,6 +1,6 @@
 import * as A from './accounting.js';
 import { addDays, localDate } from './model-utils.js';
-import { changeImportedPaymentAmount, editablePaymentCurrency, ledgerRows } from './ledger-import.js';
+import { changeImportedPayment, editableImportedPayment, importedPaymentOriginal, ledgerRows } from './ledger-import.js';
 
 const today = () => localDate();
 const currencyOptions = A.CURRENCIES.map(c => [c, ({ RSD: 'RSD · динары', RUB: 'RUB · рубли', EUR: 'EUR · евро', USD: 'USD · доллары' })[c]]);
@@ -1208,13 +1208,27 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       ].filter(Boolean)});
   }
 
-  function editImportedPayment(entry, currency) {
-    modal('Изменить сумму',form=>{
-      const amount = moneyInput(entry.values[currency]);
-      append(form,text([formatDate(entry.date),'за '+monthLabel(entry.month)].join(' · ')),field('Получено, '+currency,amount));
+  function editImportedPayment(entry) {
+    modal('Редактировать оплату',form=>{
+      const date = dateInput(entry.date);
+      const context = [entry.kind === 'shared' ? 'Общий платёж семьи' : '', 'За '+monthLabel(entry.month)].filter(Boolean).join(' · ');
+      append(form,text(context),field('Дата получения',date));
+      const entries = A.CURRENCIES.filter(c=>entry.values[c]>0).map(from=>{
+        const amount = moneyInput(entry.values[from]);
+        const currency = select(currencyOptions,from);
+        const parts = Object.entries(entry.packageParts?.[from] || {}).map(([pkg,value])=>[pkg,moneyInput(value)]);
+        append(form,append(el('div',null,'account-fields'),field('Получено',amount),field('Валюта платежа',currency)),
+          parts.length && append(el('div',null,'stack account-allocation'),el('h3','Распределение по услугам'),
+            ...parts.map(([pkg,control])=>field(A.PACKAGES[pkg],control))));
+        return {from,amount,currency,parts};
+      });
       return async()=>{
-        await commit(s=>changeImportedPaymentAmount(s,entry,A.amountMinor(amount.value)));
-        message('Сумма оплаты обновлена');
+        const changes = entries.map(({from,amount,currency,parts})=>({
+          from,currency:currency.value,amount:A.amountMinor(amount.value),
+          ...(parts.length && {parts:Object.fromEntries(parts.map(([pkg,control])=>[pkg,A.amountMinor(control.value)]))})
+        }));
+        await commit(s=>changeImportedPayment(s,entry,{date:recordedDate(date),entries:changes}));
+        message('Оплата обновлена');
       };
     });
   }
@@ -1233,11 +1247,11 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       return historyLine({title,status,amounts,notes:[note]});
     }
     const source = state().ledger?.rows.find(row=>row.id===entry.id);
-    const currency = editablePaymentCurrency(source);
-    const details = currency && source.originalPaymentAmount && 'Сумма при импорте · '+A.money(source.originalPaymentAmount,currency);
+    const original = source && importedPaymentOriginal(source);
+    const details = original && ['При импорте',original.date ? formatDate(original.date) : 'Без даты',totals(original.values)].join(' · ');
     return historyLine({title:entry.date ? formatDate(entry.date) : period,status:label,
       context:entry.date ? 'за '+period : '',amounts,details,notes:[entry.detail],
-      edit:currency ? [['Изменить сумму',()=>editImportedPayment(source,currency)]] : []});
+      edit:editableImportedPayment(source) ? [['Изменить оплату',()=>editImportedPayment(source)]] : []});
   }
 
   function clientHistory(history, clientId, historyByTariff) {
