@@ -354,6 +354,41 @@ test('ending and returning a personal tariff on its first day leaves its advance
   assert.equal(A.serviceBalance(state,returned.id,'2024-10-01').balance,800000);
 });
 
+test('a trial tariff returned from old visits can be removed without touching their history', () => {
+  const state = emptyState(), client = createClient(state,{name:'Клиент'},'2024-07-22');
+  const date = '2024-11-18';
+  const [visit,receipt] = A.savePersonalVisit(state,{clientId:client.id,oneOff:true,place:'Зал',currency:'RSD',rate:400000,
+    date:'2024-07-22',payment:{date:'2024-07-22',amount:400000}});
+  const trial = A.restoreHistoricalVisitTariff(state,client.id,'Зал','RSD',400000,date);
+  assert.equal(A.canCancelServiceReturn(state,trial,date),true);
+  A.cancelServiceReturn(state,trial.id,date);
+  assert.equal(A.accounting(state).services[trial.id],undefined);
+  assert.deepEqual(A.operations(state,{clientId:client.id}),[visit,receipt].sort((a,b)=>a.id.localeCompare(b.id)));
+  const used = A.restoreHistoricalVisitTariff(state,client.id,'Зал','RSD',400000,date);
+  payment(state,date,'RSD',400000,[credit(used,null,400000)]);
+  assert.throws(()=>A.cancelServiceReturn(state,used.id,date),/уже нельзя отменить/);
+});
+
+test('undoing a personal tariff return restores the previous pause and preserves prior payments', () => {
+  const state = emptyState(), client = createClient(state,{name:'Клиент'},'2024-10-01');
+  const service = enrollment(state,client,{kind:'personal',block:'personal',place:'Зал',day:null,reminder:false,rate:400000});
+  payment(state,'2024-10-01','RSD',800000,[credit(service,null,800000)]);
+  const paused = A.stopService(state,service.id,'pause','2024-11-01','2024-11-10');
+  A.restoreService(state,service.id,'2024-11-10');
+  A.cancelServiceReturn(state,service.id,'2024-11-10');
+  assert.deepEqual(A.accounting(state).services[service.id],paused);
+  assert.equal(A.serviceBalance(state,service.id,'2024-11-10').balance,800000);
+  assert.doesNotThrow(()=>parseImport(exportState(state)));
+});
+
+test('a closed monthly tariff offers debt payment only for a due uncovered month during service', () => {
+  const state = emptyState(), client = createClient(state,{name:'Клиент'},'2024-10-01');
+  const service = enrollment(state,client,{day:15,endsOn:'2024-11-14'});
+  assert.equal(A.firstPastCharge(state,[service],'2024-11-18').month,'2024-10');
+  payment(state,'2024-10-15','RSD',800000,[credit(service,'2024-10',800000)]);
+  assert.equal(A.firstPastCharge(state,[service],'2024-11-18'),null);
+});
+
 test('sessions consume advances without increasing receipts and expenses affect only the balance', () => {
   const state = emptyState();
   const client = createClient(state, { name: 'Клиент' }, '2024-10-01');

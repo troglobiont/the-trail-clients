@@ -448,6 +448,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           reminder: !personal && reminder.checked, place: personal ? place.value : null,
           ...(!resume && !personal && existing?.paymentDays ? {paymentDays:existing.paymentDays} : {}),
           ...(!resume && existing?.pauses ? {pauses:existing.pauses} : {}),
+          ...(!resume && personal && (existing?.returnState || restoreKey) ? {
+            returnState:existing?.returnState?.previous ? existing.returnState : {from:starts.value,previous:null}
+          } : {}),
           ...(!personal && cover.value ? { coveredThrough:cover.value } : {}),
           ...(!personal && billingStart.value ? { billingFrom:billingStart.value } : {}),
           ...(!resume && personal && existing?.openingCredit ? { openingCredit:existing.openingCredit } : {}),
@@ -494,12 +497,18 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   }
 
   function serviceActions(service, paused) {
+    const canCancel = A.canCancelServiceReturn(state(),service,today());
     modal(serviceTitle(service), form => {
       const rate = A.money(service.rate,service.currency) + (isMonthly(service) ? ' / мес.' : ' / зан.');
       append(form,text(rate),append(el('div',null,'stack'),
         button('Условия услуги',()=>editService(service.clientId,service),'subtle'),
-        !paused && button('Поставить на паузу',()=>changeServiceState(service,'pause'),'subtle'),
-        button('Завершить тариф',()=>changeServiceState(service,'end'),'subtle')));
+        canCancel && button('Отменить возврат',async()=>{
+          await commit(s=>A.cancelServiceReturn(s,service.id));
+          form.closest('dialog').close();
+          message('Возврат отменён');
+        },'subtle'),
+        !canCancel && !paused && button('Поставить на паузу',()=>changeServiceState(service,'pause'),'subtle'),
+        !canCancel && button('Завершить тариф',()=>changeServiceState(service,'end'),'subtle')));
     },{saveLabel:null,cancelLabel:'Закрыть'});
   }
 
@@ -979,6 +988,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const payments = quickOptions(client.id,active,statuses);
     const previous = services.filter(s => !s.oneOff && s.startsOn <= date && !active.includes(s))
       .sort((a,b) => b.startsOn.localeCompare(a.startsOn));
+    const personalDebt = previous.map(s=>outstanding.get(s.id)).find(Boolean);
+    const oldCharge = personalDebt ? null : A.firstPastCharge(state(),previous.filter(isMonthly),date);
+    const previousDebt = personalDebt || oldCharge;
     const future = services.filter(s => !s.oneOff && s.startsOn > date);
     const shownTariffs = new Set([...active,...previous].map(A.tariffKey));
     const restorable = new Set([...active,...future].map(A.tariffKey));
@@ -1028,7 +1040,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         ...active.map(s=>tariffLine(s,()=>serviceActions(s,false))),
         (previous.length || previousFromHistory.length) && section('Ранее', `${client.id}-previous-tariffs`, [
           ...restoreAssigned, ...previousFromHistory,
-          previous.length && button('Оплата за прошлую услугу', () => editPayment({ clientId:client.id }), 'subtle')
+          previousDebt && button('Записать оплату долга', () => editPayment({clientId:client.id,serviceId:previousDebt.service.id,
+            period:previousDebt.month,suggested:previousDebt.remaining}), 'subtle')
         ]),
         future.length && text('Будущие тарифы'), ...future.map(s=>tariffLine(s,()=>editService(client.id,s))),
         button('Добавить услугу', () => editService(client.id), 'subtle')
