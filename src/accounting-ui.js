@@ -1008,6 +1008,13 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const amounts = A.CURRENCIES.filter(currency=>entry.values[currency]>0).map(currency=>({
       label:received?'Поступило':'Стоимость занятий',currency,amount:entry.values[currency],received}));
     const period = monthLabel(entry.month);
+    if (!received && entry.sourceLedgerRowId) {
+      const when = entry.date ? formatDate(entry.date) : period;
+      const title = [when,entry.place].filter(Boolean).join(' · ');
+      const status = entry.date ? 'Проведено · оплата не сверена' : 'Занятие без даты · оплата не сверена';
+      const note = entry.detail.replace(/^1 зан\. × [\d.]+ RSD(?: · )?/u,'');
+      return historyLine({title,status,amounts,notes:[note]});
+    }
     return historyLine({title:entry.date ? formatDate(entry.date) : period,status:label,
       context:entry.date ? 'за '+period : '',amounts,notes:[entry.detail]});
   }

@@ -703,7 +703,9 @@ export function filterClientAccountHistory(state, history, clientId, tariff = 'a
     const fallback = source.kind === 'session' ? 'personal' : source.package ??
       (candidates.length === 1 ? candidates[0] : candidates.length ? null : source.block);
     const pkg = isPersonal ? 'personal' : tariff;
-    if (isPersonal) {
+    if (isPersonal && source.place) {
+      if (tariffKey({kind:'personal',place:source.place}) !== tariff) return [];
+    } else if (isPersonal) {
       const personal = own.filter(s => s.kind === 'personal');
       const atPeriod = personal.filter(s => s.startsOn.slice(0,7) <= source.month && (!s.endsOn || s.endsOn.slice(0,7) >= source.month));
       const keys = new Set((atPeriod.length ? atPeriod : personal).map(tariffKey));

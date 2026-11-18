@@ -1,10 +1,31 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as C from '../src/core.js';
+import { clientAccountHistory, combinedSummary, personalBalances } from '../src/accounting.js';
 import { applyLedger, ledgerRows } from '../src/ledger-import.js';
 
 const source = 'https://docs.google.com/spreadsheets/d/source/edit#gid=42';
 const binding = id => ({ peerId: id, accountPeerId: '10', displayName: 'Контакт', username: null, verifiedAt: '2026-01-01T00:00:00Z' });
+
+test('re-import retains itemized historical sessions without creating receipts or debt', () => {
+  const state=C.emptyState();
+  const client=C.createClient(state,{id:'client-1',name:'Клиент Тест'},'2026-01-01');
+  const common={block:'personal',owners:[client.id],name:client.name,link:source};
+  const original={...common,id:'original',month:'2026-02',kind:'session',date:'',detail:'2 зан. × 4000 RSD',values:{RSD:800000}};
+  const months=['2026-01','2026-02'].map(month=>({month,blocks:{},link:source}));
+  const sessions=['2026-01-30','2026-02-02'].map(date=>({...original,id:'visit-'+date,month:date.slice(0,7),date,
+    place:'Зал',sourceLedgerRowId:original.id,detail:'1 зан. × 4000 RSD',values:{RSD:400000}}));
+  state.ledger={datasetId:'old',asOf:'2026-02-03',months,rows:[{...original,kind:'repeat',sourceKind:'session'},...sessions]};
+  const file={format:'the-trail-ledger-import',version:1,datasetId:'new',asOf:'2026-02-04',months,rows:[original],
+    profiles:[{id:client.id,name:client.name,role:'Клиент',aliases:[],create:false}]};
+  applyLedger(state,file,{createClient:C.createClient,setTelegramBinding:C.setTelegramBinding});
+  assert.doesNotThrow(()=>C.validateState(state));
+  assert.deepEqual(clientAccountHistory(state,client.id).map(item=>item.date),['2026-02-02','2026-01-30']);
+  assert.equal(combinedSummary(state,'2026-01').count,1);
+  assert.deepEqual(combinedSummary(state,'2026-02').sessions,{RSD:400000});
+  assert.deepEqual(combinedSummary(state,'2026-02').receipts,{});
+  assert.deepEqual(personalBalances(state),{advance:{},debt:{}});
+});
 
 test('ledger import is idempotent and keeps local Telegram, task history and client IDs', () => {
   const state = C.emptyState();

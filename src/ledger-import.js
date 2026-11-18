@@ -32,6 +32,8 @@ function validateLedger(ledger, owners) {
         || (row.date !== '' && !validDate(row.date)) || !Array.isArray(row.owners) || row.owners.length > 10
         || row.owners.some(id => !key(id) || !owners.has(id))) throw Error('Некорректная строка истории учёта');
     if (row.package && !Object.hasOwn(PACKAGES,row.package)) throw Error('Некорректный пакет оплаты');
+    if (row.sourceLedgerRowId !== undefined && (row.kind!=='session' || !key(row.sourceLedgerRowId)
+        || (row.place !== undefined && !['Зал','Улица'].includes(row.place)))) throw Error('Некорректная связь с историей занятий');
     for (const [currency, parts] of Object.entries(row.packageParts||{})) {
       if (!currencies.includes(currency) || !parts || typeof parts!=='object' || Array.isArray(parts)
         || Object.entries(parts).some(([pkg,value])=>!Object.hasOwn(PACKAGES,pkg)||!Number.isSafeInteger(value)||value<=0)
@@ -102,15 +104,25 @@ export function applyLedger(state, file, { createClient, setTelegramBinding }) {
     }
   }
   const reconciled = new Map((state.ledger?.rows || []).filter(row=>row.kind==='repeat' && row.sourceKind).map(row=>[row.id,row]));
+  const detailed = new Map();
+  for (const row of state.ledger?.rows || []) if (row.sourceLedgerRowId) {
+    const children = detailed.get(row.sourceLedgerRowId) || [];
+    children.push(row);
+    detailed.set(row.sourceLedgerRowId,children);
+  }
+  const fileRows = new Set(file.rows.map(row=>row.id));
+  const fileMonths = new Set(file.months.map(period=>period.month));
   state.ledger = {
     datasetId: file.datasetId, asOf: file.asOf, months: file.months,
-    rows: file.rows.map(row => {
+    rows: file.rows.flatMap(row => {
       const mapped = {...row,owners:[...new Set(row.owners.map(id=>owners.get(id)).filter(Boolean))]};
       const old = reconciled.get(row.id);
+      const sessions = detailed.get(row.id) || [];
       if (old?.sourceKind===mapped.kind && old.month===mapped.month && old.date===mapped.date && old.detail===mapped.detail
           && old.block===mapped.block && old.owners.length===mapped.owners.length && old.owners.every(id=>mapped.owners.includes(id))
-          && currencies.every(currency=>old.values[currency]===mapped.values[currency])) {
-        return {...mapped,kind:'repeat',sourceKind:old.sourceKind};
+          && currencies.every(currency=>old.values[currency]===mapped.values[currency]) && sessions.every(item=>fileMonths.has(item.month))) {
+        const archived = {...mapped,kind:'repeat',sourceKind:old.sourceKind};
+        return [archived,...sessions.filter(item=>!fileRows.has(item.id)).map(item=>({...item,name:mapped.name,owners:mapped.owners}))];
       }
       return mapped;
     })
