@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as C from '../src/core.js';
 import { clientAccountHistory, combinedSummary, personalBalances } from '../src/accounting.js';
-import { applyLedger, ledgerRows } from '../src/ledger-import.js';
+import { applyLedger, changeImportedPaymentAmount, ledgerRows } from '../src/ledger-import.js';
 
 const source = 'https://docs.google.com/spreadsheets/d/source/edit#gid=42';
 const binding = id => ({ peerId: id, accountPeerId: '10', displayName: 'Контакт', username: null, verifiedAt: '2026-01-01T00:00:00Z' });
@@ -48,6 +48,26 @@ test('ledger import is idempotent and keeps local Telegram, task history and cli
   const roundTrip = C.parseImport(C.exportState(state));
   assert.equal(ledgerRows(roundTrip, { clientId: card.id })[0].values.EUR, 9400);
   assert.deepEqual(C.mergeState(roundTrip, roundTrip).ledger, roundTrip.ledger);
+});
+
+test('an imported amount correction changes one receipt and survives both stale and corrected imports', () => {
+  const state = C.emptyState();
+  const card = C.createClient(state,{name:'Клиент Тест'},'2026-01-01');
+  const original = {id:'july-receipt',month:'2026-07',block:'online',package:'online',kind:'payment',owners:[card.id],
+    name:'Клиент Тест',date:'2026-07-01',detail:'',values:{RUB:800000},link:source};
+  const file = {format:'the-trail-ledger-import',version:1,asOf:'2026-07-03',months:[{month:original.month,blocks:{},link:source}],
+    profiles:[{id:card.id,name:card.name,aliases:[],role:'Клиент',create:false}]};
+  const load = (datasetId,row)=>applyLedger(state,{...file,datasetId,rows:[row]},C);
+  load('first',original);
+  changeImportedPaymentAmount(state,original,600000);
+  assert.throws(()=>changeImportedPaymentAmount(state,original,500000),/Запись изменилась/);
+  const corrected = {...original,values:{RUB:600000},originalPaymentAmount:800000};
+  for(const [id,row] of [['stale',original],['updated',{...original,values:{RUB:600000}}]]) {
+    load(id,row);
+    assert.deepEqual(clientAccountHistory(state,card.id).map(item=>item.row),[corrected]);
+    assert.deepEqual(combinedSummary(state,original.month).receipts,{RUB:600000});
+    assert.doesNotThrow(()=>C.parseImport(C.exportState(state)));
+  }
 });
 
 test('directory filters names in either order and keeps surname order under quick filters', () => {

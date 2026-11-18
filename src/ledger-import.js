@@ -12,9 +12,36 @@ const month = value => typeof value === 'string' && /^2026-(0[1-9]|1[0-2])$/.tes
 const sourceLink = value => string(value, 300) && /^https:\/\/docs\.google\.com\/spreadsheets\/d\/[\w-]+\/edit#gid=\d+(?:&range=[A-Z0-9:]+)?$/.test(value);
 const amounts = values => values && typeof values === 'object' && !Array.isArray(values)
   && Object.entries(values).every(([currency, amount]) => currencies.includes(currency) && Number.isSafeInteger(amount) && Math.abs(amount) <= 100000000000);
+const positiveAmount = amount => Number.isSafeInteger(amount) && amount > 0 && amount <= 100000000000;
 
 export const nameKey = value => String(value ?? '').normalize('NFC').toLocaleLowerCase('ru').replace(/ё/g, 'е')
   .split(/[^\p{L}\p{N}]+/u).filter(Boolean).sort().join(' ');
+
+export function editablePaymentCurrency(row) {
+  if (row?.kind !== 'payment' || row.owners?.length !== 1 || !validDate(row.date)) return null;
+  const keys = Object.keys(row.values);
+  const [currency] = keys;
+  return keys.length === 1 && currencies.includes(currency) && positiveAmount(row.values[currency]) && !row.packageParts?.[currency] ? currency : null;
+}
+
+function sameImportedPayment(row, other, currency) {
+  return currency && editablePaymentCurrency(other) === currency && row.id === other.id && row.date === other.date &&
+    row.month === other.month && row.block === other.block && row.owners[0] === other.owners[0];
+}
+
+export function changeImportedPaymentAmount(state, previous, amount) {
+  if (!positiveAmount(amount)) throw Error('Проверь сумму оплаты');
+  const row = state.ledger?.rows.find(item=>item.id===previous.id);
+  const currency = editablePaymentCurrency(row);
+  if (!sameImportedPayment(row,previous,currency) || row.values[currency] !== previous.values[currency]) {
+    throw Error('Запись изменилась. Открой её заново');
+  }
+  const original = row.originalPaymentAmount ?? row.values[currency];
+  row.values = {[currency]:amount};
+  if (amount === original) delete row.originalPaymentAmount;
+  else row.originalPaymentAmount = original;
+  return row;
+}
 
 function validateLedger(ledger, owners) {
   if (!ledger || !key(ledger.datasetId) || !validDate(ledger.asOf) || !Array.isArray(ledger.rows) || ledger.rows.length > 15000
@@ -32,6 +59,9 @@ function validateLedger(ledger, owners) {
         || (row.date !== '' && !validDate(row.date)) || !Array.isArray(row.owners) || row.owners.length > 10
         || row.owners.some(id => !key(id) || !owners.has(id))) throw Error('Некорректная строка истории учёта');
     if (row.package && !Object.hasOwn(PACKAGES,row.package)) throw Error('Некорректный пакет оплаты');
+    if (row.originalPaymentAmount !== undefined && (!editablePaymentCurrency(row) || !positiveAmount(row.originalPaymentAmount))) {
+      throw Error('Некорректная правка суммы из бухгалтерии');
+    }
     if (row.sourceLedgerRowId !== undefined && (row.kind!=='session' || !key(row.sourceLedgerRowId)
         || (row.place !== undefined && !['Зал','Улица'].includes(row.place)))) throw Error('Некорректная связь с историей занятий');
     for (const [currency, parts] of Object.entries(row.packageParts||{})) {
@@ -103,7 +133,7 @@ export function applyLedger(state, file, { createClient, setTelegramBinding }) {
       bound++;
     }
   }
-  const reconciled = new Map((state.ledger?.rows || []).filter(row=>row.kind==='repeat' && row.sourceKind).map(row=>[row.id,row]));
+  const previousRows = new Map((state.ledger?.rows || []).map(row=>[row.id,row]));
   const detailed = new Map();
   for (const row of state.ledger?.rows || []) if (row.sourceLedgerRowId) {
     const children = detailed.get(row.sourceLedgerRowId) || [];
@@ -116,13 +146,19 @@ export function applyLedger(state, file, { createClient, setTelegramBinding }) {
     datasetId: file.datasetId, asOf: file.asOf, months: file.months,
     rows: file.rows.flatMap(row => {
       const mapped = {...row,owners:[...new Set(row.owners.map(id=>owners.get(id)).filter(Boolean))]};
-      const old = reconciled.get(row.id);
+      const old = previousRows.get(row.id);
       const sessions = detailed.get(row.id) || [];
-      if (old?.sourceKind===mapped.kind && old.month===mapped.month && old.date===mapped.date && old.detail===mapped.detail
+      if (old?.kind==='repeat' && old.sourceKind===mapped.kind && old.month===mapped.month && old.date===mapped.date && old.detail===mapped.detail
           && old.block===mapped.block && old.owners.length===mapped.owners.length && old.owners.every(id=>mapped.owners.includes(id))
           && currencies.every(currency=>old.values[currency]===mapped.values[currency]) && sessions.every(item=>fileMonths.has(item.month))) {
         const archived = {...mapped,kind:'repeat',sourceKind:old.sourceKind};
         return [archived,...sessions.filter(item=>!fileRows.has(item.id)).map(item=>({...item,name:mapped.name,owners:mapped.owners}))];
+      }
+      const currency = editablePaymentCurrency(mapped);
+      if (!currency) delete mapped.originalPaymentAmount;
+      if (old?.originalPaymentAmount && sameImportedPayment(mapped,old,currency) &&
+          [old.originalPaymentAmount,old.values[currency]].includes(mapped.values[currency])) {
+        return {...mapped,values:old.values,originalPaymentAmount:old.originalPaymentAmount};
       }
       return mapped;
     })

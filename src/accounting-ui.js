@@ -1,6 +1,6 @@
 import * as A from './accounting.js';
 import { addDays, localDate } from './model-utils.js';
-import { ledgerRows } from './ledger-import.js';
+import { changeImportedPaymentAmount, editablePaymentCurrency, ledgerRows } from './ledger-import.js';
 
 const today = () => localDate();
 const currencyOptions = A.CURRENCIES.map(c => [c, ({ RSD: 'RSD · динары', RUB: 'RUB · рубли', EUR: 'EUR · евро', USD: 'USD · доллары' })[c]]);
@@ -1208,6 +1208,17 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       ].filter(Boolean)});
   }
 
+  function editImportedPayment(entry, currency) {
+    modal('Изменить сумму',form=>{
+      const amount = moneyInput(entry.values[currency]);
+      append(form,text([formatDate(entry.date),'за '+monthLabel(entry.month)].join(' · ')),field('Получено, '+currency,amount));
+      return async()=>{
+        await commit(s=>changeImportedPaymentAmount(s,entry,A.amountMinor(amount.value)));
+        message('Сумма оплаты обновлена');
+      };
+    });
+  }
+
   function importedHistoryLine(entry) {
     const label = {payment:'Поступление',shared:'Семейная оплата · общая сумма',session:'Занятия за месяц'}[entry.kind];
     const received = entry.kind !== 'session';
@@ -1221,8 +1232,12 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const note = entry.detail.replace(/^1 зан\. × [\d.]+ RSD(?: · )?/u,'');
       return historyLine({title,status,amounts,notes:[note]});
     }
+    const source = state().ledger?.rows.find(row=>row.id===entry.id);
+    const currency = editablePaymentCurrency(source);
+    const details = currency && source.originalPaymentAmount && 'Сумма при импорте · '+A.money(source.originalPaymentAmount,currency);
     return historyLine({title:entry.date ? formatDate(entry.date) : period,status:label,
-      context:entry.date ? 'за '+period : '',amounts,notes:[entry.detail]});
+      context:entry.date ? 'за '+period : '',amounts,details,notes:[entry.detail],
+      edit:currency ? [['Изменить сумму',()=>editImportedPayment(source,currency)]] : []});
   }
 
   function clientHistory(history, clientId, historyByTariff) {
