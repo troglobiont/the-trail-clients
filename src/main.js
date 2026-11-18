@@ -396,12 +396,17 @@ function renderCatalogResults() {
     .filter(c=>(!tariffs || tariffs.has(c.id)) && (!payment || payment.get(c.id) === ui.filters.paymentStatus));
   const byContact=scope==='active'&&ui.contactOrder;
   if(byContact)clients.sort((a,b)=>(a.lastContact?.at||'').localeCompare(b.lastContact?.at||''));
+  if (scope === 'active' && ui.filters.query.trim()) {
+    clients.push(...C.filterClients(state(),{query:ui.filters.query}).filter(c=>C.clientSection(c)!=='active'));
+  }
   const accountingClients = accountingUI.activeClientIds();
   list.replaceChildren();
   for (const c of clients.slice(0,ui.catalogLimit)) {
     const item = button(c.name,()=>openClient(c.id),'client-directory-item');
     item.setAttribute('aria-label','Открыть клиента: '+c.name);
-    const detail = scope === 'paused' ? c.pause?.returnWindow || (c.pause?.contactOn && 'Связаться ' + formatDate(c.pause.contactOn))
+    const category = C.clientSection(c);
+    const detail = category !== scope ? catalogViews[category]
+      : scope === 'paused' ? c.pause?.returnWindow || (c.pause?.contactOn && 'Связаться ' + formatDate(c.pause.contactOn))
       : scope === 'team' ? C.clientRole(c) : byContact ? c.lastContact?.at ? 'Контакт '+formatDate(c.lastContact.at)+' '+c.lastContact.at.slice(0,4) : 'Контакт не записан' : '';
     if (detail) item.append(text(detail));
     const quick = accountingClients.has(c.id) && button('Учёт',()=>accountingUI.quickEntry(c.id),'directory-account');
