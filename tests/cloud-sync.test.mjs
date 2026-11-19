@@ -4,8 +4,23 @@ import * as C from '../src/core.js';
 import * as A from '../src/accounting.js';
 import { createStore } from '../src/store.js';
 import { createCloudSync } from '../src/cloud-sync.js';
+import {savePartner} from '../src/partners.js';
 
 const owner = '10000000-0000-4000-8000-000000000001';
+
+test('upgrading a legacy device fetches partners even when the cloud revision is already current',async()=>{
+  const f=fixture(),store=await createStore(f.adapter),cloud=createCloudSync({store,api:f.api,vault:f.vault});
+  await cloud.connect('owner@example.test','password');
+  const seed=C.emptyState(),partner=savePartner(seed,{name:'Партнёр из облака'});
+  f.data().partners??={};f.data().partners[partner.id]=partner;
+  await store.mutate(s=>{delete s.cloudSync.protocol;},{trackCloud:false});
+  const requests=[],read=f.api.read;f.api.read=since=>{requests.push(since);return read(since);};
+  await cloud.restore();
+  assert.equal(requests[0],-1);
+  assert.equal(store.state().partners[partner.id].name,partner.name);
+  assert.equal(store.state().cloudSync.protocol,2);
+  await cloud.disconnect();
+});
 function fixture() {
   let revision = 0, data = {}, stored = '', credentials = '', offline = false, loseResponse = false;
   const requests = new Map();

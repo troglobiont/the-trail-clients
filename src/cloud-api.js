@@ -23,8 +23,8 @@ export function createCloudAPI({ url, key, request }) {
   return {
     async signIn(email, password) { return parseSession(await post('/auth/v1/token?grant_type=password', { email, password })); },
     async refresh(refreshToken) { return parseSession(await post('/auth/v1/token?grant_type=refresh_token', { refresh_token: refreshToken })); },
-    read(revision, token) { return post('/rest/v1/rpc/trail_sync_read', { p_revision: revision < 0 ? null : revision }, token); },
+    read(revision, token) { return post('/rest/v1/rpc/trail_sync_read_v2', { p_revision: revision < 0 ? null : revision }, token); },
     calendar(range, token) { return post('/functions/v1/trail-calendar',range,token); },
-    write(flight, token) { return post('/rest/v1/rpc/trail_sync_write', { p_revision: flight.revision, p_request: flight.id, p_changes: flight.changes }, token); }
+    write(flight, token) { return post('/rest/v1/rpc/trail_sync_write_v2', { p_revision: flight.revision, p_request: flight.id, p_changes: flight.changes }, token); }
   };
 }

@@ -43,7 +43,7 @@ begin
   select revision, data into current_revision, current_data from trail_private.sync_state where owner = uid;
   current_revision := coalesce(current_revision, 0);
   return jsonb_build_object('revision', current_revision, 'data',
-    case when p_revision = current_revision then null else coalesce(current_data, '{}') end);
+    case when p_revision = current_revision then null else coalesce(current_data, '{}') - 'partners' - 'partnerTasks' end);
 end;
 $$;
 

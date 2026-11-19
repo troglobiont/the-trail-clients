@@ -52,10 +52,16 @@ export function createCloudSync({ store, api, vault, onChange = () => {}, onRece
         const response = await request(token => api.write(flight, token));
         await store.mutate(state => acknowledgeCloudWrite(state, flight, response), editCloud);
       }
-      const remote = await request(token => api.read(meta().revision, token));
+      // A legacy device can know the current revision without ever seeing partner
+      // collections. Fetch the full v2 view once, even when that revision matches.
+      const remote = await request(token => api.read(meta().protocol===2?meta().revision:-1, token));
       const choices = remote.revision === decision?.revision ? decision.choices : {};
       const conflicts = remote.data === null && remote.revision === meta().revision ? []
-        : await store.mutate(state => receiveCloudData(state, remote, choices), editCloud);
+        : await store.mutate(state => {
+          const conflicts=receiveCloudData(state,remote,choices);
+          if(!conflicts.length)state.cloudSync.protocol=2;
+          return conflicts;
+        }, editCloud);
       if (conflicts.length) {
         emit('conflict', { conflicts, revision: remote.revision });
         return;

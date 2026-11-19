@@ -15,6 +15,8 @@ import {birthdayGreeting,birthdayReminders,pingActivity,telegramReminders,GOAL_T
 import {cloudConfig} from './cloud-config.js';
 import {createCalendarUI,isSchedulingTask} from './calendar-ui.js';
 import {todoPeriodEntries} from './todo-period.js';
+import {createPartnersUI} from './partners-ui.js';
+import {partnerTasks} from './partners.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,cloud,cloudReady,noticeTimer,draftTimer;
@@ -72,6 +74,7 @@ const calendarUI=createCalendarUI({state,service,el,append,button,row,field,inpu
   saveCalendar:value=>store.mutate(s=>{s.settings.calendarCache=value;},{trackCloud:false}),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   scheduledSession:accountingUI.scheduledSession,addScheduledTariff:accountingUI.addScheduledTariff});
+const partnersUI=createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message});
 function modal(title,build,{saveLabel='Сохранить',saveClass='primary',cancelLabel='Отмена',onSaved}={}){
   dialog.textContent='';
   const form=el('form'),heading=el('h2',title),error=text('','form-error');
@@ -527,7 +530,7 @@ function todoTiles(entries,today){
       : el('span',item.title,'task-title');
     if(item.birthday)title.lastElementChild.setAttribute('aria-hidden','true');
     append(b,append(el('span',null,'task-tile-top'),el('span',item.name,'task-client-name'),
-      item.payment&&el('span','$ Оплата','chip payment-chip'),item.birthday&&el('span','🎂 ДР','chip birthday-chip')),
+      item.partner&&el('span','Партнёр','chip'),item.payment&&el('span','$ Оплата','chip payment-chip'),item.birthday&&el('span','🎂 ДР','chip birthday-chip')),
       title,text([overdue&&'Просрочено',due,item.next].filter(Boolean).join(' · '),overdue?'danger-text small':undefined));
     if(item.warning)b.append(text(item.warning.text,item.warning.level==='danger'?'danger-text small':'warning-text small'));
     list.append(b);
@@ -547,7 +550,9 @@ function renderTodo(filter='all'){
     name:state().clients[t.clientId].name,title:t.title,due:C.taskDate(t),
     next:taskStateLabel(t),reply:t.needsReply,warning:C.taskWarning(t),open:()=>openClient(t.clientId,'task',t.id)
   }));
-  append(page,append(el('div',null,'page-title'),el('h1','ToDo')));
+  const assistant=button('🎙',()=>navigate('#assistant'),'assistant-entry');
+  assistant.setAttribute('aria-label','Ассистент · надиктовать запись');assistant.title='Надиктовать запись';
+  append(page,append(el('div',null,'page-title'),el('h1','ToDo'),assistant));
   const filters=el('div',null,'row catalog-quick todo-filters');
   filters.setAttribute('role','group');filters.setAttribute('aria-label','Фильтры ToDo');
   for(const [value,label] of [['all','Все'],['payments','Оплата'],['birthdays','ДР'],['schedule','Расписание']]){
@@ -558,7 +563,7 @@ function renderTodo(filter='all'){
   const filterPanel=append(el('div',null,'todo-filter-panel'),filters);
   page.append(filterPanel);
   if(filter==='schedule')return append(page,calendarUI.schedule());
-  if(!Object.keys(state().clients).length)return append(page,emptyDatabase());
+  if(!Object.keys(state().clients).length&&!Object.keys(state().partners||{}).length)return append(page,emptyDatabase());
   if(filter==='birthdays'){
     const from=past?C.addDays(today,-7):today;
     const entries=birthdayEntries(past?6:days,'active',from);
@@ -586,7 +591,9 @@ function renderTodo(filter='all'){
     name:client.name,title:'Давно не открывал переписку',due:day,next:'Проверить Telegram',reminder:true,open:()=>openClient(client.id,'telegram')
   }));
   const birthdays=period===-1?birthdayEntries(6,'active',C.addDays(today,-7)):birthdayEntries(period??14,'active');
-  const entries=todoPeriodEntries([...tasks,...accountingUI.todoItems(period??undefined),...birthdays,...telegram],period,today)
+  const partnerEntries=partnerTasks(state()).map(task=>({name:state().partners[task.partnerId].name,title:task.title,due:task.due,partner:true,
+    next:'Задача партнёра',open:()=>navigate('#partners/'+task.partnerId+'/task/'+task.id)}));
+  const entries=todoPeriodEntries([...tasks,...partnerEntries,...accountingUI.todoItems(period??undefined),...birthdays,...telegram],period,today)
     .sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
   page.append(entries.length?todoTiles(entries,today):text(period===null?'Открытых задач в этом разделе нет.':
     period===-1?'Просроченных задач нет.':'Нет задач на ближайшие '+period+' дней.'));
@@ -881,7 +888,7 @@ function renderAssistant(){
   const review=button('Продолжить',()=>reviewAssistant(d.text),'primary');
   const refresh=()=>{review.disabled=!d.text.trim()||busy||recording;};
   note.addEventListener('input',()=>{d.text=note.value;refresh();saveDraftSoon();});refresh();
-  return append(page,el('h1','Ассистент'),note,row(voice,review));
+  return append(page,button('← К ToDo',()=>navigate('#todo'),'back subtle'),el('h1','Ассистент'),note,row(voice,review));
 }
 function reviewAssistant(value){
   const clients=C.filterClients(state());
@@ -1300,7 +1307,7 @@ function render(){
   const openCard=hash.startsWith('#client/')?hash.split('/')[1]:null;
   if(ui.openCard!==openCard){ui.recentlyCompleted.clear();ui.openCard=openCard;}
   const birthdayRoute=route=>['#todo/birthdays','#clients/birthdays'].includes(route);
-  const sectionTab=route=>birthdayRoute(route)||route.startsWith('#todo/')?'#todo':route.startsWith('#clients/')?'#clients':route;
+  const sectionTab=route=>birthdayRoute(route)||route.startsWith('#todo/')||route==='#assistant'?'#todo':route.startsWith('#partners/')?'#partners':route.startsWith('#clients/')?'#clients':route;
   const activeTab=sectionTab(hash.startsWith('#client/')?ui.returnTo:hash);
   root.replaceChildren();
   document.querySelectorAll('.app-nav a, .gear-link').forEach(a=>a.setAttribute('aria-current',a.hash===activeTab?'page':'false'));
@@ -1319,6 +1326,8 @@ function render(){
     const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();
   }else if(hash==='#account')root.append(accountingUI.page());
   else if(hash==='#races')root.append(detailsUI.races());
+  else if(hash==='#partners')root.append(partnersUI.page());
+  else if(hash.startsWith('#partners/')){const [,id,,taskId]=hash.split('/');root.append(partnersUI.card(id,taskId));}
   else if(hash==='#assistant')root.append(renderAssistant());
   else if(hash==='#settings'){root.append(renderSettings());renderUpdate();renderCloudPanel();}
   else root.append(renderTodo());

@@ -1,4 +1,4 @@
-const collections = ['clients', 'goals', 'tasks', 'records', 'events', 'services', 'operations', 'reminders', 'ledger'];
+const collections = ['clients', 'goals', 'tasks', 'records', 'events', 'services', 'operations', 'reminders', 'ledger','partners','partnerTasks'];
 const core = collections.slice(0, 4);
 const keyFor = (collection, id) => `${collection}/${id}`;
 const split = key => key.split('/');
@@ -16,7 +16,7 @@ export function cloudData(state) {
     ...Object.fromEntries(core.map(key => [key, state[key]])),
     events: Object.fromEntries(state.events.map(event => [event.id, event])),
     services: state.accounting?.services ?? {}, operations: state.accounting?.operations ?? {}, reminders: state.accounting?.reminders ?? {},
-    ledger: state.ledger ? { import: state.ledger } : {}
+    ledger: state.ledger ? { import: state.ledger } : {},partners:state.partners??{},partnerTasks:state.partnerTasks??{}
   };
 }
 
@@ -132,6 +132,7 @@ export function receiveCloudData(state, response, choices = {}) {
   }
   if (conflicts.length) return conflicts;
   for (const key of core) state[key] = remote[key];
+  state.partners=remote.partners;state.partnerTasks=remote.partnerTasks;
   state.events = Object.values(remote.events).sort((a,b) => a.at.localeCompare(b.at));
   if (state.accounting || Object.keys(remote.services).length || Object.keys(remote.operations).length || Object.keys(remote.reminders).length) {
     state.accounting = { services: remote.services, operations: remote.operations, reminders: remote.reminders };

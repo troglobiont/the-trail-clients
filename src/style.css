@@ -303,8 +303,11 @@ input.account-month{width:auto;max-width:100%}
 .gear-link{position:relative;display:grid;place-items:center;flex:none;min-width:44px;min-height:44px;border-radius:12px;color:var(--ink);text-decoration:none;font-size:25px}
 .gear-link[aria-current=page]{background:var(--soft)}
 .gear-link.has-update::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent);position:absolute;top:6px;right:6px}
-.app-nav .nav-assistant{align-self:center;justify-self:center;display:grid;place-items:center;width:44px;height:44px;min-height:44px;padding:0;border-radius:50%;background:var(--soft);color:var(--ink);font-size:20px}
-.app-nav .nav-assistant[aria-current=page]{background:var(--accent);color:var(--panel)}
+.assistant-entry{display:grid;place-items:center;width:44px;height:44px;padding:0;border-radius:50%;background:var(--soft);color:var(--ink);font-size:20px}
+.partner-list{display:grid}
+.partner-tile{display:grid;gap:3px;width:100%;text-align:left;padding:14px 4px;border-radius:0;border-bottom:1px solid var(--line);color:var(--text);font-weight:400}
+.partner-tile strong{font-size:17px}
+.partner-link{display:block;overflow-wrap:anywhere;font-size:14px}
 .task-completed{opacity:.78}
 .payment-chip{align-self:flex-start;color:var(--ink);background:var(--soft)}
 .todo-filters{gap:6px}
