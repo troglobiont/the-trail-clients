@@ -1,6 +1,7 @@
-import {addDays, localDate, TIMEZONE} from './model-utils.js';
+import {localDate, TIMEZONE} from './model-utils.js';
 import {linkCalendarTask, normalizeSearch} from './core.js';
 import {accounting, activeService, clientServices, money, serviceBalance, tariffLabel} from './accounting.js';
+import {createCalendarData} from './calendar-data.js';
 
 const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit'});
 const monthName = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE,month:'long'});
@@ -49,32 +50,12 @@ export function calendarPlace(location) {
   return null;
 }
 
-export function createCalendarUI({state, service, el, append, button, row, field, input, select, text, section, modal, commit, formatDate,
+export function createCalendarUI({state, service, readCalendar, saveCalendar, el, append, button, row, field, input, select, text, section, modal, commit, formatDate,
     navigate, openClient, message, searchClients, scheduledSession, addScheduledTariff}) {
-  let cached, loading;
+  const dataSource = createCalendarData({read:readCalendar,saved:()=>state().settings.calendarCache,save:saveCalendar});
   const selectedClients = new Map();
   const aligning = new Set();
-  const readCalendar = async (from,to) => {
-    const value = await service('/calendar/list', {from,to});
-    if (value.error) throw Error(value.error);
-    if (!Array.isArray(value.events)) throw Error('Не удалось прочитать расписание');
-    return value;
-  };
-  const load = (force = false) => {
-    if (loading) return loading;
-    const today = localDate(), firstDay = today.slice(0,7)+'-01';
-    if (!force && cached?.today === today && cached.until > Date.now()) return Promise.resolve(cached.value);
-    loading = Promise.all([
-      readCalendar(today,addDays(today,30)),
-      readCalendar(firstDay,addDays(today,1)).catch(error=>({events:[],error:error.message}))
-    ]).then(([upcoming,history]) => {
-      const events = new Map([...history.events,...upcoming.events].map(event=>[event.id,event]));
-      const value = {...upcoming,events:[...events.values()].sort((a,b)=>Date.parse(a.start)-Date.parse(b.start)),historyError:history.error};
-      cached = {value,today,until:Date.now() + 60_000};
-      return value;
-    }).finally(() => { loading = null; });
-    return loading;
-  };
+  const load = dataSource.load;
   const timeRange = event => clock.format(new Date(event.start)) + '–' + clock.format(new Date(event.end));
   const eventLink = (event, label) => {
     if (!/^https:\/\/calendar\.google\.com\/calendar\/event\?eid=[A-Za-z0-9_-]+$/u.test(event.url||'')) return null;
@@ -82,7 +63,10 @@ export function createCalendarUI({state, service, el, append, button, row, field
     link.href = event.url; link.target = '_blank'; link.rel = 'noopener noreferrer';
     return link;
   };
-  const modeHint = data => data.mode === 'snapshot'
+  const modeHint = data => data.mode === 'saved'
+    ? 'Сохранено на устройстве · '+formatDate(data.asOf,true)+'. '+
+      (data.coversToday ? 'Проверь обновления при появлении связи.' : 'Сохранённый период закончился. Нужно обновить расписание.')
+    : data.mode === 'snapshot'
     ? 'Снимок календаря · '+formatDate(data.asOf)+'. Автообновление пока не подключено.'
     : data.mode === 'not-connected' ? 'Google Календарь ещё не подключён.' : '';
 
@@ -112,11 +96,7 @@ export function createCalendarUI({state, service, el, append, button, row, field
   function schedule() {
     const list = el('div', null, 'stack'), status = text(''), box = el('section', null, 'stack');
     status.setAttribute('role', 'status');
-    const update = async force => {
-      status.textContent = 'Загружаю расписание…';
-      list.replaceChildren();
-      try {
-        const data = await load(force);
+    const display = async data => {
         const entries = data.events.map(event=>({event,client:resolveClient(event)}));
         const upcoming = entries.filter(({event})=>!hasEnded(event));
         const month = localDate().slice(0,7);
@@ -129,18 +109,25 @@ export function createCalendarUI({state, service, el, append, button, row, field
         status.textContent = modeHint(data);
         const monthLabel = monthName.format(new Date(month+'-15T12:00:00Z'));
         const pastSection = section('Прошлые · '+monthLabel,'calendar-past-'+month,
-          data.historyError ? [text(data.historyError,'danger-text small')] : past.length ? [
+          past.length ? [
             text('В расписании · '+past.length+'  /  Отмечено через расписание · '+past.filter(item=>item.recorded).length),
             calendarEntries(past,true)
           ] : [text('В этом месяце прошедших тренировок в расписании нет.')]);
+        list.replaceChildren();
         append(list,pastSection,upcoming.length ? calendarEntries(upcoming) :
           data.mode === 'live' && text('На ближайшие 30 дней персональных тренировок нет.'));
-        for (const {event,client} of upcoming) {
+        for (const {event,client} of data.mode==='live' ? upcoming : []) {
           if (!list.isConnected) break;
-          await align(event,client).catch(()=>{
-            status.textContent = 'Имена в приложении актуальны. Обновить названия в Google Календаре можно повторным нажатием «Обновить».';
-          });
+          try { await align(event,client); }
+          catch { break; } // Name alignment on the Mac must not hide a working cloud schedule.
         }
+    };
+    const update = async force => {
+      const snapshot = dataSource.snapshot();
+      if (snapshot && !list.children.length) await display(snapshot);
+      status.textContent = snapshot ? modeHint(snapshot)+' Обновляю…' : 'Загружаю расписание…';
+      try {
+        await display(await load(force));
       } catch(error) {
         status.textContent = error.message;
       }
@@ -172,7 +159,7 @@ export function createCalendarUI({state, service, el, append, button, row, field
     if (action==='edit' && response.event?.id!==event.id || action==='cancel' && response.status!=='cancelled') {
       throw Error('Не удалось сохранить изменения в календаре');
     }
-    cached = null;
+    dataSource.invalidate();
     if (Object.values(state().tasks).some(task=>task.calendarEvent?.id===event.id)) await commit(s=>{
       for (const task of Object.values(s.tasks)) if (task.calendarEvent?.id===event.id) {
         if (action==='cancel') task.calendarEvent.cancelled = true;
@@ -274,7 +261,11 @@ export function createCalendarUI({state, service, el, append, button, row, field
       if (actions.children.length) content.append(actions);
     };
     content.append(text('Загружаю тренировку…'));
-    void Promise.all([load(),sessionIds(eventId)]).then(([data,ids])=>{
+    const snapshot = dataSource.snapshot();
+    const savedEvent = snapshot?.events.find(item=>item.id===eventId);
+    const identifiers = sessionIds(eventId);
+    if (savedEvent) void identifiers.then(ids=>display(savedEvent,ids,'saved'));
+    void Promise.all([load(),identifiers]).then(([data,ids])=>{
       const event = data.events.find(item=>item.id===eventId);
       if (!event) throw Error('Тренировка не найдена в расписании');
       display(event,ids,data.mode);
@@ -322,7 +313,7 @@ export function createCalendarUI({state, service, el, append, button, row, field
             day:day.value, time:time.value, minutes:Number(minutes.value), location:place.value});
           if (response.error) throw Error(response.error);
           event = response.event;
-          cached = null;
+          dataSource.invalidate();
         }
         if (!event) throw Error('Выбери тренировку');
         await commit(s => linkCalendarTask(s, task.id, event),false);
@@ -337,5 +328,5 @@ export function createCalendarUI({state, service, el, append, button, row, field
       !event.cancelled&&eventLink(event,'Календарь'));
   }
 
-  return {schedule, session, book, linked};
+  return {schedule, session, book, linked,preload:()=>dataSource.refresh().catch(()=>{})};
 }

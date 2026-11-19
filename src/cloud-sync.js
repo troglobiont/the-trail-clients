@@ -3,7 +3,7 @@ import { acknowledgeCloudWrite, beginCloudSync, prepareCloudWrite, receiveCloudD
 const editCloud = { trackCloud: false };
 
 export function createCloudSync({ store, api, vault, onChange = () => {}, onReceive = () => {} }) {
-  let session = null, running = null, timer = null, view = { status: 'disconnected', conflicts: [], revision: null };
+  let session = null, running = null, refreshing = null, timer = null, view = { status: 'disconnected', conflicts: [], revision: null };
   const emit = (status, fields = {}) => {
     view = { status, conflicts: [], revision: null, email: session?.email || '', ...fields };
     onChange(view);
@@ -17,7 +17,9 @@ export function createCloudSync({ store, api, vault, onChange = () => {}, onRece
 
   async function request(call) {
     if (!session) throw Error('Войди для синхронизации');
-    const refresh = async () => {
+    const refresh = () => {
+      if (refreshing) return refreshing;
+      refreshing = (async()=>{
       try {
         const next = await api.refresh(session.refresh);
         if (next.owner !== meta().owner) throw Error('Аккаунт облака изменился');
@@ -30,6 +32,8 @@ export function createCloudSync({ store, api, vault, onChange = () => {}, onRece
         }
         throw error;
       }
+      })().finally(()=>{refreshing=null;});
+      return refreshing;
     };
     if (session.expires < Date.now() + 60000) await refresh();
     try { return await call(session.access); }
@@ -93,6 +97,7 @@ export function createCloudSync({ store, api, vault, onChange = () => {}, onRece
   return {
     state: () => view,
     sync,
+    calendar: range => request(token=>api.calendar(range,token)),
     async restore() {
       const value = await vault.load();
       if (!value || !meta()) return;

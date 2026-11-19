@@ -16,7 +16,7 @@ import {cloudConfig} from './cloud-config.js';
 import {createCalendarUI,isSchedulingTask} from './calendar-ui.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
-let store,updater,cloud,noticeTimer,draftTimer;
+let store,updater,cloud,cloudReady,noticeTimer,draftTimer;
 const catalogViews = { active:'Клиенты', occasional:'Разовые', paused:'На паузе', archive:'Архив', team:'Команда', pending:'До старта' };
 const planBasisLabel = basis => basis === 'С нуля' ? 'Вне когорты' : basis;
 const planBasisOptions = C.BASES.map(basis=>[basis,planBasisLabel(basis)]);
@@ -63,6 +63,12 @@ const accountingUI=createAccountingUI({state,el,append,button,row,field,input,se
 });
 const scheduleRoute='#todo/schedule';
 const calendarUI=createCalendarUI({state,service,el,append,button,row,field,input,select,text,section,modal,commit,formatDate,navigate,openClient,message,
+  readCalendar:async(from,to)=>{
+    await cloudReady;
+    if(!cloud)throw Error('Подключи облачную синхронизацию для расписания');
+    return cloud.calendar({from,to});
+  },
+  saveCalendar:value=>store.mutate(s=>{s.settings.calendarCache=value;},{trackCloud:false}),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   scheduledSession:accountingUI.scheduledSession,addScheduledTariff:accountingUI.addScheduledTariff});
 function modal(title,build,{saveLabel='Сохранить',saveClass='primary',cancelLabel='Отмена',onSaved}={}){
@@ -141,12 +147,13 @@ function startCloud(){
   cloud=createCloudSync({store,api:createCloudAPI({...cloudConfig,request:options=>bridge.cloudRequest(options)}),
     vault:{load:()=>bridge.getSecret('cloudSession'),save:value=>bridge.setSecret('cloudSession',value)},
     onChange:renderCloudStatus,onReceive:render});
-  const retry=()=>cloud.sync();
+  const retry=async()=>{await cloud.sync();await calendarUI.preload();};
   window.addEventListener('online',retry);
   window.addEventListener('trail-app-active',retry);
   setInterval(()=>{if(!document.hidden)retry();},45000);
   renderCloudStatus();
-  run(()=>cloud.restore());
+  cloudReady=cloud.restore();
+  run(async()=>{await cloudReady;await calendarUI.preload();});
 }
 function pauseEditor(client) {
   const group = select(Object.entries(C.PAUSE_GROUPS),C.pauseGroup(client ?? {}));
@@ -1341,10 +1348,10 @@ async function start(){
     bindClientsTab();
     window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});
     document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});
+    startCloud();
     render();
     document.getElementById('save-status').textContent='На устройстве';
     if(await bridge?.ready(VERSION))message('Обновлено до '+VERSION);
-    startCloud();
     if(bridge?.native){
       void refreshMicrophonePermission().then(()=>{
         if(!ui.recorder&&!ui.voiceStartingClientId&&!ui.voiceSavingClientId&&

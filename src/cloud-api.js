@@ -6,7 +6,8 @@ export function createCloudAPI({ url, key, request }) {
     if (token) headers.Authorization = `Bearer ${token}`;
     const response = await request({ url: url + path, method: 'POST', headers, data, connectTimeout: 10000, readTimeout: 20000 });
     if (response.status < 200 || response.status >= 300) {
-      const message = path.startsWith('/auth/') ? 'Не удалось войти. Проверь почту и пароль' :
+      const message = path.startsWith('/functions/') ? 'Не удалось обновить облачное расписание' :
+        path.startsWith('/auth/') ? 'Не удалось войти. Проверь почту и пароль' :
         response.status === 403 ? 'Этот аккаунт ещё не подключён к базе The.Trail' : 'Облако не приняло изменения';
       throw Object.assign(Error(message), { status: response.status });
     }
@@ -23,6 +24,7 @@ export function createCloudAPI({ url, key, request }) {
     async signIn(email, password) { return parseSession(await post('/auth/v1/token?grant_type=password', { email, password })); },
     async refresh(refreshToken) { return parseSession(await post('/auth/v1/token?grant_type=refresh_token', { refresh_token: refreshToken })); },
     read(revision, token) { return post('/rest/v1/rpc/trail_sync_read', { p_revision: revision < 0 ? null : revision }, token); },
+    calendar(range, token) { return post('/functions/v1/trail-calendar',range,token); },
     write(flight, token) { return post('/rest/v1/rpc/trail_sync_write', { p_revision: flight.revision, p_request: flight.id, p_changes: flight.changes }, token); }
   };
 }

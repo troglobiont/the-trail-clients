@@ -103,3 +103,25 @@ test('a competing edit keeps the phone version until the owner chooses',async()=
   assert.equal(cloud.state().status,'synced');
   await cloud.disconnect();
 });
+
+test('calendar requests share a token refresh and use the existing signed-in cloud account',async()=>{
+  const f=fixture(),store=await createStore(f.adapter);
+  const cloud=createCloudSync({store,api:f.api,vault:f.vault});
+  await cloud.connect('owner@example.test','password');
+  let refreshes=0;
+  f.api.calendar=async(range,token)=>{
+    if(token==='session')throw Object.assign(Error('expired'),{status:401});
+    assert.equal(token,'renewed');
+    return {mode:'live',events:[],range};
+  };
+  f.api.refresh=async()=>{
+    refreshes++;
+    await new Promise(resolve=>setTimeout(resolve,5));
+    return {owner,access:'renewed',refresh:'next',expires:Date.now()+3600000};
+  };
+  const ranges=[{from:'2026-11-01',to:'2026-11-19'},{from:'2026-11-19',to:'2026-12-19'}];
+  assert.deepEqual((await Promise.all(ranges.map(range=>cloud.calendar(range)))).map(value=>value.range),ranges);
+  assert.equal(refreshes,1);
+  await cloud.disconnect();
+  await assert.rejects(cloud.calendar(ranges[0]),/Войди/u);
+});
