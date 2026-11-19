@@ -312,7 +312,7 @@ input.account-month{width:auto;max-width:100%}
 .todo-filters button{white-space:nowrap;padding-inline:clamp(7px,2.2vw,12px)}
 .todo-periods{flex-wrap:nowrap;gap:5px}
 .todo-periods button{min-height:34px;padding:4px 9px;font-size:12px;white-space:nowrap}
-.todo-filters button[aria-pressed=true]:hover,.todo-periods button[aria-pressed=true]:hover{background:var(--ink);color:var(--on-ink)}
+.todo-filter-panel .catalog-quick button[aria-pressed=true]:hover{background:var(--ink);color:var(--on-ink)}
 .calendar-day{margin:8px 0 0;font-size:14px;color:var(--muted)}
 .calendar-event{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start;padding:12px;text-align:left;color:var(--text)}
 .calendar-time{font-variant-numeric:tabular-nums;font-size:14px;white-space:nowrap}
