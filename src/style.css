@@ -65,13 +65,16 @@ li+li{margin-top:8px}
 .danger-text{color:var(--danger)}
 .warning-text{color:var(--warn)}
 .app-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:calc(12px + env(safe-area-inset-top)) 20px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
-.app-brand{display:flex;align-items:center;gap:10px}
+.app-brand{display:flex;align-items:flex-start;gap:8px;min-width:0}
+.brand-tools{display:grid;justify-items:center;flex:none;gap:0}
+.brand-caption{padding-top:1px}
+.brand-tools .gear-link{min-height:32px;height:32px;min-width:44px;font-size:22px;border-radius:8px}
 .brand-mark{width:34px;height:34px;flex:0 0 34px;border-radius:50%;background:var(--brand);isolation:isolate;overflow:hidden}
 .brand-mark img{display:block;width:100%;height:100%;filter:grayscale(1) contrast(4);mix-blend-mode:screen}
 .brand{font-weight:750;letter-spacing:.06em}
 .brand-sub{color:var(--muted);margin-left:10px}
 .app-nav{position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:center;gap:8px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:var(--panel);border-top:1px solid var(--line);z-index:10}
-.app-nav a{padding:10px 20px;border-radius:10px;text-decoration:none;color:var(--muted);min-height:44px}
+.app-nav a{padding:10px 20px;border-radius:10px;text-decoration:none;color:var(--muted);min-height:44px;min-width:0;white-space:nowrap;overflow-wrap:normal;word-break:normal}
 .app-nav a[href="#clients"]{touch-action:manipulation}
 .app-nav a[aria-current=page]{background:var(--soft);color:var(--ink);font-weight:600}
 main{max-width:920px;margin:0 auto;padding:24px 20px calc(110px + env(safe-area-inset-bottom));overflow-wrap:anywhere}
@@ -260,8 +263,8 @@ input.account-month{width:auto;max-width:100%}
   .appearance-options[aria-labelledby=appearance-palette]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
   main{padding:20px 16px calc(110px + env(safe-area-inset-bottom))}
   .app-header{padding-right:16px;padding-left:16px}
-  .app-nav{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;padding-inline:6px}
-  .app-nav a{padding:10px 2px;text-align:center;font-size:13px;overflow-wrap:anywhere}
+  .app-nav{display:grid;gap:2px;padding-inline:6px}
+  .app-nav a{padding:10px 2px;text-align:center;font-size:13px}
   .brand-sub{display:block;margin:0;font-size:12px}
   .zones{grid-template-columns:repeat(2,minmax(0,1fr))}
   .task-heading{gap:6px}
@@ -295,11 +298,11 @@ input.account-month{width:auto;max-width:100%}
 .task[tabindex]:focus,.goal[tabindex]:focus,.feature[tabindex]:focus{outline:2px solid var(--accent);outline-offset:3px}
 .history .subtle{margin-top:3px;padding-left:0}
 @media(max-width:600px){
-  .app-nav{grid-template-columns:repeat(5,minmax(0,1fr))}
+  .app-nav{display:grid;grid-template-columns:minmax(0,.75fr) minmax(0,1.3fr) minmax(0,.7fr) minmax(0,1.1fr) minmax(0,1.15fr);gap:2px;padding-inline:6px}
   .app-nav a{padding-inline:1px;font-size:12px}
 }
 
-.header-controls{display:flex;align-items:center;gap:8px}
+.header-controls{display:flex;align-items:center;gap:8px;align-self:flex-start;padding-top:9px;min-width:0;text-align:right}
 .gear-link{position:relative;display:grid;place-items:center;flex:none;min-width:44px;min-height:44px;border-radius:12px;color:var(--ink);text-decoration:none;font-size:25px}
 .gear-link[aria-current=page]{background:var(--soft)}
 .gear-link.has-update::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--accent);position:absolute;top:6px;right:6px}
