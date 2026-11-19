@@ -308,6 +308,7 @@ input.account-month{width:auto;max-width:100%}
 .task-completed{opacity:.78}
 .payment-chip{align-self:flex-start;color:var(--ink);background:var(--soft)}
 .todo-filters{gap:6px}
+.todo-filter-panel{display:grid;gap:8px}
 .todo-filters button{white-space:nowrap;padding-inline:clamp(7px,2.2vw,12px)}
 .todo-periods{flex-wrap:nowrap;gap:5px}
 .todo-periods button{min-height:34px;padding:4px 9px;font-size:12px;white-space:nowrap}

@@ -14,6 +14,7 @@ import {createClientDetailsUI} from './client-details-ui.js';
 import {birthdayGreeting,birthdayReminders,pingActivity,telegramReminders,GOAL_TYPES} from './client-details.js';
 import {cloudConfig} from './cloud-config.js';
 import {createCalendarUI,isSchedulingTask} from './calendar-ui.js';
+import {todoPeriodEntries} from './todo-period.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,cloud,cloudReady,noticeTimer,draftTimer;
@@ -26,7 +27,7 @@ const paymentFilters = [['all','Оплаты'],['paid','Оплачено'],['pen
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
   packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7),paymentStatus:'all'});
 const ui={filters:defaultFilters(),catalogScope:'active',pauseFilter:null,catalogLimit:CATALOG_PAGE_SIZE,
-  contactOrder:false, recentlyCompleted:new Set(), birthdayPeriod:7, paymentPeriod:-1,returnTo:'#clients',open:new Set(),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
+  contactOrder:false, recentlyCompleted:new Set(), birthdayPeriod:7, paymentPeriod:-1,taskPeriod:null,returnTo:'#clients',open:new Set(),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
 const state=()=>store.state();
 function el(tag,text,className){const node=document.createElement(tag);if(text!==undefined&&text!==null)node.textContent=text;if(className)node.className=className;return node;}
 function append(parent,...children){parent.append(...children.filter(Boolean));return parent;}
@@ -554,7 +555,8 @@ function renderTodo(filter='all'){
     if(value==='birthdays')b.setAttribute('aria-label','ДР · Дни рождения');
     b.setAttribute('aria-pressed',String(filter===value));filters.append(b);
   }
-  page.append(filters);
+  const filterPanel=append(el('div',null,'todo-filter-panel'),filters);
+  page.append(filterPanel);
   if(filter==='schedule')return append(page,calendarUI.schedule());
   if(!Object.keys(state().clients).length)return append(page,emptyDatabase());
   if(filter==='birthdays'){
@@ -563,8 +565,8 @@ function renderTodo(filter='all'){
     const others=birthdayEntries(past?6:days,'other',from);
     if(past){entries.reverse();others.reverse();}
     const empty=past?'За последние 7 дней все поздравления отмечены.':'Нет дней рождения на ближайшие '+days+' дней.';
-    append(page,todoPeriods('Период дней рождения',days,[[7,'7 дней'],[30,'30 дней'],[-7,'Прошли','Дни рождения за последние 7 дней без поздравления']],value=>{ui.birthdayPeriod=value;}),
-      entries.length?todoTiles(entries,today):text(empty),
+    filterPanel.append(todoPeriods('Период дней рождения',days,[[7,'7 дней'],[30,'30 дней'],[-7,'Прошли','Дни рождения за последние 7 дней без поздравления']],value=>{ui.birthdayPeriod=value;}));
+    append(page,entries.length?todoTiles(entries,today):text(empty),
       section('Другие категории'+(others.length?' · '+others.length:''),'birthday-other',[
         others.length?todoTiles(others,today):text(empty)
       ]));
@@ -573,15 +575,21 @@ function renderTodo(filter='all'){
   if(filter==='payments'){
     const period=ui.paymentPeriod;
     const entries=accountingUI.todoItems(period);
-    return append(page,todoPeriods('Период оплаты',period,[[7,'7 дней'],[30,'30 дней'],[-1,'Долги','Неоплаченные счета с прошедшим сроком']],value=>{ui.paymentPeriod=value;}),
-      entries.length?todoTiles(entries,today):text(period<0?'Просроченных оплат нет.':'Нет предстоящих оплат на ближайшие '+period+' дней.'));
+    filterPanel.append(todoPeriods('Период оплаты',period,[[7,'7 дней'],[30,'30 дней'],[-1,'Долги','Неоплаченные счета с прошедшим сроком']],value=>{ui.paymentPeriod=value;}));
+    return append(page,entries.length?todoTiles(entries,today):text(period<0?'Просроченных оплат нет.':'Нет предстоящих оплат на ближайшие '+period+' дней.'));
   }
+  const period=ui.taskPeriod;
+  filterPanel.append(todoPeriods('Период задач',period,[[7,'7 дней'],[30,'30 дней'],[-1,'Проср.','Задачи с прошедшим сроком']],value=>{
+    ui.taskPeriod=ui.taskPeriod===value?null:value;
+  }));
   const telegram=telegramReminders(state()).map(({client,day})=>({
     name:client.name,title:'Давно не открывал переписку',due:day,next:'Проверить Telegram',reminder:true,open:()=>openClient(client.id,'telegram')
   }));
-  const entries=[...tasks,...accountingUI.todoItems(),...birthdayEntries(14),...telegram]
+  const birthdays=period===-1?birthdayEntries(6,'active',C.addDays(today,-7)):birthdayEntries(period??14,'active');
+  const entries=todoPeriodEntries([...tasks,...accountingUI.todoItems(period??undefined),...birthdays,...telegram],period,today)
     .sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
-  page.append(entries.length?todoTiles(entries,today):text('Открытых задач в этом разделе нет.'));
+  page.append(entries.length?todoTiles(entries,today):text(period===null?'Открытых задач в этом разделе нет.':
+    period===-1?'Просроченных задач нет.':'Нет задач на ближайшие '+period+' дней.'));
   return page;
 }
 function editTask(t){
