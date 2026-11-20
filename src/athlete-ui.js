@@ -49,11 +49,14 @@ export function createAthleteUI({state,ui,el,append,button,row,text,section,navi
     if(!c.athlete)return null;
     const primary=state().goals[c.athlete.goalId],lt1=athleteMetric(c,'lt1'),lt2=athleteMetric(c,'lthr'),rest=athleteMetric(c,'restHr'),zones=athleteZones(c);
     const out=el('div',null,'stack');
-    const goals=Object.values(state().goals).filter(g=>g.clientId===c.id&&!g.deletedAt),goal=primary&&!primary.deletedAt?primary:goals[0];
-    if(goal)out.append(button(goal.title,()=>navigate('#client/'+c.id+'/goal/'+goal.id),'athlete-goal'));
-    else out.append(text('Цель пока не сформулирована'));
-    const other=goals.filter(g=>g.id!==goal?.id);
-    if(other.length)out.append(button('Другие цели · '+other.length,()=>navigate('#client/'+c.id+'/goal/'+other[0].id),'subtle'));
+    const goals=Object.values(state().goals).filter(g=>g.clientId===c.id&&!g.deletedAt);
+    if(primary)goals.sort((a,b)=>Number(b.id===primary.id)-Number(a.id===primary.id));
+    const goalList=el('ul',null,'athlete-goals');goalList.setAttribute('aria-label','Цели спортсмена');
+    for(const goal of goals){
+      const link=button(goal.title,()=>navigate('#client/'+c.id+'/goal/'+goal.id),'athlete-goal');
+      goalList.append(append(el('li'),link));
+    }
+    out.append(goals.length?append(el('div',null,'stack athlete-goal-list'),el('h3','Цели'),goalList):text('Цель пока не сформулирована'));
     const metrics=el('div',null,'athlete-metrics');
     for(const [entry,label] of [[rest,'RHR'],[lt1,'LT1 / АэП'],[lt2,'LT2 / ПАНО']]){
       const item=entry?button('',()=>openEntry(c,entry.id),'athlete-metric'):el('div',null,'athlete-metric');
