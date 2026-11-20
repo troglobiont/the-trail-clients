@@ -9,7 +9,7 @@ const dated=value=>!value?'':/^\d{4}-\d{2}$/u.test(value)?monthDate.format(new D
 const amount=value=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(value);
 const price=term=>term.price==null?'':amount(term.price)+(term.currency?' '+term.currency:'');
 
-export function createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message}) {
+export function createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message,openList=()=>navigate('#partners')}) {
   let query='';
   const link=(label,value)=>{
     const url=partnerURL(value);if(!url)return text(label);
@@ -110,7 +110,7 @@ export function createPartnersUI({state,el,append,button,row,text,field,input,se
       button('Изменить',()=>editTask(task.partnerId,task),'subtle')));
   }
 
-  function page() {
+  function page({embedded=false}={}) {
     const page=el('div',null,'stack-lg'),search=input('search',query,'Поиск партнёра');search.setAttribute('aria-label','Поиск партнёра');
     const list=el('div',null,'partner-list');
     const update=()=>{
@@ -123,12 +123,12 @@ export function createPartnersUI({state,el,append,button,row,text,field,input,se
       if(!partners.length)list.append(text(q?'Партнёры не найдены.':'Партнёров пока нет. После синхронизации здесь появятся подготовленные карточки.'));
     };
     search.addEventListener('input',update);update();
-    return append(page,append(el('div',null,'page-title'),el('h1','Партнёры'),button('+ Добавить',()=>editPartner(),'subtle')),search,list);
+    return append(page,append(el('div',null,'page-title'),!embedded&&el('h1','Партнёры'),button('+ Добавить',()=>editPartner(),'subtle')),search,list);
   }
 
   function card(partnerId,taskId=null) {
-    const p=state().partners?.[partnerId];if(!p)return append(el('div',null,'stack'),button('← К партнёрам',()=>navigate('#partners'),'back subtle'),text('Карточка не найдена. Проверь синхронизацию.'));
-    const page=append(el('div',null,'stack-lg'),button('← К партнёрам',()=>navigate('#partners'),'back subtle'),
+    const p=state().partners?.[partnerId];if(!p)return append(el('div',null,'stack'),button('← К партнёрам',openList,'back subtle'),text('Карточка не найдена. Проверь синхронизацию.'));
+    const page=append(el('div',null,'stack-lg'),button('← К партнёрам',openList,'back subtle'),
       append(el('div',null,'page-title'),el('h1',p.name),button('Изменить',()=>editPartner(p.id),'subtle')),
       text([p.category,PARTNER_STATUSES[p.relationshipStatus]].join(' · ')));
     const terms=append(el('section',null,'stack'),append(el('div',null,'row between'),el('h2','Условия для участников'),button('+ Условие',()=>editTerm(p),'subtle')));

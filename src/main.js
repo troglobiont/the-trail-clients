@@ -18,6 +18,7 @@ import {todoPeriodEntries} from './todo-period.js';
 import {createPartnersUI} from './partners-ui.js';
 import {partnerTasks} from './partners.js';
 import {syncIndicatorState,cloudIcon,settingsWheel} from './sync-indicator.js';
+import {createAdminUI} from './admin-ui.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,cloud,cloudReady,noticeTimer,draftTimer,localSaves=0,localSaveError=false,headerBound=false;
@@ -81,7 +82,9 @@ const calendarUI=createCalendarUI({state,service,el,append,button,row,field,inpu
   saveCalendar:value=>store.mutate(s=>{s.settings.calendarCache=value;},{trackCloud:false}),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   scheduledSession:accountingUI.scheduledSession,addScheduledTariff:accountingUI.addScheduledTariff});
-const partnersUI=createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message});
+const partnersUI=createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message,
+  openList:()=>{ui.open.add('admin-partners');navigate('#admin');}});
+const adminUI=createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,render,formatDate,partnersUI});
 function modal(title,build,{saveLabel='Сохранить',saveClass='primary',cancelLabel='Отмена',onSaved}={}){
   dialog.textContent='';
   const form=el('form'),heading=el('h2',title),error=text('','form-error');
@@ -794,7 +797,7 @@ function renderClient(clientId,targetType,targetId){
   const c=state().clients[clientId];
   if(!c||c.mergedInto){navigate('#clients');return el('div');}
   const page=el('div',null,'stack-lg client-page');
-  const backLabel=ui.returnTo.startsWith(scheduleRoute+'/')?'← К тренировке':
+  const backLabel=ui.returnTo.startsWith('#admin/team/')?'← К работе и выплатам':ui.returnTo.startsWith(scheduleRoute+'/')?'← К тренировке':
     {'#todo':'← К ToDo','#account':'← К учёту','#races':'← К стартам','#todo/birthdays':'← К дням рождения'}[ui.returnTo]||'← К списку клиентов';
   page.append(button(backLabel,()=>navigate(ui.returnTo),'back subtle'));
   const header=el('header',null,'stack client-header');
@@ -802,6 +805,7 @@ function renderClient(clientId,targetType,targetId){
     text(c.lastContact?'Последний контакт: '+formatDate(c.lastContact.at,!c.lastContact.dateOnly)+' · '+c.lastContact.channel:'Последний контакт пока не указан'));
   const followUp=pauseDetails(c);
   append(page,header,followUp);
+  if(c.role==='Тренер')page.append(button('Работа и выплаты',()=>navigate('#admin/team/'+c.id),'subtle'));
   const tasks=[...C.clientTasks(state(),clientId),...Array.from(ui.recentlyCompleted,id=>state().tasks[id])
     .filter(t=>t?.clientId===clientId&&t.phase==='done')];
   if(tasks.length)page.append(append(el('section',null,'panel action-panel'),el('h2','Действия по клиенту','block-heading'),...tasks.map(task)));
@@ -1350,7 +1354,7 @@ function render(){
   const openCard=hash.startsWith('#client/')?hash.split('/')[1]:null;
   if(ui.openCard!==openCard){ui.recentlyCompleted.clear();ui.openCard=openCard;}
   const birthdayRoute=route=>['#todo/birthdays','#clients/birthdays'].includes(route);
-  const sectionTab=route=>birthdayRoute(route)||route.startsWith('#todo/')||route==='#assistant'?'#todo':route.startsWith('#partners/')?'#partners':route.startsWith('#clients/')?'#clients':route;
+  const sectionTab=route=>birthdayRoute(route)||route.startsWith('#todo/')||route==='#assistant'?'#todo':route==='#partners'||route.startsWith('#partners/')||route.startsWith('#admin/')?'#admin':route.startsWith('#clients/')?'#clients':route;
   const activeTab=sectionTab(hash.startsWith('#client/')?ui.returnTo:hash);
   root.replaceChildren();
   document.querySelectorAll('.app-nav a, .gear-link').forEach(a=>a.setAttribute('aria-current',a.hash===activeTab?'page':'false'));
@@ -1369,7 +1373,9 @@ function render(){
     const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();
   }else if(hash==='#account')root.append(accountingUI.page());
   else if(hash==='#races')root.append(detailsUI.races());
-  else if(hash==='#partners')root.append(partnersUI.page());
+  else if(hash==='#admin')root.append(adminUI.page());
+  else if(hash.startsWith('#admin/team/'))root.append(adminUI.card(hash.split('/')[2]));
+  else if(hash==='#partners'){ui.open.add('admin-partners');root.append(adminUI.page());}
   else if(hash.startsWith('#partners/')){const [,id,,taskId]=hash.split('/');root.append(partnersUI.card(id,taskId));}
   else if(hash==='#assistant')root.append(renderAssistant());
   else if(hash==='#settings'){

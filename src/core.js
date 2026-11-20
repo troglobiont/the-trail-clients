@@ -4,6 +4,7 @@ import { nameKey, validateStoredLedger } from './ledger-import.js';
 import { validateCloudState } from './cloud-state.js';
 import { raceById, raceCatalog, raceDefinition, raceGoal, sameRace, setProfile, setTraining } from './client-details.js';
 import {validatePartners} from './partners.js';
+import {validateTeam} from './team.js';
 export { TIMEZONE, id, localDate, validDate, addDays } from './model-utils.js';
 
 export const SCHEMA=1;
@@ -39,6 +40,7 @@ export function validateState(s){
   validateStoredLedger(s);
   validateCloudState(s);
   validatePartners(s);
+  validateTeam(s);
   return s;
 }
 export function event(s,type,clientId,entityId,details={}){s.events.push({id:id('event'),type,clientId,entityId,at:stamp(),...details});}
