@@ -6,6 +6,7 @@ import { raceById, raceCatalog, raceDefinition, raceGoal, sameRace, setProfile, 
 import {validatePartners} from './partners.js';
 import {validateTeam} from './team.js';
 import {validateAthletes} from './athlete.js';
+import {goalProposal} from './goal-record.js';
 export { TIMEZONE, id, localDate, validDate, addDays } from './model-utils.js';
 
 export const SCHEMA=1;
@@ -162,7 +163,7 @@ export function setTelegramBinding(s,clientId,binding){
   c.telegram=binding===null?null:clone(binding);
   event(s,binding?'telegram-linked':'telegram-unlinked',clientId,clientId);
 }
-export function addGoal(s,clientId,title,status='Желание клиента',sourceRecordId=null){title=String(title).trim();if(!s.clients[clientId]||!title||title.length>500||!GOAL_STATUSES.includes(status))throw Error('Проверь цель');const existing=Object.values(s.goals).find(g=>g.clientId===clientId&&!g.deletedAt&&normalizeSearch(g.title)===normalizeSearch(title));if(existing){if(existing.status!==status){existing.status=status;existing.updatedAt=stamp();event(s,'goal-edited',clientId,existing.id,{sourceRecordId});}return existing;}const g={id:id('goal'),clientId,title,status,sourceRecordId,createdAt:stamp(),updatedAt:stamp(),deletedAt:null};s.goals[g.id]=g;event(s,'goal-created',clientId,g.id,{sourceRecordId});return g;}
+export function addGoal(s,clientId,title,status='Желание клиента',sourceRecordId=null,{newGoal=false}={}){title=String(title).trim();if(!s.clients[clientId]||!title||title.length>500||!GOAL_STATUSES.includes(status))throw Error('Проверь цель');const existing=newGoal?null:Object.values(s.goals).find(g=>g.clientId===clientId&&!g.deletedAt&&normalizeSearch(g.title)===normalizeSearch(title));if(existing){if(existing.status!==status){existing.status=status;existing.updatedAt=stamp();event(s,'goal-edited',clientId,existing.id,{sourceRecordId});}return existing;}const g={id:id('goal'),clientId,title,status,sourceRecordId,createdAt:stamp(),updatedAt:stamp(),deletedAt:null};s.goals[g.id]=g;event(s,'goal-created',clientId,g.id,{sourceRecordId});return g;}
 export function defineRace(s,values){
   const race=raceDefinition(values);
   const existing=raceCatalog(s,{includeRecommended:true}).find(r=>r.id===race.id||sameRace(r,race));
@@ -270,15 +271,39 @@ export function editFeature(s, clientId, featureId, text, kind) {
 }
 export function setFeatureActive(s,clientId,featureId,active){const f=s.clients[clientId]?.features.find(f=>f.id===featureId);if(!f)throw Error('Особенность не найдена');f.active=active;event(s,active?'feature-restored':'feature-archived',clientId,featureId);}
 export function confirmedContact(s,clientId,{at=stamp(),channel='Telegram',direction='out',source='coach',messageKey=null}={}){const c=s.clients[clientId];if(!c)throw Error('Клиент не найден');if(messageKey&&s.events.some(e=>e.type==='contact'&&e.messageKey===messageKey))return;if(!c.lastContact||Date.parse(at)>=Date.parse(c.lastContact.at))c.lastContact={at,channel,direction,source};event(s,'contact',clientId,clientId,{at,channel,direction,source,messageKey});}
-export function processManualRecord(s,recordId,options={}){const r=s.records[recordId];if(!r)throw Error('Запись не найдена');if(r.status==='processed')return r.result;const changes=[];if(r.kind==='goal'){const g=addGoal(s,r.clientId,r.text,options.goalStatus||'Желание клиента',r.id);if(options.goalType)Object.assign(g,raceGoal(s,{type:options.goalType}));changes.push({type:'goal',id:g.id,title:g.title});}else if(r.kind==='task'){const t=createTask(s,r.clientId,r.text,{...options,sourceRecordId:r.id});changes.push({type:'task',id:t.id,title:t.title});}r.status='processed';r.result={mode:'manual',changes};return r.result;}
-export function applyAgentResult(s,recordId,result,{goalType}={}){
+export function processManualRecord(s,recordId,options={}){
+  const r=s.records[recordId];if(!r)throw Error('Запись не найдена');if(r.status==='processed')return r.result;
+  const changes=[];
+  if(r.kind==='goal'){
+    const proposal=goalProposal(s,r.text,options);
+    const classification=raceGoal(s,{type:options.goalType??proposal.type,raceId:options.raceId===undefined?proposal.raceId:options.raceId,
+      raceStage:options.raceStage||proposal.raceStage,distance:options.distance===undefined?proposal.distance:options.distance});
+    const g=addGoal(s,r.clientId,options.goalTitle||proposal.title,options.goalStatus||proposal.status,r.id,{newGoal:true});
+    Object.assign(g,classification);changes.push({type:'goal',id:g.id,title:g.title});
+  }else if(r.kind==='task'){
+    const t=createTask(s,r.clientId,r.text,{...options,sourceRecordId:r.id});changes.push({type:'task',id:t.id,title:t.title});
+  }
+  r.status='processed';r.result={mode:'manual',changes};return r.result;
+}
+export function applyAgentResult(s,recordId,result,{goalType,goalStatus}={}){
   const r=s.records[recordId];if(!r)throw Error('Запись не найдена');if(r.status==='processed')return r.result;
   if(!result||!Array.isArray(result.changes)||result.changes.length>30)throw Error('Агент вернул некорректный результат');
+  if(r.kind==='goal'){
+    if(result.question)throw Error('Сначала уточни цель');
+    const proposal=goalProposal(s,r.text,{goalType,goalStatus});
+    return processManualRecord(s,recordId,{goalType:proposal.type,goalStatus:proposal.status});
+  }
   const draft=clone(s),record=draft.records[recordId],changes=[];
   for(const change of result.changes){
     if(typeof change.title!=='string'||!change.title.trim()||change.title.length>1000)throw Error('Проверь результат агента');
     if(change.type==='task'){const t=createTask(draft,r.clientId,change.title,{due:change.due||null,lane:change.lane,needsReply:change.needsReply,sourceRecordId:r.id});changes.push({type:'task',id:t.id,title:t.title});}
-    else if(change.type==='goal'){let g;if(change.id){g=draft.goals[change.id];if(!g||g.clientId!==r.clientId)throw Error('Агент указал чужую цель');editGoal(draft,g.id,change.title,change.status);}else g=addGoal(draft,r.clientId,change.title,change.status,r.id);if(record.kind==='goal'&&goalType&&g.type!==goalType)Object.assign(g,raceGoal(draft,{type:goalType}));changes.push({type:'goal',id:g.id,title:g.title});}
+    else if(change.type==='goal'){
+      let g;if(change.id){g=draft.goals[change.id];if(!g||g.clientId!==r.clientId)throw Error('Агент указал чужую цель');editGoal(draft,g.id,change.title,change.status);}
+      else g=addGoal(draft,r.clientId,change.title,change.status,r.id);
+      const proposal=goalProposal(draft,change.title,{goalType,goalStatus:change.status});
+      if(!g.type||proposal.matched||goalType)Object.assign(g,raceGoal(draft,{type:proposal.type,raceId:proposal.raceId,raceStage:proposal.raceStage,distance:proposal.distance}));
+      changes.push({type:'goal',id:g.id,title:g.title});
+    }
     else if(change.type==='feature'){const f=addFeature(draft,r.clientId,change.title,change.kind||'Сейчас',r.id);if(f)changes.push({type:'feature',id:f.id,title:f.text});}
     else throw Error('Неизвестная операция агента');
   }

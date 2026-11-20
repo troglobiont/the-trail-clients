@@ -48,14 +48,14 @@ export function createAthleteUI({state,ui,el,append,button,row,text,section,navi
   function summary(c){
     if(!c.athlete)return null;
     const primary=state().goals[c.athlete.goalId],lt1=athleteMetric(c,'lt1'),lt2=athleteMetric(c,'lthr'),rest=athleteMetric(c,'restHr'),zones=athleteZones(c);
-    const out=append(el('section',null,'panel athlete-summary stack'),el('h2','Спортсмен'));
+    const out=el('div',null,'stack');
     const goals=Object.values(state().goals).filter(g=>g.clientId===c.id&&!g.deletedAt),goal=primary&&!primary.deletedAt?primary:goals[0];
     if(goal)out.append(button(goal.title,()=>navigate('#client/'+c.id+'/goal/'+goal.id),'athlete-goal'));
     else out.append(text('Цель пока не сформулирована'));
     const other=goals.filter(g=>g.id!==goal?.id);
     if(other.length)out.append(button('Другие цели · '+other.length,()=>navigate('#client/'+c.id+'/goal/'+other[0].id),'subtle'));
     const metrics=el('div',null,'athlete-metrics');
-    for(const [entry,label] of [[lt1,'LT1 / АэП'],[lt2,'LT2 / ПАНО']]){
+    for(const [entry,label] of [[rest,'RHR'],[lt1,'LT1 / АэП'],[lt2,'LT2 / ПАНО']]){
       const item=entry?button('',()=>openEntry(c,entry.id),'athlete-metric'):el('div',null,'athlete-metric');
       append(item,text(label),el('strong',entry?number(entry.value):'—'));
       metrics.append(item);
@@ -67,9 +67,11 @@ export function createAthleteUI({state,ui,el,append,button,row,text,section,navi
         el('span',name==='Z0'?'≤'+max:name==='Z5'?'≥'+min:min+'–'+max)));
       out.append(scale);
     }
-    if(rest)out.append(append(button('',()=>openEntry(c,rest.id),'athlete-rest'),el('span','RHR'),el('strong',number(rest.value)),el('span','›','muted')));
     if(renderRestrictions)out.append(renderRestrictions(c));
-    return out;
+    const key=c.id+'-athlete-summary';
+    ui.athleteSummarySeen??=new Set();
+    if(!ui.athleteSummarySeen.has(c.id)){ui.athleteSummarySeen.add(c.id);ui.open.add(key);}
+    const fold=section('Спортсмен',key,[out]);fold.classList.add('panel','athlete-summary');return fold;
   }
   function entryRow(c,entry){
     const item=append(button('',()=>openEntry(c,entry.id),'account-line account-link athlete-row'),

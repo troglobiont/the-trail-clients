@@ -1,5 +1,6 @@
 import * as C from './core.js';
 import {inlineSelect} from './inline-select.js';
+import {bodyMass} from './body-mass.js';
 import { GOAL_TYPES, RACE_STAGES, REQUIRED_PROFILE_FIELDS, goalType, instagramProfileLink, normalizeClientCity, profileTelegramUsername, raceById, raceCatalog, raceCategory, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
 
 export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard,openAthleteEntry}) {
@@ -119,13 +120,18 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
   }
   function training(c) {
     const out=[],data=c.training||{};
+    const bmi=bodyMass(c,C.localDate());
+    const body=[...trainingFields.filter(([key])=>['height','weight'].includes(key)).map(([key,label])=>
+      append(el('div',null,'detail-line'),text(label),el('strong',data[key]!=null?String(data[key]):'Не указан'))),
+      append(el('div',null,'detail-line'),text('ИМТ'),el('strong',bmi?bmi.value.toLocaleString('ru-RU',{maximumFractionDigits:1})+' кг/м²':'—')),
+      bmi&&text(bmi.label,'bmi-status '+bmi.tone),
+      text(bmi?.adult?'Обычный диапазон для взрослых: 18,5–24,9. ИМТ не учитывает соотношение мышц и жира.':'ИМТ рассчитывается по росту и весу.'),
+      button('Изменить рост и вес',()=>editTraining(c),'subtle')];
+    out.push(section('ИМТ',c.id+'-bmi',body));
     if(c.athlete){
-      for(const [key,label] of trainingFields.filter(([key])=>['height','weight'].includes(key)))if(data[key]!=null)
-        out.push(append(el('div',null,'detail-line'),text(label),el('div',String(data[key]))));
-      out.push(button('Рост и вес',()=>editTraining(c),'subtle'));
       return out;
     }
-    for(const [key,label] of trainingFields) if(data[key]!=null)out.push(append(el('div',null,'detail-line'),text(label),el('div',String(data[key]))));
+    for(const [key,label] of trainingFields.filter(([key])=>!['height','weight'].includes(key))) if(data[key]!=null)out.push(append(el('div',null,'detail-line'),text(label),el('div',String(data[key]))));
     const metadata=[trainingStatuses.find(([k])=>k===data.status)?.[1],data.date&&formatDate(data.date),data.source].filter(Boolean);
     if(metadata.length)out.push(text(metadata.join(' · ')));
     out.push(button('Изменить данные',()=>editTraining(c),'subtle'),el('h3','Зоны бега'));
@@ -209,9 +215,9 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       }),'subtle')
     ];
   }
-  function editGoal(goal) {
-    modal('Редактировать цель',form=>{
-      const title=input('text',goal.title),status=select(C.GOAL_STATUSES,goal.status);
+  function editGoal(goal,onSave,onSaved) {
+    modal(onSave?'Новая цель':'Редактировать цель',form=>{
+      const title=input('text',goal.title),status=inlineSelect(document,C.GOAL_STATUSES.map(value=>[value,value]),goal.status,'Статус цели');
       title.maxLength=500;
       const type=inlineSelect(document,[['','Без типа'],...Object.entries(GOAL_TYPES)],goalType(goal.type)||'','Тип цели');
       const stage=select(Object.entries(RACE_STAGES),goal.raceStage||'choosing');
@@ -220,14 +226,19 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       const name=input('text','','Название старта'),date=input('date'),place=input('text');name.maxLength=120;place.maxLength=160;
       const newRace=section('Добавить новый старт',goal.id+'-new-race',[field('Название',name),field('Дата старта',date),field('Место',place)]);
       const raceFields=append(el('div',null,'stack'),field('Этап',stage),field('Старт',race),field('Дистанция',distance),newRace);
+      const raceDate=text('');raceFields.append(raceDate);
+      function showDate(){const selected=raceById(state(),race.value);raceDate.textContent=selected?'Дата: '+formatDate(selected.date)+' · '+(selected.place||''):'';}
+      race.addEventListener('change',showDate);showDate();
       function refresh(){raceFields.hidden=type.value!=='race';}
       type.element.addEventListener('change',refresh);refresh();
-      append(form,field('Цель',title),field('Статус',status),type.field,raceFields);
+      append(form,goal.notice&&text(goal.notice),field('Цель',title),status.field,type.field,raceFields);
       return ()=>commit(s=>{
         const raceId=type.value==='race'&&(name.value.trim()||date.value)?C.defineRace(s,{name:name.value,date:date.value,place:place.value}).id:race.value;
-        C.editGoal(s,goal.id,title.value,status.value,{type:type.value,raceStage:stage.value,raceId,distance:distance.value});
+        const values={goalTitle:title.value,goalStatus:status.value,goalType:type.value,raceStage:stage.value,raceId,distance:distance.value};
+        if(onSave)onSave(s,values);
+        else C.editGoal(s,goal.id,title.value,status.value,{type:type.value,raceStage:stage.value,raceId,distance:distance.value});
       });
-    });
+    },{onSaved});
   }
   function goalRow(g) {
     const race=g.raceId&&raceById(state(),g.raceId);
@@ -407,5 +418,5 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       append(el('div',null,'race-filter-box'),quick,append(el('div',null,'race-filter-head'),secondary,yearMenu)),view,list);
     setView();refresh();return page;
   }
-  return {profile,profileEditor,training,journal,telegramOptions,goals,races};
+  return {profile,profileEditor,training,journal,telegramOptions,goals,races,reviewGoal:(c,proposal,onSave,onSaved)=>editGoal({...proposal,clientId:c.id,id:'new-'+c.id},onSave,onSaved)};
 }

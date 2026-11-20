@@ -456,3 +456,10 @@ button.athlete-row{position:relative;padding-inline-end:15px;color:var(--text);f
 .race-note{overflow-wrap:anywhere}
 .account-currency-line{display:block}
 .money-amount{white-space:nowrap;overflow-wrap:normal;word-break:normal}
+
+.athlete-metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.athlete-summary>summary{padding:0;font-size:16px;font-weight:650}
+.athlete-summary>.fold-body{padding-top:12px}
+.bmi-status.normal{color:var(--success,#377354)}
+.bmi-status.attention{color:var(--warning,#936620)}
+.client-training>.fold-body>.fold{background:var(--soft);border-top:0;border-radius:9px;padding-inline:10px}

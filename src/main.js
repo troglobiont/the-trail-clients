@@ -21,6 +21,7 @@ import {syncIndicatorState,cloudIcon,settingsWheel} from './sync-indicator.js';
 import {createAdminUI} from './admin-ui.js';
 import {createAthleteUI} from './athlete-ui.js';
 import {inlineSelect} from './inline-select.js';
+import {goalProposal} from './goal-record.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,cloud,cloudReady,noticeTimer,draftTimer,localSaves=0,localSaveError=false,headerBound=false;
@@ -104,6 +105,7 @@ function modal(title,build,{saveLabel='Сохранить',saveClass='primary',c
   append(form,error,controls);dialog.append(form);
   if(dialog.open)(form.querySelector('[autofocus]')||form.querySelector('select,input,button'))?.focus();
   else dialog.showModal();
+  dialog.scrollTop=0;
 }
 
 const cloudLabels={working:'Синхронизация…',synced:'Синхронизировано',pending:'Ждёт синхронизации',conflict:'Нужно выбрать версию',error:'Ждёт синхронизации'};
@@ -744,7 +746,7 @@ function renderFeatures(client,{embedded=false}={}) {
     return append(el('div',null,'stack athlete-restrictions'),
       append(el('div',null,'row between feature-heading'),el('h3','Ограничения:'),button('+ Добавить',()=>editFeature(client.id),'subtle')),
       ...active.map(feature=>{
-        const item=button(feature.text,()=>editFeature(client.id,feature),'athlete-restriction');
+        const item=button(feature.text,()=>navigate('#client/'+client.id+'/restriction/'+feature.id),'athlete-restriction');
         item.id='feature-'+feature.id;return item;
       }),extra&&text(extra),!active.length&&!extra&&text('Не зафиксированы'));
   }
@@ -812,6 +814,22 @@ function renderHistory(c) {
   return history.children.length?history:text('Записей пока нет');
 }
 
+function contactSummary(c){
+  const activity=pingActivity(c);
+  if(!activity)return 'Контакт в приложении не отмечен';
+  return activity.kind==='telegram-opened'?'Переписка открыта: '+formatDate(activity.at,true):'Последний контакт: '+formatDate(activity.at,!c.lastContact.dateOnly)+' · '+c.lastContact.channel;
+}
+function restrictionCard(c,id){
+  const feature=c.features.find(item=>item.id===id),back=button('← К спортсмену',()=>navigate('#client/'+c.id),'back subtle');
+  if(!feature)return append(el('div',null,'stack-lg'),back,text('Ограничение не найдено'));
+  return append(el('div',null,'stack-lg'),back,text(c.name),el('h1','Ограничение'),el('div',feature.text),
+    text(feature.kind||'Сейчас'),feature.active===false&&text('Уже не актуально'),
+    button('Изменить',()=>editFeature(c.id,feature),'subtle'),
+    button(feature.active===false?'Вернуть в актуальные':'Уже не актуально',async()=>{
+      await commit(s=>C.setFeatureActive(s,c.id,id,feature.active===false));
+      if(feature.active!==false)navigate('#client/'+c.id);
+    },'subtle'));
+}
 function renderClient(clientId,targetType,targetId){
   const c=state().clients[clientId];
   if(!c||c.mergedInto){navigate('#clients');return el('div');}
@@ -821,7 +839,7 @@ function renderClient(clientId,targetType,targetId){
   page.append(button(backLabel,()=>navigate(ui.returnTo),'back subtle'));
   const header=el('header',null,'stack client-header');
   append(header,append(el('div',null,'page-title'),el('h1',c.name),button('Изменить',()=>editClient(c.id),'subtle')),chips(c),
-    text(c.lastContact?'Последний контакт: '+formatDate(c.lastContact.at,!c.lastContact.dateOnly)+' · '+c.lastContact.channel:'Последний контакт пока не указан'));
+    text(contactSummary(c)));
   const followUp=pauseDetails(c);
   append(page,header,followUp);
   if(c.athlete)page.append(athleteUI.summary(c));
@@ -864,7 +882,7 @@ function renderClient(clientId,targetType,targetId){
   return page;
 }
 function eventLabel(type){return ({'birthday-greeted':'День рождения · поздравил','pause-contact-completed':'Связь после паузы отмечена','telegram-opened':'Открыта переписка в Telegram','profile-edited':'Обновлены сведения о клиенте','training-edited':'Обновлены тренировочные данные','record-created':'Запись Сергея','goal-created':'Цель добавлена','goal-edited':'Цель изменена','goal-deleted':'Цель удалена','goal-restored':'Цель восстановлена','task-created':'Задача создана','task-edited':'Задача изменена','telegram-linked':'Переписка привязана','telegram-unlinked':'Переписка отвязана','task-closed':'Задача закрыта','task-reopened':'Задача возвращена','outbound':'Исходящее сообщение','task-scheduled':'Разговор назначен','client-edited':'Данные клиента изменены','client-created':'Клиент добавлен','client-movement':'Статус сотрудничества изменён','feature-created':'Особенность добавлена','feature-edited':'Особенность изменена','feature-archived':'Особенность снята с актуального','feature-restored':'Особенность снова актуальна','contact':'Контакт с клиентом','source-note':'Сведения от Сергея'})[type]||'Изменение';}
-function getDraft(clientId){return ui.drafts[clientId]||(ui.drafts[clientId]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'});}
+function getDraft(clientId){return ui.drafts[clientId]||(ui.drafts[clientId]={text:'',kind:'record',needsReply:false,due:'',goalStatus:''});}
 function saveDraftSoon(){clearTimeout(draftTimer);draftTimer=setTimeout(()=>run(()=>saveDrafts()),500);}
 async function saveDrafts(){clearTimeout(draftTimer);if(!store)return;await commit(s=>{s.settings.drafts=C.clone(ui.drafts);},false);}
 function compose(c){
@@ -878,11 +896,11 @@ function compose(c){
   due.addEventListener('change',()=>{d.due=due.value;saveDraftSoon();});
   reply.addEventListener('change',()=>{d.needsReply=reply.checked;saveDraftSoon();});
   append(taskFields,field('Когда сделать · можно оставить пустым',due),append(el('label',null,'checkbox'),reply,el('span','Нужен ответ клиента · проверять через '+state().settings.waitDays+' дн. после сообщения')));
-  const status=select(C.GOAL_STATUSES,d.goalStatus||'Желание клиента');
-  status.addEventListener('change',()=>{d.goalStatus=status.value;saveDraftSoon();});
-  const type=inlineSelect(document,[['','Без типа'],...Object.entries(GOAL_TYPES)],d.goalType||'','Тип цели');
+  const status=inlineSelect(document,[['','Определить по записи'],...C.GOAL_STATUSES.map(value=>[value,value])],d.goalStatus||'','Статус цели');
+  status.element.addEventListener('change',()=>{d.goalStatus=status.value;saveDraftSoon();});
+  const type=inlineSelect(document,[['','Определить по записи'],...Object.entries(GOAL_TYPES)],d.goalType||'','Тип цели');
   type.element.addEventListener('change',()=>{d.goalType=type.value;saveDraftSoon();});
-  const goalField=append(el('div',null,'stack'),field('Статус цели',status),type.field);goalField.id='goal-status-field';goalField.hidden=d.kind!=='goal';
+  const goalField=append(el('div',null,'stack'),status.field,type.field);goalField.id='goal-status-field';goalField.hidden=d.kind!=='goal';
   for(const [kind,label] of [['record','Без пометки'],['task','Задача'],['goal','Цель']]){
     const b=button(label,()=>{d.kind=kind;modes.querySelectorAll('button').forEach(item=>item.setAttribute('aria-pressed',String(item===b)));taskFields.hidden=kind!=='task';goalField.hidden=kind!=='goal';updateAction();saveDraftSoon();});
     b.dataset.kind=kind;b.setAttribute('aria-pressed',String(d.kind===kind));modes.append(b);
@@ -902,7 +920,7 @@ function compose(c){
     send.classList.toggle('recording',!!recording);
     send.classList.toggle('processing',!!(submitting||recognizing||starting||saving));
     hint.classList.toggle('recording-status',!!recording);
-    send.textContent=submitting?'Обрабатываю запись…':starting?'Подключаю микрофон…':saving?'Сохраняю аудио…':recognizing?'Распознаю голос…':recording?'Остановить и распознать':pending?'Распознать сохранённую запись':d.text.trim()?(state().settings.serviceURL&&!state().settings.agentEnabled?'Включить агента и обработать':state().settings.serviceURL?'Передать запись в чат':d.kind==='task'?'Создать задачу':d.kind==='goal'?'Добавить цель':'Сохранить запись'):(microphoneLabel||(state().settings.serviceURL&&!state().settings.agentEnabled?'Включить агента и надиктовать':'Надиктовать запись'));
+    send.textContent=submitting?'Обрабатываю запись…':starting?'Подключаю микрофон…':saving?'Сохраняю аудио…':recognizing?'Распознаю голос…':recording?'Остановить и распознать':pending?'Распознать сохранённую запись':d.text.trim()?'Обработать запись':(microphoneLabel||(state().settings.serviceURL&&!state().settings.agentEnabled?'Включить агента и надиктовать':'Надиктовать запись'));
     hint.textContent=recognizing?'Расшифровываю голос на Mac…':recording?'Идёт запись. Говори, затем нажми «Остановить и распознать».':pending?'Аудио сохранено на устройстве. Нажми кнопку для повторной расшифровки.':otherRecording?'Сначала останови запись в карточке другого клиента.':d.text.trim()?'Проверь текст. Кнопка передаст его на обработку.':permission?.settingsRequired?'Android больше не показывает запрос. Кнопка откроет настройки THE.TRAIL Clients: Разрешения → Микрофон.':microphoneLabel?'Нажми кнопку и разреши микрофон в системном окне Android. После разрешения начнётся запись.':'Текст вводить не нужно: нажми кнопку ниже и говори.';
     extra.hidden=!d.text.trim()||!!recording||pending||recognizing||starting||saving;extra.disabled=submitting;
     localSave.hidden=!d.text.trim()||state().settings.agentEnabled||!state().settings.serviceURL||!!recording||pending||recognizing||starting||saving;localSave.disabled=submitting;
@@ -910,7 +928,7 @@ function compose(c){
   }
   note.addEventListener('input',()=>{d.text=note.value;d.pendingRecordId=null;updateAction();saveDraftSoon();});
   append(form,modes,note,taskFields,goalField,hint,send,extra,localSave);
-  if(!state().settings.serviceURL)form.append(text('Для диктовки подключи Mac в настройках. Текст можно сохранить на устройстве.'));
+  if(!state().settings.serviceURL)form.append(text('Для диктовки подключи Mac в настройках. Текст и подбор старта из каталога работают на устройстве.'));
   else if(!state().settings.agentEnabled)form.append(text('AI-разбор включится при нажатии кнопки после проверки подключения.'));
   if(ui.recordResults[c.id])form.append(text(ui.recordResults[c.id],'record-result'));
   form.addEventListener('submit',e=>{e.preventDefault();run(async()=>{
@@ -918,7 +936,7 @@ function compose(c){
     if(ui.pendingVoice?.clientId===c.id){await transcribeVoice(ui.pendingVoice);return;}
     if(ui.recorder||!d.text.trim()){await recordVoice(c.id);return;}
     submitting=true;updateAction();
-    try{if(state().settings.serviceURL&&!state().settings.agentEnabled)await ensureAgent(false);await submitRecord(c,d);}
+    try{if(d.kind!=='goal'&&state().settings.serviceURL&&!state().settings.agentEnabled)await ensureAgent(false);await submitRecord(c,d);}
     finally{if(send.isConnected){submitting=false;updateAction();}}
   });});
   updateAction();return form;
@@ -935,7 +953,47 @@ function agentClient(c){
   const keys=['id','name','role','status','format','currentFormat','basis','group','personal','level','features','rules','context'];
   return Object.fromEntries(keys.map(key=>[key,c[key]]));
 }
-async function submitRecord(c,d){const data={...d};const pending=state().records[d.pendingRecordId];const record=pending&&pending.text===data.text.trim()&&pending.kind===data.kind?pending:await commit(s=>C.saveRecord(s,c.id,data.text,data.kind),false);d.pendingRecordId=record.id;await saveDrafts();let result;if(state().settings.serviceURL&&state().settings.agentEnabled){try{const response=await service('/records/parse',{client:agentClient(state().clients[c.id]),goals:Object.values(state().goals).filter(g=>g.clientId===c.id&&!g.deletedAt),openTasks:C.clientTasks(state(),c.id).filter(t=>!t.pauseContact),record,timezone:C.TIMEZONE,waitDays:state().settings.waitDays,needsReply:data.needsReply});if(response.question){ui.recordResults[c.id]='Нужно уточнить: '+response.question;render();return;}result=await commit(s=>C.applyAgentResult(s,record.id,response,{goalType:data.goalType}),false);}catch(e){ui.recordResults[c.id]='Запись сохранена. Обработка не завершена: '+e.message;render();return;}}else result=await commit(s=>C.processManualRecord(s,record.id,{due:data.due||null,needsReply:data.needsReply,goalStatus:data.goalStatus,goalType:data.goalType}),false);ui.recordResults[c.id]=result.changes.length?result.changes.map(x=>(x.type==='task'?'Задача: ':x.type==='goal'?'Цель: ':'Особенность: ')+x.title).join('\n'):result.mode==='agent'?'Запись сохранена. Агент не выделил задач, целей или особенностей.':'Запись сохранена в истории';ui.drafts[c.id]={text:'',kind:'record',needsReply:false,due:'',goalStatus:'Желание клиента'};await saveDrafts();render();}
+async function submitRecord(c,d){
+  const data={...d},pending=state().records[d.pendingRecordId];
+  const record=pending&&pending.text===data.text.trim()&&pending.kind===data.kind?pending:await commit(s=>C.saveRecord(s,c.id,data.text,data.kind),false);
+  d.pendingRecordId=record.id;await saveDrafts();
+  const finish=async result=>{
+    ui.recordResults[c.id]=result.changes.length?result.changes.map(x=>(x.type==='task'?'Задача: ':x.type==='goal'?'Цель: ':'Особенность: ')+x.title).join('\n')
+      :result.mode==='agent'?'Запись сохранена. Агент не выделил задач, целей или особенностей.':'Запись сохранена в истории';
+    ui.drafts[c.id]={text:'',kind:'record',needsReply:false,due:'',goalStatus:''};await saveDrafts();render();
+  };
+  if(data.kind==='goal'){
+    if(record.status==='processed'){await finish(record.result);return;}
+    let proposal=goalProposal(state(),data.text,data);
+    // A dedicated goal entry always creates a new goal. Existing goals are deliberately
+    // excluded from extraction, and only the reviewed fields are committed below.
+    if(!proposal.matched&&state().settings.serviceURL&&state().settings.agentEnabled){
+      try{
+        const response=await service('/records/parse',{client:agentClient(state().clients[c.id]),goals:[],openTasks:[],record,
+          timezone:C.TIMEZONE,waitDays:state().settings.waitDays,needsReply:false,goalIntent:'create'});
+        const goals=response.changes?.filter(change=>change.type==='goal');
+        if(goals?.length===1&&!goals[0].id){
+          const parsed=goals[0];
+          proposal=goalProposal(state(),parsed.title,{goalType:data.goalType||parsed.goalType,goalStatus:data.goalStatus||parsed.status});
+        }
+        if(response.question)proposal.notice=response.question;
+      }catch(e){proposal.notice=[proposal.notice,'AI недоступен: '+e.message+'. Проверь поля цели ниже.'].filter(Boolean).join(' ');}
+    }
+    let saved;
+    detailsUI.reviewGoal(c,proposal,(s,values)=>{saved=C.processManualRecord(s,record.id,values);},()=>{void finish(saved);});
+    return;
+  }
+  let result;
+  if(state().settings.serviceURL&&state().settings.agentEnabled){
+    try{
+      const response=await service('/records/parse',{client:agentClient(state().clients[c.id]),goals:Object.values(state().goals).filter(g=>g.clientId===c.id&&!g.deletedAt),
+        openTasks:C.clientTasks(state(),c.id).filter(t=>!t.pauseContact),record,timezone:C.TIMEZONE,waitDays:state().settings.waitDays,needsReply:data.needsReply});
+      if(response.question){ui.recordResults[c.id]='Нужно уточнить: '+response.question;render();return;}
+      result=await commit(s=>C.applyAgentResult(s,record.id,response),false);
+    }catch(e){ui.recordResults[c.id]='Запись сохранена. Обработка не завершена: '+e.message;render();return;}
+  }else result=await commit(s=>C.processManualRecord(s,record.id,{due:data.due||null,needsReply:data.needsReply}),false);
+  await finish(result);
+}
 const assistantKey='__assistant__';
 function assistantAmount(value) {
   const explicit=value.match(/(\d{1,3}(?:[ \u00a0\u202f]\d{3})+|\d+)(?:[,.](\d{1,2}))?\s*(тысяч\p{L}*|[кk](?!\p{L}))?\s*(RSD|RUB|EUR|USD|динар\p{L}*|дин|рубл\p{L}*|руб|евро|доллар\p{L}*|₽|€|[$])/iu);
@@ -1386,7 +1444,8 @@ function render(){
     const [,id,type,target]=hash.split('/');
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
     const client=state().clients[id];
-    if(type==='training'&&target&&client?.athlete&&!client.mergedInto)root.append(athleteUI.entry(client,target));
+    if(type==='restriction'&&target&&client?.athlete&&!client.mergedInto)root.append(restrictionCard(client,target));
+    else if(type==='training'&&target&&client?.athlete&&!client.mergedInto)root.append(athleteUI.entry(client,target));
     else {
       if(type==='training')ui.open.add(id+'-zones');
       root.append(renderClient(id,type,target));
