@@ -20,6 +20,7 @@ import {partnerTasks} from './partners.js';
 import {syncIndicatorState,cloudIcon,settingsWheel} from './sync-indicator.js';
 import {createAdminUI} from './admin-ui.js';
 import {createAthleteUI} from './athlete-ui.js';
+import {inlineSelect} from './inline-select.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,cloud,cloudReady,noticeTimer,draftTimer,localSaves=0,localSaveError=false,headerBound=false;
@@ -87,7 +88,8 @@ const calendarUI=createCalendarUI({state,service,el,append,button,row,field,inpu
 const partnersUI=createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message,
   openList:()=>{ui.open.add('admin-partners');navigate('#admin');}});
 const adminUI=createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,render,formatDate,partnersUI});
-const athleteUI=createAthleteUI({state,ui,el,append,button,row,text,section,navigate,render});
+const athleteUI=createAthleteUI({state,ui,el,append,button,row,text,section,navigate,render,
+  renderRestrictions:c=>renderFeatures(c,{embedded:true})});
 function modal(title,build,{saveLabel='Сохранить',saveClass='primary',cancelLabel='Отмена',onSaved}={}){
   dialog.textContent='';
   const form=el('form'),heading=el('h2',title),error=text('','form-error');
@@ -705,7 +707,8 @@ function task(t){
   return wrap;
 }
 function editFeature(clientId, feature) {
-  modal(feature ? 'Изменить особенность' : 'Добавить особенность', form => {
+  const restriction=!!state().clients[clientId]?.athlete;
+  modal(feature ? restriction?'Изменить ограничение':'Изменить особенность' : restriction?'Добавить ограничение':'Добавить особенность', form => {
     const note = el('textarea');
     note.value = feature?.text ?? '';
     note.rows = 5;
@@ -713,6 +716,9 @@ function editFeature(clientId, feature) {
     if (feature?.kind && !kinds.includes(feature.kind)) kinds.push(feature.kind);
     const kind = select(kinds, feature?.kind || kinds[0]);
     append(form, field('Суть', note), field('Когда учитывать', kind));
+    if(restriction&&feature)form.append(button('Уже не актуально',async()=>{
+      await commit(s=>C.setFeatureActive(s,clientId,feature.id,false));dialog.close();
+    },'subtle danger'));
     return () => commit(s => feature
       ? C.editFeature(s, clientId, feature.id, note.value, kind.value)
       : C.addFeature(s, clientId, note.value, kind.value));
@@ -730,8 +736,18 @@ function featureRow(clientId,feature) {
       button('Уже не актуально',()=>commit(s=>C.setFeatureActive(s,clientId,feature.id,false)),'subtle')));
 }
 
-function renderFeatures(client) {
+function renderFeatures(client,{embedded=false}={}) {
   const active=client.features.filter(f=>f.active!==false);
+  if(embedded){
+    const reported=client.athlete?.restrictions;
+    const extra=reported?.status==='reported'&&reported.text&&!active.some(f=>f.text===reported.text)?reported.text:null;
+    return append(el('div',null,'stack athlete-restrictions'),
+      append(el('div',null,'row between feature-heading'),el('h3','Ограничения:'),button('+ Добавить',()=>editFeature(client.id),'subtle')),
+      ...active.map(feature=>{
+        const item=button(feature.text,()=>editFeature(client.id,feature),'athlete-restriction');
+        item.id='feature-'+feature.id;return item;
+      }),extra&&text(extra),!active.length&&!extra&&text('Не зафиксированы'));
+  }
   return append(el('section',null,'stack feature-section'),
     append(el('div',null,'row between feature-heading'),el('h2','Особенности','block-heading'),
       button('+ Добавить',()=>editFeature(client.id),'feature-add')),
@@ -813,15 +829,16 @@ function renderClient(clientId,targetType,targetId){
   const tasks=[...C.clientTasks(state(),clientId),...Array.from(ui.recentlyCompleted,id=>state().tasks[id])
     .filter(t=>t?.clientId===clientId&&t.phase==='done')];
   if(tasks.length)page.append(append(el('section',null,'panel action-panel'),el('h2','Действия по клиенту','block-heading'),...tasks.map(task)));
-  page.append(renderFeatures(c));
+  if(!c.athlete)page.append(renderFeatures(c));
   if(c.role==='Клиент')page.append(accountingUI.clientPanel(c));
   const reference=el('div',null,'reference-sections');
   const telegram=section('Сообщения в Telegram',c.id+'-telegram',[telegramPanel(c)]);
   telegram.id='telegram-client-panel';telegram.tabIndex=-1;
   const profile=section('О клиенте',c.id+'-profile',detailsUI.profile(c));
   profile.id='profile-client-panel';profile.tabIndex=-1;
-  reference.append(telegram,profile,detailsUI.journal(c),section('Тренировочные данные · пульсовые зоны',c.id+'-zones',
-    c.athlete?[athleteUI.details(c),...detailsUI.training(c)]:detailsUI.training(c)));
+  const training=section('Тренировочные данные',c.id+'-zones',c.athlete?[athleteUI.details(c),...detailsUI.training(c)]:detailsUI.training(c));
+  training.id='training-client-panel';training.tabIndex=-1;training.classList.add('client-training');
+  reference.append(telegram,profile,detailsUI.journal(c),training);
   reference.append(detailsUI.goals(c,()=>{
     const draft=getDraft(c.id);draft.kind='goal';
     const form=document.getElementById('compose');
@@ -840,7 +857,9 @@ function renderClient(clientId,targetType,targetId){
     if(targetType==='goal'){
       ui.open.add(c.id+'-goals');
     }
-    focusCard(targetType,targetId);
+    if(targetType==='training'&&ui.athleteReturnEntry){
+      const entry=ui.athleteReturnEntry;delete ui.athleteReturnEntry;focusCard('athlete-row',entry);
+    }else focusCard(targetType,targetId);
   }
   return page;
 }
@@ -861,9 +880,9 @@ function compose(c){
   append(taskFields,field('Когда сделать · можно оставить пустым',due),append(el('label',null,'checkbox'),reply,el('span','Нужен ответ клиента · проверять через '+state().settings.waitDays+' дн. после сообщения')));
   const status=select(C.GOAL_STATUSES,d.goalStatus||'Желание клиента');
   status.addEventListener('change',()=>{d.goalStatus=status.value;saveDraftSoon();});
-  const type=select([['','Без типа'],...Object.entries(GOAL_TYPES)],d.goalType||'');
-  type.addEventListener('change',()=>{d.goalType=type.value;saveDraftSoon();});
-  const goalField=append(el('div',null,'stack'),field('Статус цели',status),field('Тип цели',type));goalField.id='goal-status-field';goalField.hidden=d.kind!=='goal';
+  const type=inlineSelect(document,[['','Без типа'],...Object.entries(GOAL_TYPES)],d.goalType||'','Тип цели');
+  type.element.addEventListener('change',()=>{d.goalType=type.value;saveDraftSoon();});
+  const goalField=append(el('div',null,'stack'),field('Статус цели',status),type.field);goalField.id='goal-status-field';goalField.hidden=d.kind!=='goal';
   for(const [kind,label] of [['record','Без пометки'],['task','Задача'],['goal','Цель']]){
     const b=button(label,()=>{d.kind=kind;modes.querySelectorAll('button').forEach(item=>item.setAttribute('aria-pressed',String(item===b)));taskFields.hidden=kind!=='task';goalField.hidden=kind!=='goal';updateAction();saveDraftSoon();});
     b.dataset.kind=kind;b.setAttribute('aria-pressed',String(d.kind===kind));modes.append(b);
@@ -1366,7 +1385,12 @@ function render(){
   if(hash.startsWith('#client/')){
     const [,id,type,target]=hash.split('/');
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
-    root.append(renderClient(id,type,target));
+    const client=state().clients[id];
+    if(type==='training'&&target&&client?.athlete&&!client.mergedInto)root.append(athleteUI.entry(client,target));
+    else {
+      if(type==='training')ui.open.add(id+'-zones');
+      root.append(renderClient(id,type,target));
+    }
   }else if(birthdayRoute(hash))root.append(renderTodo('birthdays'));
   else if(hash==='#todo/payments')root.append(renderTodo('payments'));
   else if(hash===scheduleRoute)root.append(renderTodo('schedule'));

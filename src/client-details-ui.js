@@ -1,4 +1,5 @@
 import * as C from './core.js';
+import {inlineSelect} from './inline-select.js';
 import { GOAL_TYPES, RACE_STAGES, REQUIRED_PROFILE_FIELDS, goalType, instagramProfileLink, normalizeClientCity, profileTelegramUsername, raceById, raceCatalog, raceCategory, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
 
 export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard,openAthleteEntry}) {
@@ -212,7 +213,7 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     modal('Редактировать цель',form=>{
       const title=input('text',goal.title),status=select(C.GOAL_STATUSES,goal.status);
       title.maxLength=500;
-      const type=select([['','Без типа'],...Object.entries(GOAL_TYPES)],goalType(goal.type)||'');
+      const type=inlineSelect(document,[['','Без типа'],...Object.entries(GOAL_TYPES)],goalType(goal.type)||'','Тип цели');
       const stage=select(Object.entries(RACE_STAGES),goal.raceStage||'choosing');
       const race=select([['','Не выбран'],...raceCatalog(state(),{includeRecommended:true}).map(r=>[r.id,r.name+' · '+r.date])],raceById(state(),goal.raceId)?.id||'');
       const distance=input('text',goal.distance||'','Например, 10 км');distance.maxLength=45;
@@ -220,8 +221,8 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       const newRace=section('Добавить новый старт',goal.id+'-new-race',[field('Название',name),field('Дата старта',date),field('Место',place)]);
       const raceFields=append(el('div',null,'stack'),field('Этап',stage),field('Старт',race),field('Дистанция',distance),newRace);
       function refresh(){raceFields.hidden=type.value!=='race';}
-      type.addEventListener('change',refresh);refresh();
-      append(form,field('Цель',title),field('Статус',status),field('Тип',type),raceFields);
+      type.element.addEventListener('change',refresh);refresh();
+      append(form,field('Цель',title),field('Статус',status),type.field,raceFields);
       return ()=>commit(s=>{
         const raceId=type.value==='race'&&(name.value.trim()||date.value)?C.defineRace(s,{name:name.value,date:date.value,place:place.value}).id:race.value;
         C.editGoal(s,goal.id,title.value,status.value,{type:type.value,raceStage:stage.value,raceId,distance:distance.value});

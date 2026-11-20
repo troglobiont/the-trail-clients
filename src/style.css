@@ -317,6 +317,31 @@ input.account-month{width:auto;max-width:100%}
 .athlete-entry .chip{font-size:11px}
 .athlete-links{gap:3px}.athlete-links button,.athlete-journal-link{text-align:left;min-height:36px}
 .athlete-zone-table{display:grid;gap:4px}
+.athlete-summary button.athlete-zone-scale{width:100%;padding:0;min-height:0;border:0;border-radius:0;color:var(--text)}
+.athlete-rest{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;text-align:left;padding:6px 0;border-radius:0;color:var(--text)}
+.athlete-restrictions{gap:6px;border-top:1px solid var(--line);padding-top:6px}
+.athlete-restrictions .feature-heading{gap:6px;flex-wrap:nowrap}
+.athlete-restrictions .feature-heading button{padding-inline:0;white-space:nowrap}
+.athlete-restriction{text-align:left;font-size:14px;padding:7px 14px 7px 0;border-bottom:1px solid var(--line);border-radius:0;color:var(--text);position:relative}
+.athlete-restriction::after,.athlete-row::after{content:"›";position:absolute;right:2px;top:50%;transform:translateY(-50%);color:var(--muted)}
+.client-training>.fold-body{margin:0 0 10px 7px;padding:0 0 8px 12px;border-left:2px solid var(--line)}
+.athlete-data{gap:10px}
+.athlete-data>.fold{border-top:0;background:var(--soft);border-radius:9px;padding:0 10px}
+.athlete-data>.fold>summary{padding-block:9px;font-size:.9rem}
+.athlete-data>.fold>.fold-body{padding-bottom:8px}
+button.athlete-row{position:relative;padding-inline-end:15px;color:var(--text);font-weight:400}
+.athlete-row .account-label>span{font-weight:550}
+.athlete-row .account-value{font-size:13px;white-space:normal;max-width:120px;text-align:right}
+.athlete-detail-value{font-size:32px;line-height:1.2}
+.athlete-entry-page{gap:18px}
+.athlete-entry-page h1{font-size:27px}
+.athlete-related{gap:0}
+.athlete-related h2{margin-bottom:6px}
+.inline-select>summary{min-height:44px;padding:9px 30px 9px 12px;font-weight:500}
+.inline-select-field{display:grid;gap:5px;font-size:14px;font-weight:500;color:var(--muted)}
+.inline-select[open]>summary{margin-bottom:5px}
+.inline-select-options{max-height:min(240px,40vh);overscroll-behavior:contain}
+.inline-select-options button[aria-selected=true]{background:var(--soft);font-weight:650}
 .team-list{display:grid}
 .team-tile{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 12px;text-align:left;width:100%;padding:12px 4px;border-radius:0}
 .team-tile+.team-tile{border-top:1px solid var(--line)}
