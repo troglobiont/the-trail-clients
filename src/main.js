@@ -19,6 +19,7 @@ import {createPartnersUI} from './partners-ui.js';
 import {partnerTasks} from './partners.js';
 import {syncIndicatorState,cloudIcon,settingsWheel} from './sync-indicator.js';
 import {createAdminUI} from './admin-ui.js';
+import {createAthleteUI} from './athlete-ui.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,cloud,cloudReady,noticeTimer,draftTimer,localSaves=0,localSaveError=false,headerBound=false;
@@ -65,7 +66,8 @@ function formatDate(iso,withTime=false){if(!iso)return '';return new Intl.DateTi
 function section(title,key,children){const d=el('details',null,'fold'),summary=el('summary',title);d.open=ui.open.has(key);d.addEventListener('toggle',()=>{if(d.open)ui.open.add(key);else ui.open.delete(key);});append(d,summary,append(el('div',null,'fold-body stack'),...children));return d;}
 function navigate(hash){location.hash=hash;}
 function openClient(clientId,type,target){ui.returnTo=location.hash.startsWith('#client/')?ui.returnTo:location.hash||'#todo';navigate('#client/'+clientId+(type?'/'+type+(target?'/'+target:''):''));}
-const detailsUI=createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard});
+const detailsUI=createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard,
+  openAthleteEntry:(c,id)=>athleteUI.openEntry(c,id)});
 const accountingUI=createAccountingUI({state,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,navigate,message,importLedger:()=>importDatabase(true),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   activateClient:(s,id,day)=>C.editClient(s,id,{status:'Активный',engagement:null,pause:null},day),
@@ -85,6 +87,7 @@ const calendarUI=createCalendarUI({state,service,el,append,button,row,field,inpu
 const partnersUI=createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message,
   openList:()=>{ui.open.add('admin-partners');navigate('#admin');}});
 const adminUI=createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,render,formatDate,partnersUI});
+const athleteUI=createAthleteUI({state,ui,el,append,button,row,text,section,navigate,render});
 function modal(title,build,{saveLabel='Сохранить',saveClass='primary',cancelLabel='Отмена',onSaved}={}){
   dialog.textContent='';
   const form=el('form'),heading=el('h2',title),error=text('','form-error');
@@ -805,6 +808,7 @@ function renderClient(clientId,targetType,targetId){
     text(c.lastContact?'Последний контакт: '+formatDate(c.lastContact.at,!c.lastContact.dateOnly)+' · '+c.lastContact.channel:'Последний контакт пока не указан'));
   const followUp=pauseDetails(c);
   append(page,header,followUp);
+  if(c.athlete)page.append(athleteUI.summary(c));
   if(c.role==='Тренер')page.append(button('Работа и выплаты',()=>navigate('#admin/team/'+c.id),'subtle'));
   const tasks=[...C.clientTasks(state(),clientId),...Array.from(ui.recentlyCompleted,id=>state().tasks[id])
     .filter(t=>t?.clientId===clientId&&t.phase==='done')];
@@ -816,7 +820,8 @@ function renderClient(clientId,targetType,targetId){
   telegram.id='telegram-client-panel';telegram.tabIndex=-1;
   const profile=section('О клиенте',c.id+'-profile',detailsUI.profile(c));
   profile.id='profile-client-panel';profile.tabIndex=-1;
-  reference.append(telegram,profile,detailsUI.journal(c),section('Тренировочные данные · пульсовые зоны',c.id+'-zones',detailsUI.training(c)));
+  reference.append(telegram,profile,detailsUI.journal(c),section('Тренировочные данные · пульсовые зоны',c.id+'-zones',
+    c.athlete?[athleteUI.details(c),...detailsUI.training(c)]:detailsUI.training(c)));
   reference.append(detailsUI.goals(c,()=>{
     const draft=getDraft(c.id);draft.kind='goal';
     const form=document.getElementById('compose');

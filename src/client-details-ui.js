@@ -1,7 +1,7 @@
 import * as C from './core.js';
 import { GOAL_TYPES, RACE_STAGES, REQUIRED_PROFILE_FIELDS, goalType, instagramProfileLink, normalizeClientCity, profileTelegramUsername, raceById, raceCatalog, raceCategory, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
 
-export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard}) {
+export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard,openAthleteEntry}) {
   const trainingFields = [
     ['height','Рост, см',30,300,.1],['weight','Вес, кг',10,500,.1],['maxHr','Максимальный пульс',30,250,1],
     ['restHr','Пульс в покое',20,160,1],['lthr','Рабочий LTHR',30,250,1]
@@ -106,17 +106,24 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
   function editTraining(c) {
     modal('Тренировочные данные',form=>{
       const data=c.training||{}, values={};
-      for(const [key,label,min,max,step] of trainingFields){
+      for(const [key,label,min,max,step] of trainingFields.filter(([key])=>!c.athlete||['height','weight'].includes(key))){
         const control=input('number',data[key]??'');control.min=min;control.max=max;control.step=step;
         form.append(field(label,control));values[key]=control;
       }
       const date=input('date',data.date||''),status=select(trainingStatuses,data.status||''),source=input('text',data.source||'','Например, тест 30 минут');source.maxLength=180;
-      append(form,field('Дата измерения',date),field('Статус LTHR',status),field('Источник',source));
-      return ()=>commit(s=>C.saveTraining(s,c.id,{...Object.fromEntries(Object.entries(values).map(([k,v])=>[k,v.value])),date:date.value,status:status.value,source:source.value}));
+      if(!c.athlete)append(form,field('Дата измерения',date),field('Статус LTHR',status),field('Источник',source));
+      return ()=>commit(s=>C.saveTraining(s,c.id,{...Object.fromEntries(Object.entries(values).map(([k,v])=>[k,v.value])),
+        ...(!c.athlete&&{date:date.value,status:status.value,source:source.value})}));
     });
   }
   function training(c) {
     const out=[],data=c.training||{};
+    if(c.athlete){
+      for(const [key,label] of trainingFields.filter(([key])=>['height','weight'].includes(key)))if(data[key]!=null)
+        out.push(append(el('div',null,'detail-line'),text(label),el('div',String(data[key]))));
+      out.push(button('Рост и вес',()=>editTraining(c),'subtle'));
+      return out;
+    }
     for(const [key,label] of trainingFields) if(data[key]!=null)out.push(append(el('div',null,'detail-line'),text(label),el('div',String(data[key]))));
     const metadata=[trainingStatuses.find(([k])=>k===data.status)?.[1],data.date&&formatDate(data.date),data.source].filter(Boolean);
     if(metadata.length)out.push(text(metadata.join(' · ')));
@@ -169,6 +176,7 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
         : button(t.title,()=>focusCard('task',t.id),'subtle journal-task'));
       return append(el('article',null,'journal-entry stack'),row(text(formatDate(entry.day)+' '+entry.day.slice(0,4)),status&&el('span',status,'chip')),
         el('h3',entry.title),el('div',entry.text,'feature-copy'),
+        ...(entry.athleteRefs||[]).map(id=>button(state().clients[c.id].athlete.entries[id].title,()=>openAthleteEntry(c,id),'subtle athlete-journal-link')),
         linked.length&&append(el('div',null,'stack'),text('Задачи'),...linked),
         row(button('Изменить',()=>editJournal(c,entry),'subtle'),button('+ Задача',()=>addJournalTask(c,entry),'subtle')));
     });

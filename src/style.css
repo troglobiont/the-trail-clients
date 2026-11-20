@@ -301,6 +301,22 @@ input.account-month{width:auto;max-width:100%}
 }
 
 .header-controls{display:flex;align-items:center;gap:6px;flex:none;text-align:right}
+.athlete-summary{gap:10px;padding:14px}
+.athlete-summary h2{font-size:16px}
+.athlete-goal{padding:0;text-align:left;font-size:16px;line-height:1.4;font-weight:650;min-height:0;border-radius:0}
+.athlete-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.athlete-metric{display:grid;align-content:start;gap:2px;text-align:left;padding:8px 0;border-radius:0}
+.athlete-metric strong{font-size:26px;line-height:1.1}
+.athlete-metric .small:last-child{font-size:11px}
+.athlete-zone-scale{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:3px}
+.athlete-zone{display:grid;gap:3px;border-top:4px solid var(--line);padding:4px 0;font-size:11px;text-align:center}
+.athlete-zone span{font-size:10px;white-space:nowrap}
+.athlete-zone:nth-child(2){border-color:#609397}.athlete-zone:nth-child(3){border-color:#5f9271}
+.athlete-zone:nth-child(4){border-color:#b79553}.athlete-zone:nth-child(5){border-color:#b47663}.athlete-zone:nth-child(6){border-color:#936f8d}
+.athlete-entry{padding:12px 0;border-bottom:1px solid var(--line)}
+.athlete-entry .chip{font-size:11px}
+.athlete-links{gap:3px}.athlete-links button,.athlete-journal-link{text-align:left;min-height:36px}
+.athlete-zone-table{display:grid;gap:4px}
 .team-list{display:grid}
 .team-tile{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 12px;text-align:left;width:100%;padding:12px 4px;border-radius:0}
 .team-tile+.team-tile{border-top:1px solid var(--line)}

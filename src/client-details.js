@@ -115,18 +115,19 @@ export function telegramReminders(state, today = localDate()) {
 }
 
 export function setTraining(client, values) {
-  const data = {};
+  const data = {...client.training};
   const limits = { height:[30,300], weight:[10,500], maxHr:[30,250], restHr:[20,160], lthr:[30,250] };
   for (const [key,[min,max]] of Object.entries(limits)) {
-    if (values[key] === '' || values[key] == null) continue;
+    if (!Object.hasOwn(values,key)) continue;
+    if (values[key] === '' || values[key] == null) {delete data[key];continue;}
     const value = Number(values[key]);
     if (!Number.isFinite(value) || value < min || value > max || (key.endsWith('Hr') || key === 'lthr') && !Number.isInteger(value)) throw Error('Проверь числовые данные тренировки');
     data[key] = value;
   }
   if (values.date && !validDate(values.date)) throw Error('Проверь дату');
-  if (values.date) data.date = values.date;
-  if (values.status) data.status = values.status;
-  if (values.source) data.source = String(values.source).trim().slice(0,180);
+  for(const key of ['date','status','source'])if(Object.hasOwn(values,key)){
+    if(values[key])data[key]=String(values[key]).trim().slice(0,180);else delete data[key];
+  }
   client.training = data;
 }
 
