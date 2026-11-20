@@ -17,9 +17,10 @@ import {createCalendarUI,isSchedulingTask} from './calendar-ui.js';
 import {todoPeriodEntries} from './todo-period.js';
 import {createPartnersUI} from './partners-ui.js';
 import {partnerTasks} from './partners.js';
+import {syncIndicatorState,cloudIcon,settingsWheel} from './sync-indicator.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
-let store,updater,cloud,cloudReady,noticeTimer,draftTimer;
+let store,updater,cloud,cloudReady,noticeTimer,draftTimer,localSaves=0,localSaveError=false,headerBound=false;
 const catalogViews = { active:'Клиенты', occasional:'Разовые', paused:'На паузе', archive:'Архив', team:'Команда', pending:'До старта' };
 const planBasisLabel = basis => basis === 'С нуля' ? 'Вне когорты' : basis;
 const planBasisOptions = C.BASES.map(basis=>[basis,planBasisLabel(basis)]);
@@ -40,7 +41,13 @@ function message(value,error=false,action=null){
   notice.hidden=false;noticeTimer=setTimeout(()=>{notice.hidden=true;},action||error?9000:4500);
 }
 async function run(fn){try{await fn();}catch(e){message(e.message||'Операция не выполнена',true);}}
-async function commit(fn,redraw=true){document.getElementById('save-status').textContent='Сохраняю…';try{const value=await store.mutate(fn);renderCloudStatus();if(redraw)render();return value;}catch(e){document.getElementById('save-status').textContent='Не сохранено';throw e;}}
+async function commit(fn,redraw=true){
+  if(!localSaves)localSaveError=false;
+  localSaves++;renderCloudStatus();
+  try{const value=await store.mutate(fn);if(redraw)render();return value;}
+  catch(e){localSaveError=true;throw e;}
+  finally{localSaves--;renderCloudStatus();}
+}
 function row(...items){return append(el('div',null,'row'),...items);}
 function text(text,className='muted small'){return el('div',text,className);}
 function field(label,input){return append(el('label',label),input);}
@@ -93,10 +100,44 @@ function modal(title,build,{saveLabel='Сохранить',saveClass='primary',c
 
 const cloudLabels={working:'Синхронизация…',synced:'Синхронизировано',pending:'Ждёт синхронизации',conflict:'Нужно выбрать версию',error:'Ждёт синхронизации'};
 function renderCloudStatus(){
+  if(!store)return;
   const view=cloud?.state();
   const pending=state().cloudSync&&Object.keys(state().cloudSync.pending).length;
-  document.getElementById('save-status').textContent=pending&&view?.status==='synced'?'Ждёт синхронизации':cloudLabels[view?.status]||'На устройстве';
+  const indicator=syncIndicatorState({view,pending,online:navigator.onLine,saving:localSaves>0,saveError:localSaveError});
+  const control=document.getElementById('sync-now'),status=document.getElementById('save-status'),icon=document.getElementById('sync-icon');
+  const checked=view?.checkedAt||state().cloudSync?.syncedAt;
+  const hint=[indicator.label,indicator.detail,checked&&'Последняя проверка: '+formatDate(checked,true),indicator.action].filter(Boolean).join('. ');
+  control.dataset.status=indicator.status;control.disabled=indicator.disabled;control.title=hint;control.setAttribute('aria-label',hint);
+  if(status.textContent!==indicator.label)status.textContent=indicator.label;
+  if(icon.dataset.icon!==indicator.icon){icon.dataset.icon=indicator.icon;icon.replaceChildren(cloudIcon(document,indicator.icon));}
   renderCloudPanel();
+}
+function openCloudSettings(){
+  ui.open.add('settings-cloud');
+  ui.focusCloudPanel=true;
+  if(location.hash==='#settings')render();else navigate('#settings');
+}
+async function syncFromHeader(){
+  if(localSaveError){message('Предыдущее изменение не сохранено. Повтори его ввод.',true);return;}
+  const view=cloud?.state();
+  if(!cloud||view.status==='disconnected'){openCloudSettings();return;}
+  if(view.status==='conflict'){cloudConflict();return;}
+  await cloud.sync();
+  const result=cloud.state();
+  if(result.status==='conflict')cloudConflict();
+  else if(result.status==='error'||result.status==='disconnected')message(result.error||'Синхронизация недоступна',true,
+    {label:'Подробнее',run:openCloudSettings});
+  else if(result.status==='synced')message('Всё синхронизировано');
+  else message('Изменения ждут синхронизации');
+}
+function bindHeaderControls(){
+  if(headerBound)return;
+  document.querySelector('.gear-link').replaceChildren(settingsWheel(document));
+  document.getElementById('sync-icon').replaceChildren(cloudIcon(document));
+  document.getElementById('sync-now').addEventListener('click',()=>run(syncFromHeader));
+  window.addEventListener('offline',renderCloudStatus);
+  window.addEventListener('online',renderCloudStatus);
+  headerBound=true;
 }
 function cloudLogin(){
   modal('Подключить синхронизацию',form=>{
@@ -141,6 +182,8 @@ function renderCloudPanel(){
     return;
   }
   append(panel,text(view.email),el('p',cloudLabels[view.status]),view.error&&text(view.error,'warning-text small'));
+  if(view.checkedAt)panel.append(text('Последняя проверка: '+formatDate(view.checkedAt,true)));
+  if(!navigator.onLine)panel.append(text('Нет сети. Изменения сохраняются на устройстве.','warning-text small'));
   const syncNow=view.status==='conflict'?button('Выбрать версию',cloudConflict):button('Синхронизировать сейчас',()=>cloud.sync());
   syncNow.disabled=view.status==='working';
   append(panel,row(syncNow,button('Выйти из облака',()=>cloud.disconnect(),'subtle')));
@@ -1329,7 +1372,10 @@ function render(){
   else if(hash==='#partners')root.append(partnersUI.page());
   else if(hash.startsWith('#partners/')){const [,id,,taskId]=hash.split('/');root.append(partnersUI.card(id,taskId));}
   else if(hash==='#assistant')root.append(renderAssistant());
-  else if(hash==='#settings'){root.append(renderSettings());renderUpdate();renderCloudPanel();}
+  else if(hash==='#settings'){
+    root.append(renderSettings());renderUpdate();renderCloudPanel();
+    if(ui.focusCloudPanel){ui.focusCloudPanel=false;queueMicrotask(()=>document.getElementById('cloud-panel')?.closest('details')?.scrollIntoView({block:'start'}));}
+  }
   else root.append(renderTodo());
 }
 async function migrateSavedServiceOrigin() {
@@ -1345,6 +1391,7 @@ async function migrateSavedServiceOrigin() {
 async function start(){
   const bridge=window.TrailNative;
   try{
+    bindHeaderControls();
     store=await createStore(bridge?.native?bridge.adapter:browserAdapter());
     if(bridge?.native)await migrateSavedServiceOrigin();
     applyAppearance();
@@ -1367,7 +1414,7 @@ async function start(){
     document.addEventListener('visibilitychange',()=>{if(document.hidden)run(()=>saveDrafts());});
     startCloud();
     render();
-    document.getElementById('save-status').textContent='На устройстве';
+    renderCloudStatus();
     if(await bridge?.ready(VERSION))message('Обновлено до '+VERSION);
     if(bridge?.native){
       void refreshMicrophonePermission().then(()=>{

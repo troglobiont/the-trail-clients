@@ -5,7 +5,8 @@ const editCloud = { trackCloud: false };
 export function createCloudSync({ store, api, vault, onChange = () => {}, onReceive = () => {} }) {
   let session = null, running = null, refreshing = null, timer = null, view = { status: 'disconnected', conflicts: [], revision: null };
   const emit = (status, fields = {}) => {
-    view = { status, conflicts: [], revision: null, email: session?.email || '', ...fields };
+    view = { status, conflicts: [], revision: null, email: session?.email || '',
+      checkedAt:status==='synced'?new Date().toISOString():view.checkedAt||meta()?.syncedAt||null,...fields };
     onChange(view);
   };
   const meta = () => store.state().cloudSync;

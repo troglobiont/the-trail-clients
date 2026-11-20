@@ -13,7 +13,7 @@
   <script src="./app.js" defer></script>
 </head>
 <body>
-  <header class="app-header"><div class="app-brand"><a class="gear-link logo-settings" href="#settings" aria-label="Настройки" title="Настройки"><span class="brand-mark"><img src="./icon.png" width="34" height="34" alt=""></span></a><div class="brand-caption"><span class="brand">THE.TRAIL</span><span class="brand-sub">Клиенты</span></div></div><div class="header-controls"><span id="save-status" class="muted small" role="status">Загрузка…</span></div></header>
+  <header class="app-header"><div class="app-brand"><span class="brand-mark"><img src="./icon.png" width="34" height="34" alt=""></span><div class="brand-caption"><span class="brand">THE.TRAIL</span><span class="brand-sub">Клиенты</span></div></div><div class="header-controls"><button id="sync-now" class="sync-indicator" type="button" aria-label="Загрузка синхронизации" disabled><span id="sync-icon" aria-hidden="true"></span><span id="save-status" class="sr-only" role="status">Загрузка…</span></button><a class="gear-link" href="#settings" aria-label="Настройки" title="Настройки"></a></div></header>
   <main id="app" aria-live="polite"><div class="empty"><h1>Открываю базу…</h1></div></main>
   <nav class="app-nav" aria-label="Основные разделы"><a href="#todo">ToDo</a><a href="#clients">Клиенты</a><a href="#account">Учёт</a><a href="#races">Старты</a><a href="#partners" aria-label="Партнёры" title="Партнёры">Партн.</a></nav>
   <div id="notice" class="notice" role="status" hidden></div>

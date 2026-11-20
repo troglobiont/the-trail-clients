@@ -47,6 +47,21 @@ function fixture() {
     change:(bucket,id,change)=>{Object.assign(data[bucket][id],change);revision++;}};
 }
 
+test('a successful check without changes records its time while a failed check preserves the last success',async()=>{
+  const f=fixture(),store=await createStore(f.adapter),cloud=createCloudSync({store,api:f.api,vault:f.vault});
+  await cloud.connect('owner@example.test','password');
+  assert.equal(cloud.state().status,'synced');
+  assert.ok(Number.isFinite(Date.parse(cloud.state().checkedAt)));
+  await cloud.sync();
+  const checkedAt=cloud.state().checkedAt;
+  f.offline(true);await cloud.sync();
+  assert.equal(cloud.state().status,'error');
+  assert.equal(cloud.state().checkedAt,checkedAt);
+  f.offline(false);await cloud.sync();
+  assert.equal(cloud.state().status,'synced');
+  await cloud.disconnect();
+});
+
 test('first sync includes existing cards and later uploads only changed records; drafts and tokens stay local',async()=>{
   const f=fixture();
   const store=await createStore(f.adapter);
