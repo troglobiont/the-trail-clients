@@ -333,5 +333,11 @@ export function applyAgentResult(s,recordId,result,{goalType,goalStatus}={}){
   record.status='processed';record.result={mode:'agent',changes,summary:String(result.summary||'').slice(0,1000)};validateState(draft);Object.assign(s,draft);return record.result;
 }
 export function parseImport(text){if(typeof text!=='string'||text.length>8*1024*1024)throw Error('Файл слишком большой');const raw=JSON.parse(text);if(raw?.format!=='the-trail-clients-backup'||raw.schemaVersion!==SCHEMA||!raw.state)throw Error('Это не файл базы THE.TRAIL Clients');delete raw.state.cloudSync;return validateState(raw.state);}
-export function exportState(s){validateState(s);const {cloudSync,...backup}=s;return JSON.stringify({format:'the-trail-clients-backup',schemaVersion:SCHEMA,exportedAt:stamp(),state:backup},null,2);}
+export function exportState(s){
+  validateState(s);
+  const {cloudSync,settings,...backup}=s;
+  const {garminCache,...backupSettings}=settings;
+  return JSON.stringify({format:'the-trail-clients-backup',schemaVersion:SCHEMA,exportedAt:stamp(),
+    state:{...backup,settings:backupSettings}},null,2);
+}
 export function mergeState(current,incoming){validateState(incoming);const next=clone(current);for(const name of ['clients','goals','tasks','records'])for(const [key,value] of Object.entries(incoming[name]))if(!next[name][key])next[name][key]=clone(value);for(const name of ['partners','partnerTasks'])for(const [key,value] of Object.entries(incoming[name]||{})){next[name]??={};if(!next[name][key])next[name][key]=clone(value);}const events=new Set(next.events.map(e=>e.id));for(const e of incoming.events)if(!events.has(e.id)){next.events.push(clone(e));events.add(e.id);}next.events.sort((a,b)=>a.at.localeCompare(b.at));mergeAccounting(next,incoming);if(!next.ledger&&incoming.ledger)next.ledger=clone(incoming.ledger);return validateState(next);}

@@ -24,6 +24,7 @@ import {createAthleteUI} from './athlete-ui.js';
 import {createSportLogUI} from './sport-log-ui.js';
 import {inlineSelect} from './inline-select.js';
 import {goalProposal} from './goal-record.js';
+import {garminSnapshot,mergeGarminSnapshot} from './garmin-data.js';
 import {assignedCoach,coachContact,hasFinance,isAthlete,isOwnerPerson,isPaymentText,OWNER_COACH,previewAthlete,
   previewAthletes,previewCoaches,previewRoute,previewTaskVisible,ROLES} from './role-preview.js';
 const VERSION=__APP_VERSION__;
@@ -97,8 +98,8 @@ const calendarUI=createCalendarUI({state,service,roleContext,el,append,button,ro
 const partnersUI=createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message,
   openList:()=>{ui.open.add('admin-partners');navigate('#admin');}});
 const adminUI=createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,render,formatDate,partnersUI});
-const logUI=createSportLogUI({el,append,button,row,text,section,modal,commit,input,select,field,navigate,formatDate});
-const athleteUI=createAthleteUI({ui,el,append,button,text,section,navigate,logUI,
+const logUI=createSportLogUI({el,append,button,row,text,section,modal,commit,input,select,field,navigate,formatDate,garminData});
+const athleteUI=createAthleteUI({ui,el,append,button,text,section,navigate,logUI,garminData,
   renderRestrictions:c=>renderFeatures(c,{embedded:true})});
 function modal(title,build,{saveLabel='Сохранить',saveClass='primary',cancelLabel='Отмена',onSaved}={}){
   dialog.textContent='';
@@ -258,13 +259,108 @@ function startCloud(){
   cloud=createCloudSync({store,api:createCloudAPI({...cloudConfig,request:options=>bridge.cloudRequest(options)}),
     vault:{load:()=>bridge.getSecret('cloudSession'),save:value=>bridge.setSecret('cloudSession',value)},
     onChange:renderCloudStatus,onReceive:render});
-  const retry=async()=>{await cloud.sync();await calendarUI.preload();};
+  const retry=async()=>{void checkGarminConnection?.();void refreshGarmin(garminRouteClient());await cloud.sync();await calendarUI.preload();};
   window.addEventListener('online',retry);
   window.addEventListener('trail-app-active',retry);
   setInterval(()=>{if(!document.hidden)retry();},45000);
   renderCloudStatus();
   cloudReady=cloud.restore();
   run(async()=>{await cloudReady;await calendarUI.preload();});
+}
+let garminFlight,garminAttempt,garminIssue,checkGarminConnection;
+function garminData(client){
+  const cache=state().settings.garminCache,owner=state().cloudSync?.owner;
+  if(!owner||cache?.owner!==owner||cache.snapshot?.clientId!==client?.id)return null;
+  try{
+    const value=garminSnapshot(cache.snapshot,client.id);
+    if(!value.activities||Object.values(value.measures).some(value=>value===null))return null;
+    const missing=Array.isArray(cache.snapshot.missing)?cache.snapshot.missing.filter(value=>
+      ['Тренировки','Сон','Ночная HRV','Пульс покоя'].includes(value)):[];
+    return {...value,missing};
+  }catch{return null;}
+}
+function garminRouteClient(hash=location.hash){
+  if(hash.startsWith('#client/'))return state().clients[hash.split('/')[1]];
+  if(isAthlete(ui.role)&&['#profile','#admin'].includes(hash))return ownAthlete();
+  return null;
+}
+function refreshGarmin(client,manual=false){
+  if(client?.role!=='Клиент'||client.mergedInto||!isOwnerPerson(client))return;
+  if(garminFlight)return garminFlight;
+  const cache=garminData(client);
+  const attempted=garminAttempt?.clientId===client.id?garminAttempt.at:0;
+  if(!manual&&(!cloud||Date.now()-attempted<5*60000||cache&&Date.now()-Date.parse(cache.asOf)<5*60000))return;
+  garminAttempt={clientId:client.id,at:Date.now()};
+  garminFlight=(async()=>{
+    try{
+      await cloudReady;
+      const owner=state().cloudSync?.owner;
+      if(!cloud||!owner)throw Error('Войди в облако The.Trail, чтобы обновлять Garmin.');
+      const snapshot=garminSnapshot(await cloud.garmin(client.id),client.id);
+      await store.mutate(s=>{
+        if(s.cloudSync?.owner!==owner||s.clients[client.id]?.role!=='Клиент'||s.clients[client.id].mergedInto)return;
+        const previous=garminData(client);
+        s.settings.garminCache={owner,snapshot:mergeGarminSnapshot(previous,snapshot)};
+      },{trackCloud:false});
+      garminIssue=null;
+    }catch(error){garminIssue={clientId:client.id,message:error.message||'Не удалось обновить Garmin'};}
+  })().finally(()=>{
+    garminFlight=null;
+    if(garminRouteClient()?.id===client.id&&!dialog.open&&!document.activeElement?.matches('input,textarea,select'))render();
+  });
+  return garminFlight;
+}
+function garminPanel(client){
+  const data=garminData(client),issue=garminIssue?.clientId===client.id?garminIssue.message:null;
+  const status=text('');
+  status.setAttribute('role','status');
+  async function connection(action){
+    await cloudReady;
+    if(!cloud||!state().cloudSync?.owner)throw Error('Войди в облако The.Trail для подключения Garmin.');
+    return cloud.garminConnection(client.id,action);
+  }
+  const connect=button('Подключить Garmin',async()=>{
+    status.textContent='Открываю Garmin Connect…';
+    try{
+      const result=await connection('start');
+      if(result.status==='unavailable')throw Error('Подключение Garmin Connect пока недоступно.');
+      const url=new URL(result.url);
+      if(result.status!=='authorizing'||url.origin!=='https://connect.garmin.com'||url.pathname!=='/oauth2Confirm'||
+        url.username||url.password||url.hash||!url.searchParams.has('state'))throw Error('Не удалось открыть Garmin Connect.');
+      status.textContent='Подтверди доступ в Garmin Connect и вернись в приложение.';
+      window.location.assign(url.href);
+    }catch(error){status.textContent=error.message;}
+  },'primary');
+  checkGarminConnection=async()=>{
+    try{
+      const result=await connection('status');
+      if(result.status==='connected'){
+        status.textContent='Garmin Connect подключён.';
+        connect.textContent='Переподключить Garmin';
+      }else{
+        status.textContent=result.status==='ready'?'Подтверди доступ в Garmin Connect.':'Подключение Garmin Connect пока недоступно.';
+        connect.textContent='Подключить Garmin';
+      }
+    }catch(error){status.textContent=error.message;}
+  };
+  void checkGarminConnection();
+  return append(el('section',null,'panel stack'),el('h2','Garmin Connect'),status,connect,
+    data&&text(issue||'Последняя загрузка · '+formatDate(data.asOf,true)),
+    data?.missing.length&&text('Не обновились · '+data.missing.join(', '),'warning-text small'),
+    data&&row(button('Тренировки Garmin',()=>{
+      ui.open.add(client.id+'-garmin-activities');openClient(client.id,'load');
+    },'subtle'),button('Обновить Garmin',()=>refreshGarmin(client,true),'subtle')));
+}
+function athleteSourcesPage(client){
+  const calendar=append(el('section',null,'panel stack'),el('h2','Google Календарь'),
+    text('Личный тренировочный календарь можно будет подключить позже.'));
+  const later=append(el('div',null,'stack'),
+    append(el('div',null,'row between'),el('strong','COROS'),text('Пока недоступно')),
+    append(el('div',null,'row between'),el('strong','Suunto'),text('Пока недоступно')),
+    append(el('div',null,'row between'),el('strong','Apple Watch'),text('Потребуется версия для iPhone')));
+  return append(el('div',null,'stack-lg athlete-sources'),
+    button('← К профилю',()=>navigate('#profile'),'back subtle'),
+    el('h1','Источники данных'),text(client.name),garminPanel(client),calendar,later);
 }
 function pauseEditor(client) {
   const group = select(Object.entries(C.PAUSE_GROUPS),C.pauseGroup(client ?? {}));
@@ -961,7 +1057,8 @@ function renderClient(clientId,targetType,targetId){
   if(!athlete||targetType)page.append(button(athlete?'← К ToDo':backLabel,()=>navigate(athlete?'#todo':ui.returnTo),'back subtle'));
   const header=el('header',null,'stack client-header');
   append(header,append(el('div',null,'page-title'),el('h1',c.name),hasFinance(ui.role)&&button('Изменить',()=>editClient(c.id),'subtle')),chips(c),
-    !athlete&&text(contactSummary(c)));
+    !athlete&&text(contactSummary(c)),
+    athlete&&isOwnerPerson(c)&&button('Источники данных',()=>openClient(c.id,'sources'),'back subtle'));
   const followUp=hasFinance(ui.role)&&pauseDetails(c);
   append(page,header,followUp);
   const sport=hasAthleteCard(c);
@@ -1621,6 +1718,7 @@ function renderSettings(){
 function renderUpdate(){const panel=document.getElementById('update-panel');if(!panel)return;panel.textContent='';const u=updater.state(),errors={save:'Не удалось сохранить базу перед обновлением. Повтори после освобождения места.', 'asset-id':'Не удалось прочитать ID архива обновления. Нужен исправленный APK.', 'rate-limit':'GitHub временно ограничил загрузку. Попробуй другую сеть или повтори позже.', forbidden:'GitHub отклонил загрузку. Проверь, открывается ли выпуск в браузере.',storage:'Недостаточно места для обновления. Освободи место и повтори.',timeout:'Сервер обновлений не ответил вовремя. Повтори загрузку.','download-timeout':'Android не закончил подготовку архива. Нажми «Обновить сейчас», чтобы продолжить.',apply:'Новая версия не открылась. Нажми «Обновить сейчас», чтобы повторить запуск.',tls:'Не удалось установить защищённое соединение с сервером обновлений.',native:'Обновление интерфейса доступно в установленном Android-приложении.',manifest:'Не удалось проверить сведения об обновлении. Текущая версия сохранена.','native-required':'Для этой версии нужен новый APK. Установи его поверх приложения.','github-auth':'GitHub отклонил запрос обновления. Проверь доступ к выпуску.','release-missing':'Готовый выпуск не найден или к нему временно нет доступа.',checksum:'Архив не прошёл проверку целостности. Текущая версия сохранена.',network:'Не удалось загрузить обновление. Проверь интернет и повтори.'},labels={idle:'Проверка по нажатию',checking:'Проверяю обновление…',current:'Установлена актуальная версия',available:'Доступна версия '+u.latest,downloading:u.step==='save'?'Сохраняю данные…':'Загружаю · '+Math.round(u.progress)+'%',applying:'Открываю новую версию…',error:errors[u.error]||'Обновление не выполнено'};append(panel,el('h2','Данные и обновления'),text('THE.TRAIL Clients · '+VERSION),text(labels[u.status],u.status==='error'?'danger-text small':'muted small'));if(u.status==='error')panel.append(text('Этап: '+({save:'сохранение базы',release:'проверка выпуска',compatibility:'совместимость APK',download:'получение архива',apply:'запуск обновления'}[u.step]||'проверка')+' · код '+u.error));const progress=el('progress');progress.max=100;progress.value=u.progress;progress.hidden=u.status!=='downloading'||u.step==='save';panel.append(progress);const update=button('Обновить сейчас',()=>updater.update(),'primary');update.disabled=['checking','downloading','applying'].includes(u.status);panel.append(update);panel.append(text('Обновление сохраняет базу и черновики. При неудачном запуске возвращается предыдущая рабочая версия. Новые системные возможности могут потребовать нового APK.'));}
 function render(){
   if(!store)return;
+  checkGarminConnection=null;
   applyAppearance();renderRoleSwitch();
   const raw=location.hash||'#todo',hash=previewRoute(raw,roleContext()),athlete=isAthlete(ui.role),person=athlete?ownAthlete():null;
   if(hash!==raw)history.replaceState(null,'',hash);
@@ -1637,7 +1735,11 @@ function render(){
     const [,id,type,target]=hash.split('/');
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
     const client=state().clients[id];
-    if(type==='restriction'&&target&&hasAthleteCard(client)&&!client.mergedInto)root.append(restrictionCard(client,target));
+    if(type==='sources'){
+      if(athlete&&person?.id===id&&isOwnerPerson(person))root.append(athleteSourcesPage(person));
+      else navigate(athlete?'#profile':'#client/'+id);
+    }
+    else if(type==='restriction'&&target&&hasAthleteCard(client)&&!client.mergedInto)root.append(restrictionCard(client,target));
     else if(type==='training'&&target&&client?.athlete&&!client.mergedInto)root.append(athleteUI.entry(client,target));
     else if(hasAthleteCard(client)&&!client.mergedInto&&['load','recovery'].includes(type))root.append(athleteUI.logPage(client,type));
     else if(hasAthleteCard(client)&&!client.mergedInto&&type==='metric'&&['restHr','lt1','lthr','zones'].includes(target))
@@ -1669,6 +1771,7 @@ function render(){
     if(ui.focusCloudPanel){ui.focusCloudPanel=false;queueMicrotask(()=>document.getElementById('cloud-panel')?.closest('details')?.scrollIntoView({block:'start'}));}
   }
   else root.append(renderTodo());
+  void refreshGarmin(garminRouteClient(hash));
 }
 async function migrateSavedServiceOrigin() {
   const saved=state().settings.serviceURL;

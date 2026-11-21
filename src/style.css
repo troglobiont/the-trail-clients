@@ -347,6 +347,7 @@ button.athlete-recovery-summary{grid-template-columns:minmax(0,1fr) auto;align-i
 .athlete-load-metric strong{font-size:19px}
 .athlete-log-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .athlete-log-fields input{min-width:0}
+.garmin-activity{gap:3px}
 .athlete-session-form{border-top:1px solid var(--line);padding-top:8px}
 .athlete-session-form>.subtle{justify-self:start}
 @media(max-width:360px){

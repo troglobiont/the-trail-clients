@@ -105,6 +105,8 @@ export function createCloudSync({ store, api, vault, onChange = () => {}, onRece
     state: () => view,
     sync,
     calendar: range => request(token=>api.calendar(range,token)),
+    garmin: clientId => request(token=>api.garmin(clientId,token)),
+    garminConnection: (clientId,action) => request(token=>api.garminConnection(clientId,action,token)),
     async restore() {
       const value = await vault.load();
       if (!value || !meta()) return;

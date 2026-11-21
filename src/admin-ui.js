@@ -10,15 +10,15 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
   function page({athlete=false,person}={}){
     const members=teamMembers(state());
     if(athlete){
-      const link=el('a','Синхронизация с Garmin','inline-link');
-      link.href='https://connect.garmin.com/modern/';link.target='_blank';link.rel='noopener noreferrer';
       const partners=Object.values(state().partners||{}).filter(partner=>!partner.archivedAt);
       return append(el('div',null,'stack-lg admin-page'),el('h1','Админ'),
         section('Партнёры','preview-athlete-partners',partners.length
           ?partners.map(partner=>el('div',partner.name)):[text('Партнёров пока нет.')]),
         section('Команда','preview-athlete-team',members.length
           ?members.map(member=>el('div',member.name+' · '+teamRole(member))):[text('Команда пока не добавлена.')]),
-        isOwnerPerson(person)&&section('Интеграции','preview-athlete-integrations',[link,text('Подключение появится после настройки входа спортсмена.')]));
+        isOwnerPerson(person)&&section('Интеграции','preview-athlete-integrations',[
+          button('Источники данных',()=>openClient(person.id,'sources'),'subtle')
+        ]));
     }
     const list=el('div',null,'team-list');
     for(const member of members)list.append(append(button('',()=>navigate('#admin/team/'+member.id),'team-tile'),

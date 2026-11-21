@@ -1,5 +1,6 @@
 import {athleteMetric,athleteZones,ATHLETE_METRICS,ATHLETE_STATUSES} from './athlete.js';
 import {localDate,validDate} from './model-utils.js';
+import {latestGarminPulse} from './garmin-data.js';
 
 const number=value=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(value);
 const fullDate=day=>day.split('-').reverse().join('.');
@@ -32,7 +33,7 @@ function shortValue(entry){
   if(entry.kind==='snapshot'&&entry.metrics?.lthr!=null)return number(entry.metrics.lthr)+' уд/мин';
   return '';
 }
-export function createAthleteUI({ui,el,append,button,text,section,navigate,renderRestrictions,logUI}){
+export function createAthleteUI({ui,el,append,button,text,section,navigate,renderRestrictions,logUI,garminData}){
   let trail=[],origin=null;
   const clientRoute=c=>'#client/'+c.id;
   const route=(c,id)=>'#client/'+c.id+'/training/'+id;
@@ -71,19 +72,21 @@ export function createAthleteUI({ui,el,append,button,text,section,navigate,rende
     const out=el('div',null,'stack');
     const metrics=el('div',null,'athlete-metrics');
     const today=localDate(),measuredRest=c.sportLog?.recovery?.[today]?.restingHeartRate;
+    const garminRest=latestGarminPulse(garminData(c),today);
     for(const [metric,label] of summaryMetrics){
       const entry=athleteMetric(c,metric);
       const sleepMinimum=metric==='restHr'&&entry?.status==='temporary'&&fromSleep(c,entry);
-      const currentRest=metric==='restHr'&&measuredRest!=null;
+      const sensorRest=metric==='restHr'&&garminRest&&(garminRest.day===today||measuredRest==null);
+      const currentRest=metric==='restHr'&&(measuredRest!=null||sensorRest);
       const fallback=c.athlete||metric==='lthr'&&c.training?.status==='candidate'?null:legacyValue(c,metric);
-      const value=currentRest?measuredRest:sleepMinimum?null:entry?.value??fallback;
+      const value=currentRest?(sensorRest?garminRest.value:measuredRest):sleepMinimum?null:entry?.value??fallback;
       const item=button('',()=>{
         if(currentRest)navigate(clientRoute(c)+'/recovery');
         else if(entry)openEntry(c,entry.id,'summary');
         else navigate(clientRoute(c)+'/metric/'+metric);
       },'athlete-metric');
-      const day=currentRest?today:entry?.day||c.training?.date;
-      const status=currentRest?'Замер':entry?.status==='historical'?'Тест':
+      const day=currentRest?(sensorRest?garminRest.day:today):entry?.day||c.training?.date;
+      const status=currentRest?(sensorRest?'Garmin':'Замер'):entry?.status==='historical'?'Тест':
         entry?.status==='working'||metric==='lthr'&&!entry&&c.training?.status==='working'?'Рабочий':'';
       const context=[validDate(day)&&fullDate(day),status].filter(Boolean).join(' · ');
       append(item,text(label),el('strong',value==null?'—':number(value)),value!=null&&context&&text(context));

@@ -1,5 +1,6 @@
 import {localDate,validDate} from './model-utils.js';
 import {dayLoad,hasDeviceReading,powerTss,recoveryIndex,RECOVERY_FIELDS,saveSportDay,sessionLoad,trainingLoad,TRAINING_TYPES} from './sport-log.js';
+import {garminRecovery} from './garmin-data.js';
 
 const formatNumber=new Intl.NumberFormat('ru-RU',{maximumFractionDigits:1});
 export const summaryNumber=value=>value==null?'—':formatNumber.format(value);
@@ -9,8 +10,12 @@ const loadMetrics=[['Недавняя','ATL','atl'],['Долгая','CTL','ctl']
 const sportNames=Object.fromEntries(TRAINING_TYPES);
 const sleepDuration=value=>Math.floor(value/60)+' ч '+value%60+' мин';
 const dailyRoute=(c,kind)=>'#client/'+c.id+'/'+kind;
+const garminDuration=seconds=>{
+  const minutes=Math.round(seconds/60);
+  return minutes>=60?Math.floor(minutes/60)+' ч '+minutes%60+' мин':minutes+' мин';
+};
 
-export function createSportLogUI({el,append,button,row,text,section,modal,commit,input,select,field,navigate,formatDate}){
+export function createSportLogUI({el,append,button,row,text,section,modal,commit,input,select,field,navigate,formatDate,garminData}){
   const line=(label,value)=>append(el('div',null,'detail-line'),text(label),el('strong',value));
   const sep=(label,value)=>append(el('span',null,'athlete-load-metric'),el('span',label,'muted small'),el('strong',value));
   function loadValues(log){
@@ -19,9 +24,9 @@ export function createSportLogUI({el,append,button,row,text,section,modal,commit
   }
   function summary(c){
     const load=trainingLoad(c.sportLog?.load);
-    const recovery=recoveryIndex(c.sportLog?.recovery);
+    const snapshot=garminData(c),recovery=recoveryIndex(garminRecovery(snapshot,c.sportLog?.recovery));
     const loadPanel=append(button('',()=>navigate(dailyRoute(c,'load')),'athlete-readout athlete-load-summary'),
-      el('strong',titles.load),loadValues(load));
+      el('strong',titles.load),loadValues(load),snapshot?.activities.length&&text('Garmin · последняя '+formatDate(snapshot.activities[0].day)));
     const recoveryPanel=append(button('',()=>navigate(dailyRoute(c,'recovery')),'athlete-readout athlete-recovery-summary'),
       el('strong',titles.recovery),el('span',recovery.value==null?'—':recovery.value+'/100','athlete-recovery-value'));
     return [loadPanel,recoveryPanel];
@@ -111,8 +116,28 @@ export function createSportLogUI({el,append,button,row,text,section,modal,commit
     });
   }
 
+  function garminActivities(c,snapshot){
+    const list=el('div',null,'stack');
+    const more=button('Показать ещё',()=>{limit+=12;draw();},'subtle');
+    let limit=12;
+    function draw(){
+      list.replaceChildren(...snapshot.activities.slice(0,limit).map(activity=>{
+        const {day,time,title,seconds,meters,averageHr,ascent}=activity;
+        return append(el('article',null,'account-line'),append(el('div',null,'stack garmin-activity'),
+          el('strong',title),text([formatDate(day),time,seconds&&garminDuration(seconds),meters&&summaryNumber(meters/1000)+' км',
+            averageHr&&'ЧСС '+summaryNumber(averageHr),ascent&&'↑ '+summaryNumber(ascent)+' м'].filter(Boolean).join(' · '))));
+      }));
+      more.hidden=limit>=snapshot.activities.length;
+    }
+    draw();
+    return section('Тренировки Garmin · '+snapshot.activities.length,c.id+'-garmin-activities',
+      [snapshot.activities.length?list:text('В этом периоде Garmin не передал тренировок.'),more,
+        text('Нагрузка ATL и CTL рассчитывается после записи усилия в журнал нагрузки.')]);
+  }
+
   function loadPage(c){
     const log=c.sportLog?.load||{},load=trainingLoad(log);
+    const snapshot=garminData(c);
     const history=Object.keys(log).sort().reverse().slice(0,14).map(day=>{
       const entry=log[day],total=entry.sessions.length?summaryNumber(dayLoad(entry))+' усл. ед.':'Отдых';
       const sessions=entry.sessions.map(session=>{
@@ -131,6 +156,7 @@ export function createSportLogUI({el,append,button,row,text,section,modal,commit
       append(el('div',null,'panel stack'),loadValues(load),text('Session-RPE · усл. ед.'),line('Сегодня',summaryNumber(load.today)),
         text(load.through?'Данные по '+formatDate(load.through)+' · '+load.streak+' дн. подряд':'Добавь выполненные тренировки и дни отдыха.')),
       button('+ Записать день',()=>editDay(c,'load'),'primary'),
+      snapshot&&garminActivities(c,snapshot),
       history.length&&section('История нагрузки',c.id+'-load-history',history),
       about
     ];
@@ -146,14 +172,14 @@ export function createSportLogUI({el,append,button,row,text,section,modal,commit
     ].filter(Boolean);
   }
   function recoveryPage(c,observations){
-    const today=localDate(),log=c.sportLog?.recovery||{},recovery=recoveryIndex(log,today);
+    const today=localDate(),manual=c.sportLog?.recovery||{},log=garminRecovery(garminData(c),manual),recovery=recoveryIndex(log,today);
     const history=Object.keys(log).filter(day=>day!==today).sort().reverse().slice(0,14).map(day=>
       section(formatDate(day),c.id+'-recovery-'+day,[...recoveryRows(log[day]),button('Изменить',()=>editDay(c,'recovery',day),'subtle')]));
     return [
       append(el('div',null,'panel stack'),el('strong',recovery.value==null?'—':recovery.value+'/100','athlete-detail-value'),
         recovery.value===null?text('Для оценки нужны наблюдения за сегодня и личная история хотя бы по двум группам.'):text(recovery.groups+' из 3 групп · 50 — привычный уровень'),
         ...(log[today]?recoveryRows(log[today],recovery.reference):[])),
-      button(log[today]?'Изменить наблюдение':'+ Добавить наблюдение',()=>editDay(c,'recovery'),'primary'),
+      button(manual[today]?'Изменить наблюдение':'+ Добавить наблюдение',()=>editDay(c,'recovery'),'primary'),
       history.length&&section('История наблюдений',c.id+'-recovery-history',history),
       observations.length&&section('Сохранённые наблюдения',c.id+'-athlete-recovery',observations),
       section('Как считается восстановление',c.id+'-recovery-method',[
