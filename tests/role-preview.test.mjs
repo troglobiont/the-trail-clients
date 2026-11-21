@@ -1,0 +1,64 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {askCoach,createClient,createTask,emptyState,exportState,parseImport,shareTaskWithAthlete} from '../src/core.js';
+import {assignedCoach,OWNER_COACH,previewAthlete,previewRoute,previewScheduleVisible,previewTaskVisible} from '../src/role-preview.js';
+
+function fixture(){
+  const state=emptyState();
+  const owner=createClient(state,{name:'Шелковой Сергей'});
+  const coach=createClient(state,{name:'Тестовый тренер',role:'Тренер'});
+  const athlete=createClient(state,{name:'Тестовый спортсмен',coachId:coach.id});
+  return {state,owner,coach,athlete};
+}
+
+test('role routes do not open hidden pages or another athlete card',()=>{
+  const {state,owner,athlete}=fixture();
+  assert.equal(previewAthlete(state).id,owner.id);
+  const personal={role:'athlete',athleteId:athlete.id};
+  assert.equal(previewRoute('#client/'+owner.id+'/training',personal),'#profile');
+  assert.equal(previewRoute('#client/'+athlete.id+'/load',personal),'#client/'+athlete.id+'/load');
+  assert.equal(previewRoute('#admin/team/somebody',personal),'#admin');
+  assert.equal(previewRoute('#partners/some-partner',personal),'#admin');
+  assert.equal(previewRoute('#settings',personal),'#todo');
+  assert.equal(previewRoute('#account',{role:'coach'}),'#todo');
+  assert.equal(previewRoute('#todo/payments',{role:'coach'}),'#todo');
+  assert.equal(previewRoute('#races',{role:'accountant'}),'#todo');
+  assert.equal(previewRoute('#races',{role:'superadmin'}),'#races');
+});
+
+test('the existing calendar belongs to the owner and explicit coach assignments remain scoped',()=>{
+  const {coach,athlete,owner}=fixture();
+  const ownerView={role:'coach',coachId:OWNER_COACH};
+  const staffView={role:'coach',coachId:coach.id};
+  assert(previewScheduleVisible({},owner,null,ownerView));
+  assert(!previewScheduleVisible({},owner,null,staffView));
+  assert(previewScheduleVisible({coachId:coach.id},athlete,null,staffView));
+  assert(!previewScheduleVisible({coachId:coach.id},athlete,null,ownerView));
+  assert(previewScheduleVisible({},athlete,{calendarEvent:{coachId:coach.id}},staffView));
+  const athleteView={role:'athlete',athleteId:athlete.id};
+  assert(!previewScheduleVisible({},null,null,athleteView));
+  assert(!previewScheduleVisible({},owner,null,athleteView));
+  assert(previewScheduleVisible({},athlete,null,athleteView));
+});
+
+test('questions create a single assigned coach task and sharing with each athlete is explicit',()=>{
+  const {state,owner,coach,athlete}=fixture();
+  const context={role:'athlete',athleteId:athlete.id};
+  const privateTask=createTask(state,athlete.id,'Заметка для тренера');
+  assert(!previewTaskVisible(privateTask,context));
+  shareTaskWithAthlete(state,privateTask.id,true);
+  assert(previewTaskVisible(privateTask,context));
+  assert(!previewTaskVisible(privateTask,{...context,athleteId:owner.id}));
+  const task=askCoach(state,athlete.id,assignedCoach(state,athlete),'Как перенести тренировку?','record-question');
+  assert.equal(task.title,'Разобрать вопрос клиента');
+  assert.equal(task.coachId,coach.id);
+  assert.equal(askCoach(state,athlete.id,OWNER_COACH,'Как перенести тренировку?','record-question').id,task.id);
+  assert.equal(task.coachId,coach.id);
+  assert(previewTaskVisible(task,{role:'coach',coachId:coach.id}));
+  assert(!previewTaskVisible(task,{role:'coach',coachId:OWNER_COACH}));
+  assert(previewTaskVisible(task,{role:'superadmin'}));
+  assert(!previewTaskVisible(createTask(state,athlete.id,'Уточнить оплату'),{role:'coach'}));
+  const restored=parseImport(exportState(state));
+  assert.equal(restored.tasks[task.id].sourceRecordId,'record-question');
+  assert.equal(restored.records['record-question'].text,'Как перенести тренировку?');
+});

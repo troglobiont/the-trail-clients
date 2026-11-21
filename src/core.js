@@ -113,7 +113,7 @@ export function editClient(s,clientId,values,day=localDate()){
   const previous=c.role==='Клиент'?c.status:null;
   const previousPause=c.pause;
   if (values.name && nameKey(values.name) !== nameKey(c.name)) ensureUniqueName(s,values.name,clientId);
-  const allowed=['name','role','status','format','currentFormat','group','personal','basis','level','context','rules','telegram','engagement','teamRole','pause','billingNote'];
+  const allowed=['name','role','status','format','currentFormat','group','personal','basis','level','context','rules','telegram','engagement','teamRole','pause','billingNote','coachId'];
   for(const k of allowed)if(k in values)c[k]=values[k];
   event(s,'client-edited',clientId,clientId);recordMovement(s,c,previous,day,previousPause);
 }
@@ -193,14 +193,14 @@ export function linkCalendarTask(s, taskId, calendarEvent) {
   const task = s.tasks[taskId];
   if (!task) throw Error('Задача не найдена');
   if (calendarEvent.clientId && calendarEvent.clientId !== task.clientId) throw Error('Эта тренировка назначена другому клиенту');
-  const {id, start, end, location, url} = calendarEvent;
+  const {id, start, end, location, url, coachId} = calendarEvent;
   if (typeof id !== 'string' || !id || !Number.isFinite(Date.parse(start)) || !(Date.parse(end) > Date.parse(start))) {
     throw Error('В календаре указано некорректное время тренировки');
   }
   if (Object.values(s.tasks).some(t => t.id !== taskId && t.calendarEvent?.id === id)) {
     throw Error('Эта тренировка уже привязана к другой задаче');
   }
-  task.calendarEvent = {id, start, end, location, url};
+  task.calendarEvent = {id, start, end, location, url,...(coachId&&{coachId})};
   completeTask(s, taskId);
 }
 export function editTask(s,taskId,title,due=null,linkedGoalId=undefined){
@@ -212,6 +212,27 @@ export function editTask(s,taskId,title,due=null,linkedGoalId=undefined){
   const before={title:t.title,due:t.due};t.title=title;t.due=due;t.updatedAt=stamp();
   if(linkedGoalId!==undefined)t.linkedGoalId=linkedGoalId;
   event(s,'task-edited',t.clientId,t.id,{before,after:{title,due}});
+}
+export function shareTaskWithAthlete(s,taskId,shared){
+  const task=s.tasks[taskId];
+  if(!task)throw Error('Задача не найдена');
+  if(Boolean(task.sharedWithAthlete)===Boolean(shared))return;
+  task.sharedWithAthlete=Boolean(shared);
+  event(s,'task-sharing',task.clientId,taskId);
+}
+export function askCoach(s,clientId,coachId,question,recordId=id('record')){
+  const client=s.clients[clientId];
+  if(!client||client.role!=='Клиент'||client.mergedInto)throw Error('Карточка спортсмена не найдена');
+  const value=typeof question==='string'?question.trim():'';
+  if(!value||value.length>4000)throw Error('Напиши вопрос · до 4000 символов');
+  const record=saveRecord(s,clientId,value,'athlete-question',recordId);
+  if(record.clientId!==clientId||record.kind!=='athlete-question'||record.text!==value)throw Error('Этот вопрос уже был изменён');
+  const existing=Object.values(s.tasks).find(task=>task.sourceRecordId===record.id&&task.kind==='athlete-question');
+  if(existing)return existing;
+  const task=createTask(s,clientId,'Разобрать вопрос клиента',{sourceRecordId:record.id});
+  task.coachId=coachId;
+  task.kind='athlete-question';
+  return task;
 }
 export const pauseTaskId = clientId => 'pause-' + clientId;
 export function clientTasks(s,clientId=null){

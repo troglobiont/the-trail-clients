@@ -63,10 +63,10 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
   const activeClientIds = () => new Set(activeServices().map(s => s.clientId));
   const serviceCaption = s => s.oneOff ? 'Разово · ' + serviceTitle(s) : serviceTitle(s);
 
-  function tariffButtons(options, selected, onSelect) {
+  function tariffButtons(options, selected, onSelect, label='Тариф') {
     const controls = el('div',null,'row catalog-quick');
     controls.setAttribute('role','group');
-    controls.setAttribute('aria-label','Тариф');
+    controls.setAttribute('aria-label',label);
     for (const [value,label] of options) {
       const control = button(label,()=>{
         selected = onSelect(value);
@@ -263,6 +263,41 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       show();
       return () => save();
     },{onSaved:fromAccount ? () => quickClientPicker(confirmation) : selection?.onSaved});
+  }
+
+  function coachReceipt(clientId){
+    const options=quickOptions(clientId,activeServices().filter(service=>service.clientId===clientId),new Map());
+    modal('Принять оплату',form=>{
+      append(form,text(clientName(clientId),'task-title'));
+      if(!options.length){
+        form.append(text('Для этого клиента нет доступной услуги. Обратись к бухгалтеру.'));
+        return ()=>{throw Error('Нет доступной услуги для оплаты');};
+      }
+      let chosen=options[0].service;
+      const amount=moneyInput(),date=dateInput(),period=input('month',today().slice(0,7));
+      const amountLabel=el('span');
+      const periodField=field('Оплаченный месяц',period);
+      const update=()=>{
+        amountLabel.textContent='Получено, '+chosen.currency;
+        periodField.hidden=!isMonthly(chosen);
+      };
+      append(form,tariffButtons(options.map(({service})=>[service.id,serviceTitle(service)]),chosen.id,value=>{
+        chosen=options.find(({service})=>service.id===value).service;
+        update();return value;
+      },'Услуга'),append(el('label'),amountLabel,amount),field('Дата получения',date),periodField);
+      update();
+      return async()=>{
+        const received=A.amountMinor(amount.value),actualDate=recordedDate(date);
+        await commit(s=>{
+          const service=A.accounting(s).services[chosen.id];
+          if(!service||service.clientId!==clientId||service.currency!==chosen.currency||service.oneOff||!A.activeService(service,actualDate))
+            throw Error('Услуга на эту дату недоступна. Обратись к бухгалтеру');
+          A.saveOperation(s,{kind:'payment',date:actualDate,amount:received,currency:service.currency,payer:'',note:'',
+            allocations:[{serviceId:service.id,month:isMonthly(service)?period.value:null,part:received,credit:received}]});
+        });
+        message('Оплата записана');
+      };
+    },{saveLabel:options.length?'Сохранить':null});
   }
 
   function scheduledSession(clientId, scheduled, services) {
@@ -883,13 +918,14 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return group('По оплатам', ...list);
   }
 
-  function todoItems(days) {
+  function todoItems(days,{clientId}={}) {
     const date = today();
-    return A.paymentReminders(state(),date,days).filter(({due})=>days === undefined || days < 0 || due >= date)
+    return A.paymentReminders(state(),date,days).filter(({due,service})=>(!clientId||service.clientId===clientId)
+      &&(days===undefined||days<0||due>=date))
       .map(({service,month:period,due,remaining})=>({
       name:clientName(service.clientId), title:'Оплата · '+serviceTitle(service),
       due, next:A.money(remaining,service.currency), reminder:true, payment:true,
-      open:()=>editPayment({clientId:service.clientId,serviceId:service.id,period,suggested:remaining})
+      open:clientId?()=>navigate('#account'):()=>editPayment({clientId:service.clientId,serviceId:service.id,period,suggested:remaining})
     }));
   }
 
@@ -1014,7 +1050,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return page;
   }
 
-  function clientPanel(client) {
+  function clientPanel(client,{readOnly=false}={}) {
     const date = today();
     const services = A.clientServices(state(), client.id);
     const active = services.filter(s => !s.oneOff && client.status === 'Активный' && A.activeService(s,date));
@@ -1074,11 +1110,16 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       return append(el('div', null, 'account-client-status'), item, previous &&
         line(previous.timing === 'overdue' ? 'Просрочено за прошлые месяцы' : 'К оплате за прошлый месяц',
           'Первый срок ' + formatDate(previous.due),A.money(previous.remaining,s.currency)),
-        isMonthly(s) ? button('Перенести срок',()=>editPaymentDay(s,info.month),'subtle account-move-date') :
+        !readOnly&&(isMonthly(s) ? button('Перенести срок',()=>editPaymentDay(s,info.month),'subtle account-move-date') :
           outstanding.has(s.id) && button('Неоплаченные занятия',() => modal('Проведено, не оплачено',form => {
             form.append(receivableDetails(outstanding.get(s.id)));
-          },{saveLabel:null}),'subtle account-move-date'));
+          },{saveLabel:null}),'subtle account-move-date')));
     };
+    if(readOnly)return append(el('div',null,'stack-lg account-page'),el('h1','Учёт'),
+      append(el('section',null,'stack account-section'),el('h2','Оплаты и занятия'),...active.map(currentStatus),
+        ...unpaidVisits.map(({service,debt})=>line(serviceCaption(service),'К оплате',A.money(debt,service.currency))),
+        !active.length&&!unpaidVisits.length&&text('Нет действующих услуг')),
+      group('История оплат и занятий',clientHistory(history,client.id,historyByTariff,{readOnly:true})));
     const payments = quickOptions(client.id,active,statuses);
     const previous = services.filter(s => !s.oneOff && s.startsOn <= date && !active.includes(s))
       .sort((a,b) => b.startsOn.localeCompare(a.startsOn));
@@ -1194,7 +1235,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     });
   }
 
-  function clientHistoryLine(operation, session, clientId, tariff, application, settlement) {
+  function clientHistoryLine(operation, session, clientId, tariff, application, settlement, readOnly) {
     const payment = operation.kind==='payment' ? operation : null;
     const visit = session || (operation.kind==='session' ? operation : null);
     const voided = operation.voided;
@@ -1229,8 +1270,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const amounts = [received,charged].filter(Boolean);
     return historyLine({title:when+(visit ? ' · '+visit.place : ''),status:voided ? 'Запись отменена' : status,
       context,details,amounts,displayAmounts:session ? [received] : amounts,extra,
-      recordPayment:!voided && visit && settlement?.remaining>0 && (()=>editSessionPayment({...visit,clientId},settlement.remaining)),
-      notes:[...new Set([visit?.note,payment?.note])],voided,edit:[
+      recordPayment:!readOnly&&!voided && visit && settlement?.remaining>0 && (()=>editSessionPayment({...visit,clientId},settlement.remaining)),
+      notes:readOnly?[]:[...new Set([visit?.note,payment?.note])],voided,edit:readOnly?[]:[
         visit && ['Изменить занятие',()=>editSession({existing:visit})],
         payment && ['Изменить оплату',()=>editPayment({existing:payment})]
       ].filter(Boolean)});
@@ -1261,7 +1302,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     });
   }
 
-  function importedHistoryLine(entry) {
+  function importedHistoryLine(entry,readOnly) {
+    if(readOnly&&entry.kind==='shared')return line(entry.date?formatDate(entry.date):monthLabel(entry.month),
+      'Семейная оплата · доля отдельно не указана');
     const label = {payment:'Поступление',shared:'Семейная оплата · общая сумма',session:'Занятия за месяц'}[entry.kind];
     const received = entry.kind !== 'session';
     const amounts = A.CURRENCIES.filter(currency=>entry.values[currency]>0).map(currency=>({
@@ -1273,18 +1316,18 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const title = [when,entry.place].filter(Boolean).join(' · ');
       const status = entry.date ? 'Проведено · оплата не сверена' : 'Занятие без даты · оплата не сверена';
       const note = entry.detail.replace(/^1 зан\. × [\d.]+ \w+(?: · )?/u,'');
-      return historyLine({title,status,amounts,notes:[note],
-        recordPayment:visit && visit.date<=today() && (()=>editSessionPayment({...visit,sourceId:entry.id},visit.amount))});
+      return historyLine({title,status,amounts,notes:readOnly?[]:[note],
+        recordPayment:!readOnly&&visit && visit.date<=today() && (()=>editSessionPayment({...visit,sourceId:entry.id},visit.amount))});
     }
     const source = state().ledger?.rows.find(row=>row.id===entry.id);
     const original = source && importedPaymentOriginal(source);
     const details = original && ['При импорте',original.date ? formatDate(original.date) : 'Без даты',totals(original.values)].join(' · ');
     return historyLine({title:entry.date ? formatDate(entry.date) : period,status:label,
-      context:entry.date ? 'за '+period : '',amounts,details,notes:[entry.detail],
-      edit:editableImportedPayment(source) ? [['Изменить оплату',()=>editImportedPayment(source)]] : []});
+      context:entry.date ? 'за '+period : '',amounts,details:readOnly?null:details,notes:readOnly?[]:[entry.detail],
+      edit:!readOnly&&editableImportedPayment(source) ? [['Изменить оплату',()=>editImportedPayment(source)]] : []});
   }
 
-  function clientHistory(history, clientId, historyByTariff) {
+  function clientHistory(history, clientId, historyByTariff,{readOnly=false}={}) {
     const operationDetails = A.personalOperationHistory(state(),clientId);
     const settlements = A.personalVisitSettlements(state(),clientId,today());
     const recorded = history.filter(item => item.type === 'operation').map(item => item.operation);
@@ -1314,13 +1357,13 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
         if (item.type === 'coverage') {
           const { service } = item;
           const row = line('Оплачено по ' + monthLabel(service.coveredThrough));
-          const note = service.note?.trim();
+          const note = !readOnly&&service.note?.trim();
           append(row.firstElementChild,note && el('small',note),el('small','Дата и сумма платежа не записаны'));
           return row;
         }
-        if (item.type === 'ledger') return importedHistoryLine(item.row);
+        if (item.type === 'ledger') return importedHistoryLine(item.row,readOnly);
         const operation = item.operation;
-        return clientHistoryLine(operation,pairs.get(operation.id),clientId,selected,operationDetails.get(operation.id),settlements.get(operation.id));
+        return clientHistoryLine(operation,pairs.get(operation.id),clientId,selected,operationDetails.get(operation.id),settlements.get(operation.id),readOnly);
       }));
       if (!entries.length) list.append(text(selected === 'all' ? 'Платежей и занятий пока нет' : 'По этому тарифу записей нет'));
       more.hidden = limit >= entries.length;
@@ -1347,6 +1390,6 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       })));
   }
 
-  return { page, clientPanel, remindersPanel, todoItems, settingsPanel, quickEntry, quickOptions, assistantVisit, activeClientIds, resumeClient,
+  return { page, clientPanel, coachReceipt, remindersPanel, todoItems, settingsPanel, quickEntry, quickOptions, assistantVisit, activeClientIds, resumeClient,
     scheduledSession, addScheduledTariff:(clientId,scheduled)=>editService(clientId,undefined,{scheduled}) };
 }

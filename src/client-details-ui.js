@@ -75,9 +75,9 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       };
     });
   }
-  function profile(c) {
+  function profile(c,{coach=false}={}) {
     const data=c.profile||{};
-    const items=profileFields.map(([key,label])=>{
+    const items=profileFields.filter(([key])=>!coach||['phone','telegram'].includes(key)).map(([key,label])=>{
       if(key==='telegram'){
         const username=profileTelegramUsername(c);
         const href=telegramLink({username});
@@ -102,8 +102,8 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
         : href ? link(value,href) : el('div',value);
       return append(el('div',null,'detail-line'),text(label),account);
     }).filter(Boolean);
-    if(data.birthday)items.push(append(el('div',null,'detail-line'),text('День рождения'),el('div',formatDate('2000-'+data.birthday.slice(-5))+(data.birthday.length===10?' '+data.birthday.slice(0,4):''))));
-    return [...(items.length?items:[text('Контактные данные пока не внесены')]),button('Изменить данные',()=>editProfile(c),'subtle')];
+    if(data.birthday)items.push(append(el('div',null,'detail-line'),text('День рождения'),el('div',formatDate('2000-'+data.birthday.slice(-5))+(!coach&&data.birthday.length===10?' '+data.birthday.slice(0,4):''))));
+    return [...(items.length?items:[text('Контактные данные пока не внесены')]),!coach&&button('Изменить данные',()=>editProfile(c),'subtle')].filter(Boolean);
   }
   function editTraining(c) {
     modal('Тренировочные данные',form=>{
@@ -174,10 +174,10 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       };
     });
   }
-  function journal(c) {
+  function journal(c,{readOnly=false,allowTask=()=>true}={}) {
     const entries=Object.values(state().records).filter(r=>r.clientId===c.id&&r.kind==='journal')
       .sort((a,b)=>b.day.localeCompare(a.day)||b.createdAt.localeCompare(a.createdAt));
-    const tasks=Object.values(state().tasks).filter(t=>t.clientId===c.id&&t.sourceRecordId);
+    const tasks=Object.values(state().tasks).filter(t=>t.clientId===c.id&&t.sourceRecordId&&allowTask(t));
     const items=entries.map(entry=>{
       const status=C.JOURNAL_STATUSES[entry.journalStatus];
       const linked=tasks.filter(t=>t.sourceRecordId===entry.id).map(t=>t.phase==='done'
@@ -187,9 +187,9 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
         el('h3',entry.title),el('div',entry.text,'feature-copy'),
         ...(entry.athleteRefs||[]).map(id=>button(state().clients[c.id].athlete.entries[id].title,()=>openAthleteEntry(c,id),'subtle athlete-journal-link')),
         linked.length&&append(el('div',null,'stack'),text('Задачи'),...linked),
-        row(button('Изменить',()=>editJournal(c,entry),'subtle'),button('+ Задача',()=>addJournalTask(c,entry),'subtle')));
+        !readOnly&&row(button('Изменить',()=>editJournal(c,entry),'subtle'),button('+ Задача',()=>addJournalTask(c,entry),'subtle')));
     });
-    return section('Журнал',c.id+'-journal',[button('+ Запись',()=>editJournal(c),'subtle'),
+    return section('Журнал',c.id+'-journal',[!readOnly&&button('+ Запись',()=>editJournal(c),'subtle'),
       ...(items.length?items:[text('Записей пока нет')])]);
   }
   async function openTelegram(c,href=telegramLink(c.telegram)) {
@@ -242,7 +242,7 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       });
     },{onSaved});
   }
-  function goalRow(g,{compact=false}={}) {
+  function goalRow(g,{compact=false,readOnly=false}={}) {
     const race=g.raceId&&raceById(state(),g.raceId);
     const wrap=append(el('div',null,'goal'),!compact&&el('div',g.title),row(...[GOAL_TYPES[goalType(g.type)],g.status,RACE_STAGES[g.raceStage]].filter(Boolean).map(label=>el('span',label,'chip'))));
     wrap.id='goal-'+g.id;wrap.tabIndex=-1;
@@ -252,11 +252,11 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     else controls.append(button('Изменить',()=>editGoal(g),'subtle'),button('Удалить',async()=>{
       await commit(s=>C.deleteGoal(s,g.id,true));message('Цель перенесена в удалённые. Её можно восстановить.');
     },'subtle danger'));
-    wrap.append(controls);
+    if(!readOnly)wrap.append(controls);
     if(!compact)return wrap;
     const detail=section(g.title,g.id+'-athlete-goal',[wrap]);detail.classList.add('athlete-goal-entry');return detail;
   }
-  function goals(c, addGoal,{compact=false}={}) {
+  function goals(c, addGoal,{compact=false,readOnly=false}={}) {
     const all=Object.values(state().goals).filter(g=>g.clientId===c.id);
     const current=all.filter(g=>!g.deletedAt),removed=all.filter(g=>g.deletedAt);
     if(compact&&c.athlete?.goalId)current.sort((a,b)=>Number(b.id===c.athlete.goalId)-Number(a.id===c.athlete.goalId));
@@ -267,7 +267,7 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     function update(){
       for(const control of filter.children)control.setAttribute('aria-pressed',String(control.dataset.filter===choice));
       const selected=current.filter(g=>!choice||goalType(g.type)===choice);
-      results.replaceChildren(...(selected.length?selected.map(goal=>goalRow(goal,{compact})):[text('Целей пока нет')]));
+      results.replaceChildren(...(selected.length?selected.map(goal=>goalRow(goal,{compact,readOnly})):[text('Целей пока нет')]));
     }
     for(const [key,label] of keys){
       const control=button(label,()=>{choice=key;(ui.goalFilters??={})[c.id]=key;update();});
@@ -275,19 +275,19 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     }
     update();
     const fold=section((compact?'Цели':'Цели клиента')+' · '+current.length,c.id+'-goals',[
-      row(button('Добавить цель',addGoal,'subtle'),current.length&&filter),results,
-      removed.length&&section('Удалённые цели · '+removed.length,c.id+'-deleted-goals',removed.map(goal=>goalRow(goal)))
+      row(!readOnly&&button('Добавить цель',addGoal,'subtle'),current.length&&filter),results,
+      !readOnly&&removed.length&&section('Удалённые цели · '+removed.length,c.id+'-deleted-goals',removed.map(goal=>goalRow(goal)))
     ]);
     if(compact)fold.classList.add('athlete-goals-fold');
     return fold;
   }
-  function races() {
+  function races({participantId}={}) {
     const page=el('div',null,'race-page stack'),current=state();
     const catalog=raceCatalog(current,{includeRecommended:true}).map(race=>{
       const shortName=race.shortName || (/mitja marat[oó].*barcelona|barcelona.*half marathon/i.test(race.name)
         ? 'Барселона · полумарафон' : race.name);
       return {
-        race,shortName,...raceCategory(race),people:raceParticipants(current,race),
+        race,shortName,...raceCategory(race),people:raceParticipants(current,race).filter(goal=>participantId===undefined||goal.clientId===participantId),
         search:[race.name,race.place,shortName].map(C.normalizeSearch).join(' ')
       };
     });
