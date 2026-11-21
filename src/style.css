@@ -212,6 +212,8 @@ progress{width:100%;height:12px;accent-color:var(--ink)}
 .telegram-controls{gap:4px;margin:-4px 0 0 -8px}
 .telegram-templates{display:grid;gap:0;justify-items:start}
 .template-button{font-size:15px;text-align:left;padding:9px 0}
+.telegram-delivery{padding:10px 0 0;border-top:1px solid var(--line);gap:4px}
+.telegram-delivery .row{gap:4px;margin-left:-8px}
 .recipient-results{border:0;margin:0;padding:0;min-width:0;display:grid;gap:10px}
 .recipient-results legend{font-size:13px;color:var(--muted);margin-bottom:8px}
 .recipient-option{display:flex;align-items:center;gap:12px;min-height:64px;padding:14px;border:2px solid var(--line);border-radius:12px;cursor:pointer;background:var(--panel);color:var(--text)}
@@ -301,29 +303,41 @@ input.account-month{width:auto;max-width:100%}
 }
 
 .header-controls{display:flex;align-items:center;gap:6px;flex:none;text-align:right}
-.athlete-summary{gap:10px;padding:14px}
+.athlete-summary{display:block;padding:14px}
 .athlete-summary h2{font-size:16px}
-.athlete-goal{padding:0;text-align:left;font-size:16px;line-height:1.4;font-weight:650;min-height:0;border-radius:0}
-.athlete-goal-list{gap:3px}
-.athlete-goals{list-style:none;margin:0;padding:0;display:grid}
-.athlete-goals li+li{border-top:1px solid var(--line)}
-.athlete-goals .athlete-goal{position:relative;width:100%;padding:10px 18px 10px 0;font-size:15px;font-weight:550;white-space:normal;overflow-wrap:anywhere}
-.athlete-goals .athlete-goal::after{content:"›";position:absolute;right:0;top:50%;transform:translateY(-50%);color:var(--muted)}
-.athlete-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.athlete-metric{display:grid;align-content:start;gap:2px;text-align:left;padding:8px 0;border-radius:0}
-.athlete-metric strong{font-size:26px;line-height:1.1}
+.athlete-goal-entry>summary{font-size:14px;font-weight:550;overflow-wrap:anywhere}
+.athlete-goal-entry>.fold-body{padding-top:0}
+.athlete-goals-fold>summary{min-height:42px}
+.athlete-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+button.athlete-metric{display:grid;align-content:start;gap:2px;text-align:left;padding:6px 0;color:var(--text);border:0;border-radius:0}
+.athlete-metric strong{font-size:24px;line-height:1.15;font-variant-numeric:tabular-nums}
 .athlete-metric .small:last-child{font-size:11px}
-.athlete-zone-scale{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:3px}
+.athlete-zone-scale{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:4px}
 .athlete-zone{display:grid;gap:3px;border-top:4px solid var(--line);padding:4px 0;font-size:11px;text-align:center}
-.athlete-zone span{font-size:10px;white-space:nowrap}
+.athlete-zone span{font-size:11px;white-space:nowrap;font-variant-numeric:tabular-nums}
 .athlete-zone:nth-child(2){border-color:#609397}.athlete-zone:nth-child(3){border-color:#5f9271}
 .athlete-zone:nth-child(4){border-color:#b79553}.athlete-zone:nth-child(5){border-color:#b47663}.athlete-zone:nth-child(6){border-color:#936f8d}
 .athlete-entry{padding:12px 0;border-bottom:1px solid var(--line)}
 .athlete-entry .chip{font-size:11px}
 .athlete-links{gap:3px}.athlete-links button,.athlete-journal-link{text-align:left;min-height:36px}
 .athlete-zone-table{display:grid;gap:4px}
-.athlete-summary button.athlete-zone-scale{width:100%;padding:0;min-height:0;border:0;border-radius:0;color:var(--text)}
-.athlete-rest{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:10px;text-align:left;padding:6px 0;border-radius:0;color:var(--text)}
+button.athlete-readout{position:relative;display:grid;width:100%;min-height:44px;gap:6px;
+  padding:8px 16px 4px 0;border:0;border-radius:0;text-align:left;color:var(--text)}
+.athlete-readout::after{content:"›";position:absolute;right:1px;top:10px;color:var(--muted)}
+button.athlete-load-summary,button.athlete-recovery-summary{border-top:1px solid var(--line)}
+button.athlete-recovery-summary{grid-template-columns:minmax(0,1fr) auto;align-items:center}
+.athlete-recovery-summary::after{top:50%;transform:translateY(-50%)}
+.athlete-recovery-value,.athlete-load-metric strong{font-variant-numeric:tabular-nums}
+.athlete-load-values{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.athlete-load-metric{display:grid;align-content:start;gap:2px}
+.athlete-load-metric strong{font-size:19px}
+.athlete-log-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.athlete-log-fields input{min-width:0}
+.athlete-session-form{border-top:1px solid var(--line);padding-top:8px}
+.athlete-session-form>.subtle{justify-self:start}
+@media(max-width:360px){
+  .athlete-zone-scale{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
 .athlete-restrictions{gap:6px;border-top:1px solid var(--line);padding-top:6px}
 .athlete-restrictions .feature-heading{gap:6px;flex-wrap:nowrap}
 .athlete-restrictions .feature-heading button{padding-inline:0;white-space:nowrap}
@@ -462,9 +476,8 @@ button.athlete-row{position:relative;padding-inline-end:15px;color:var(--text);f
 .account-currency-line{display:block}
 .money-amount{white-space:nowrap;overflow-wrap:normal;word-break:normal}
 
-.athlete-metrics{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .athlete-summary>summary{padding:0;font-size:16px;font-weight:650}
-.athlete-summary>.fold-body{padding-top:12px}
+.athlete-summary>.fold-body{padding:6px 0 0}
 .bmi-status.normal{color:var(--success,#377354)}
 .bmi-status.attention{color:var(--warning,#936620)}
 .client-training>.fold-body>.fold{background:var(--soft);border-top:0;border-radius:9px;padding-inline:10px}

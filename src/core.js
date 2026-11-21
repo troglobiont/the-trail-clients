@@ -6,6 +6,7 @@ import { raceById, raceCatalog, raceDefinition, raceGoal, sameRace, setProfile, 
 import {validatePartners} from './partners.js';
 import {validateTeam} from './team.js';
 import {validateAthletes} from './athlete.js';
+import {validateSportLog} from './sport-log.js';
 import {goalProposal} from './goal-record.js';
 export { TIMEZONE, id, localDate, validDate, addDays } from './model-utils.js';
 
@@ -44,6 +45,7 @@ export function validateState(s){
   validatePartners(s);
   validateTeam(s);
   validateAthletes(s);
+  for(const client of Object.values(s.clients))if(client.sportLog!==undefined)validateSportLog(client.sportLog);
   return s;
 }
 export function event(s,type,clientId,entityId,details={}){s.events.push({id:id('event'),type,clientId,entityId,at:stamp(),...details});}

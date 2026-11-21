@@ -118,7 +118,7 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
         ...(!c.athlete&&{date:date.value,status:status.value,source:source.value})}));
     });
   }
-  function training(c) {
+  function training(c,{showZones=true}={}) {
     const out=[],data=c.training||{};
     const bmi=bodyMass(c,C.localDate());
     const body=[...trainingFields.filter(([key])=>['height','weight'].includes(key)).map(([key,label])=>
@@ -134,7 +134,9 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     for(const [key,label] of trainingFields.filter(([key])=>!['height','weight'].includes(key))) if(data[key]!=null)out.push(append(el('div',null,'detail-line'),text(label),el('div',String(data[key]))));
     const metadata=[trainingStatuses.find(([k])=>k===data.status)?.[1],data.date&&formatDate(data.date),data.source].filter(Boolean);
     if(metadata.length)out.push(text(metadata.join(' · ')));
-    out.push(button('Изменить данные',()=>editTraining(c),'subtle'),el('h3','Зоны бега'));
+    out.push(button('Изменить данные',()=>editTraining(c),'subtle'));
+    if(!showZones)return out;
+    out.push(el('h3','Зоны бега'));
     if(c.zones){
       if(c.zones.status)out.push(text(c.zones.status));
       if(c.zones.lthr)out.push(text('LTHR для сохранённых зон: '+c.zones.lthr+' уд/мин'));
@@ -240,9 +242,9 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       });
     },{onSaved});
   }
-  function goalRow(g) {
+  function goalRow(g,{compact=false}={}) {
     const race=g.raceId&&raceById(state(),g.raceId);
-    const wrap=append(el('div',null,'goal'),el('div',g.title),row(...[GOAL_TYPES[goalType(g.type)],g.status,RACE_STAGES[g.raceStage]].filter(Boolean).map(label=>el('span',label,'chip'))));
+    const wrap=append(el('div',null,'goal'),!compact&&el('div',g.title),row(...[GOAL_TYPES[goalType(g.type)],g.status,RACE_STAGES[g.raceStage]].filter(Boolean).map(label=>el('span',label,'chip'))));
     wrap.id='goal-'+g.id;wrap.tabIndex=-1;
     if(race||g.distance||g.sourceEventDate)wrap.append(text([race?.name,g.sourceEventDate||race?.date,g.distance,g.source==='TrainingPeaks'?'TrainingPeaks':null].filter(Boolean).join(' · ')));
     const controls=el('div',null,'goal-controls');
@@ -250,11 +252,14 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     else controls.append(button('Изменить',()=>editGoal(g),'subtle'),button('Удалить',async()=>{
       await commit(s=>C.deleteGoal(s,g.id,true));message('Цель перенесена в удалённые. Её можно восстановить.');
     },'subtle danger'));
-    wrap.append(controls);return wrap;
+    wrap.append(controls);
+    if(!compact)return wrap;
+    const detail=section(g.title,g.id+'-athlete-goal',[wrap]);detail.classList.add('athlete-goal-entry');return detail;
   }
-  function goals(c, addGoal) {
+  function goals(c, addGoal,{compact=false}={}) {
     const all=Object.values(state().goals).filter(g=>g.clientId===c.id);
     const current=all.filter(g=>!g.deletedAt),removed=all.filter(g=>g.deletedAt);
+    if(compact&&c.athlete?.goalId)current.sort((a,b)=>Number(b.id===c.athlete.goalId)-Number(a.id===c.athlete.goalId));
     const results=el('div',null,'stack'),filter=el('div',null,'row catalog-quick');
     const keys=[['','Все'],...Object.entries(GOAL_TYPES).filter(([key])=>key==='race'||current.some(g=>goalType(g.type)===key))];
     let choice=ui.goalFilters?.[c.id]||'';
@@ -262,17 +267,19 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
     function update(){
       for(const control of filter.children)control.setAttribute('aria-pressed',String(control.dataset.filter===choice));
       const selected=current.filter(g=>!choice||goalType(g.type)===choice);
-      results.replaceChildren(...(selected.length?selected.map(goalRow):[text('Целей пока нет')]));
+      results.replaceChildren(...(selected.length?selected.map(goal=>goalRow(goal,{compact})):[text('Целей пока нет')]));
     }
     for(const [key,label] of keys){
       const control=button(label,()=>{choice=key;(ui.goalFilters??={})[c.id]=key;update();});
       control.dataset.filter=key;filter.append(control);
     }
     update();
-    return section('Цели клиента · '+current.length,c.id+'-goals',[
+    const fold=section((compact?'Цели':'Цели клиента')+' · '+current.length,c.id+'-goals',[
       row(button('Добавить цель',addGoal,'subtle'),current.length&&filter),results,
-      removed.length&&section('Удалённые цели · '+removed.length,c.id+'-deleted-goals',removed.map(goalRow))
+      removed.length&&section('Удалённые цели · '+removed.length,c.id+'-deleted-goals',removed.map(goal=>goalRow(goal)))
     ]);
+    if(compact)fold.classList.add('athlete-goals-fold');
+    return fold;
   }
   function races() {
     const page=el('div',null,'race-page stack'),current=state();
@@ -418,5 +425,5 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       append(el('div',null,'race-filter-box'),quick,append(el('div',null,'race-filter-head'),secondary,yearMenu)),view,list);
     setView();refresh();return page;
   }
-  return {profile,profileEditor,training,journal,telegramOptions,goals,races,reviewGoal:(c,proposal,onSave,onSaved)=>editGoal({...proposal,clientId:c.id,id:'new-'+c.id},onSave,onSaved)};
+  return {profile,profileEditor,training,journal,telegramOptions,openTelegram,goals,races,reviewGoal:(c,proposal,onSave,onSaved)=>editGoal({...proposal,clientId:c.id,id:'new-'+c.id},onSave,onSaved)};
 }

@@ -5,6 +5,7 @@ import {createStore,browserAdapter} from './store.js';
 import {createUpdater} from './updates.js';
 import {currentServiceOrigin,parseConnection} from './connection.js';
 import {createRecipientSearch} from './telegram-picker.js';
+import {failedTelegramAttempt,prepareTelegramAttempt,sameTelegramDestination,telegramDeliveryNotice} from './telegram-delivery.js';
 import {microphoneAccess,microphoneState} from './microphone.js';
 import {createAccountingUI} from './accounting-ui.js';
 import {applyLedger, LEDGER_FORMAT, parseLedgerImport} from './ledger-import.js';
@@ -20,6 +21,7 @@ import {partnerTasks} from './partners.js';
 import {syncIndicatorState,cloudIcon,settingsWheel} from './sync-indicator.js';
 import {createAdminUI} from './admin-ui.js';
 import {createAthleteUI} from './athlete-ui.js';
+import {createSportLogUI} from './sport-log-ui.js';
 import {inlineSelect} from './inline-select.js';
 import {goalProposal} from './goal-record.js';
 const VERSION=__APP_VERSION__;
@@ -36,6 +38,7 @@ const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'
 const ui={filters:defaultFilters(),catalogScope:'active',pauseFilter:null,catalogLimit:CATALOG_PAGE_SIZE,
   contactOrder:false, recentlyCompleted:new Set(), birthdayPeriod:7, paymentPeriod:-1,taskPeriod:null,returnTo:'#clients',open:new Set(),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
 const state=()=>store.state();
+const hasAthleteCard=client=>client?.role==='Клиент'||Boolean(client?.athlete);
 function el(tag,text,className){const node=document.createElement(tag);if(text!==undefined&&text!==null)node.textContent=text;if(className)node.className=className;return node;}
 function append(parent,...children){parent.append(...children.filter(Boolean));return parent;}
 function button(text,fn,className=''){const b=el('button',text,className);b.type='button';b.addEventListener('click',()=>run(async()=>{b.disabled=true;try{await fn();}finally{if(b.isConnected)b.disabled=false;}}));return b;}
@@ -89,7 +92,8 @@ const calendarUI=createCalendarUI({state,service,el,append,button,row,field,inpu
 const partnersUI=createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message,
   openList:()=>{ui.open.add('admin-partners');navigate('#admin');}});
 const adminUI=createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,render,formatDate,partnersUI});
-const athleteUI=createAthleteUI({state,ui,el,append,button,row,text,section,navigate,render,
+const logUI=createSportLogUI({el,append,button,row,text,section,modal,commit,input,select,field,navigate,formatDate});
+const athleteUI=createAthleteUI({ui,el,append,button,text,section,navigate,logUI,
   renderRestrictions:c=>renderFeatures(c,{embedded:true})});
 function modal(title,build,{saveLabel='Сохранить',saveClass='primary',cancelLabel='Отмена',onSaved}={}){
   dialog.textContent='';
@@ -709,7 +713,7 @@ function task(t){
   return wrap;
 }
 function editFeature(clientId, feature) {
-  const restriction=!!state().clients[clientId]?.athlete;
+  const restriction=hasAthleteCard(state().clients[clientId]);
   modal(feature ? restriction?'Изменить ограничение':'Изменить особенность' : restriction?'Добавить ограничение':'Добавить особенность', form => {
     const note = el('textarea');
     note.value = feature?.text ?? '';
@@ -744,7 +748,7 @@ function renderFeatures(client,{embedded=false}={}) {
     const reported=client.athlete?.restrictions;
     const extra=reported?.status==='reported'&&reported.text&&!active.some(f=>f.text===reported.text)?reported.text:null;
     return append(el('div',null,'stack athlete-restrictions'),
-      append(el('div',null,'row between feature-heading'),el('h3','Ограничения:'),button('+ Добавить',()=>editFeature(client.id),'subtle')),
+      append(el('div',null,'row between feature-heading'),el('h3','Ограничения'),button('+ Добавить',()=>editFeature(client.id),'subtle')),
       ...active.map(feature=>{
         const item=button(feature.text,()=>navigate('#client/'+client.id+'/restriction/'+feature.id),'athlete-restriction');
         item.id='feature-'+feature.id;return item;
@@ -842,22 +846,8 @@ function renderClient(clientId,targetType,targetId){
     text(contactSummary(c)));
   const followUp=pauseDetails(c);
   append(page,header,followUp);
-  if(c.athlete)page.append(athleteUI.summary(c));
-  if(c.role==='Тренер')page.append(button('Работа и выплаты',()=>navigate('#admin/team/'+c.id),'subtle'));
-  const tasks=[...C.clientTasks(state(),clientId),...Array.from(ui.recentlyCompleted,id=>state().tasks[id])
-    .filter(t=>t?.clientId===clientId&&t.phase==='done')];
-  if(tasks.length)page.append(append(el('section',null,'panel action-panel'),el('h2','Действия по клиенту','block-heading'),...tasks.map(task)));
-  if(!c.athlete)page.append(renderFeatures(c));
-  if(c.role==='Клиент')page.append(accountingUI.clientPanel(c));
-  const reference=el('div',null,'reference-sections');
-  const telegram=section('Сообщения в Telegram',c.id+'-telegram',[telegramPanel(c)]);
-  telegram.id='telegram-client-panel';telegram.tabIndex=-1;
-  const profile=section('О клиенте',c.id+'-profile',detailsUI.profile(c));
-  profile.id='profile-client-panel';profile.tabIndex=-1;
-  const training=section('Тренировочные данные',c.id+'-zones',c.athlete?[athleteUI.details(c),...detailsUI.training(c)]:detailsUI.training(c));
-  training.id='training-client-panel';training.tabIndex=-1;training.classList.add('client-training');
-  reference.append(telegram,profile,detailsUI.journal(c),training);
-  reference.append(detailsUI.goals(c,()=>{
+  const sport=hasAthleteCard(c);
+  const goals=detailsUI.goals(c,()=>{
     const draft=getDraft(c.id);draft.kind='goal';
     const form=document.getElementById('compose');
     form.querySelectorAll('[data-kind]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.kind==='goal')));
@@ -866,7 +856,23 @@ function renderClient(clientId,targetType,targetId){
     form.scrollIntoView({behavior:'smooth',block:'start'});
     document.getElementById('client-note').focus({preventScroll:true});
     saveDraftSoon();
-  }));
+  },{compact:sport});
+  if(sport)page.append(athleteUI.summary(c,goals));
+  if(c.role==='Тренер')page.append(button('Работа и выплаты',()=>navigate('#admin/team/'+c.id),'subtle'));
+  const tasks=[...C.clientTasks(state(),clientId),...Array.from(ui.recentlyCompleted,id=>state().tasks[id])
+    .filter(t=>t?.clientId===clientId&&t.phase==='done')];
+  if(tasks.length)page.append(append(el('section',null,'panel action-panel'),el('h2','Действия по клиенту','block-heading'),...tasks.map(task)));
+  if(!sport)page.append(renderFeatures(c));
+  if(c.role==='Клиент')page.append(accountingUI.clientPanel(c));
+  const reference=el('div',null,'reference-sections');
+  const telegram=section('Сообщения в Telegram',c.id+'-telegram',[telegramPanel(c)]);
+  telegram.id='telegram-client-panel';telegram.tabIndex=-1;
+  const profile=section('О клиенте',c.id+'-profile',detailsUI.profile(c));
+  profile.id='profile-client-panel';profile.tabIndex=-1;
+  const training=section('Тренировочные данные',c.id+'-zones',[c.athlete&&athleteUI.details(c),...detailsUI.training(c,{showZones:!sport})]);
+  training.id='training-client-panel';training.tabIndex=-1;training.classList.add('client-training');
+  reference.append(telegram,profile,detailsUI.journal(c),training);
+  if(!sport)reference.append(goals);
   reference.append(section('Кемпы и история участия',c.id+'-camps',c.camps?.length?c.camps.map(camp=>text(camp.name+' · '+camp.status,' ')):[text('История участия пока не восстановлена')]));
   reference.append(section('История записей',c.id+'-history',[renderHistory(c)]));
   page.append(reference,compose(c));
@@ -1180,8 +1186,86 @@ function agentConnectionCheck(){
     catch(error){result.textContent=error.message;throw error;}
   }),result);return wrap;
 }
+async function openTelegramDraft(c,template){
+  const open=()=>{
+    const current=state().clients[c.id];
+    if(!sameTelegramDestination(current?.telegram,c.telegram))throw Error('Получатель изменился. Открой его карточку заново');
+    return detailsUI.openTelegram(current);
+  };
+  try{await navigator.clipboard.writeText(template);}
+  catch{
+    modal('Заготовка для Telegram',form=>{
+      const draft=el('textarea');draft.value=template;draft.readOnly=true;draft.rows=2;
+      const status=text('Скопируй текст перед открытием переписки.');
+      append(form,field('Текст сообщения',draft),button('Скопировать',()=>{
+        draft.focus();draft.select();
+        let copied=false;
+        try{copied=Boolean(document.execCommand?.('copy'));}catch{}
+        status.textContent=copied?'Текст скопирован.':'Текст выделен. Скопируй его через меню.';
+      }),status,button('Открыть чат',async()=>{await open();dialog.close();},'primary'));
+    },{saveLabel:null,cancelLabel:'Закрыть'});
+    return;
+  }
+  await open();
+}
+
+async function sendTelegramTemplate(c,template,taskId){
+  const busy='telegram-'+c.id;
+  if(ui.busy.has(busy))return;
+  ui.busy.add(busy);
+  try{
+    const previous=state().settings.pendingTelegram?.[c.id];
+    const operation=prepareTelegramAttempt(previous,c.telegram,{key:C.id('message'),text:template,taskId});
+    await commit(s=>{
+      if(!sameTelegramDestination(s.clients[c.id]?.telegram,operation))throw Error('Получатель изменился. Открой его карточку заново');
+      s.settings.pendingTelegram={...s.settings.pendingTelegram,[c.id]:operation};
+    },false);
+    let result;
+    try{
+      result=await service('/telegram/send',{peerId:operation.peerId,accountPeerId:operation.accountPeerId,text:template,idempotencyKey:operation.key});
+      if(!result?.messageId||!result.sentAt||!Number.isFinite(Date.parse(result.sentAt)))throw Error('Сервис не подтвердил отправку');
+    }catch(error){
+      await commit(s=>{
+        if(s.settings.pendingTelegram?.[c.id]?.key===operation.key)
+          s.settings.pendingTelegram[c.id]=failedTelegramAttempt(operation,previous,error);
+      });
+      return;
+    }
+    await commit(s=>{
+      const messageKey=operation.peerId+':'+result.messageId;
+      C.confirmedContact(s,c.id,{at:result.sentAt,messageKey,source:'telegram-api'});
+      const task=s.tasks[operation.taskId];
+      if(task?.clientId===c.id&&task.needsReply&&task.phase!=='done'){
+        C.markSent(s,task.id,result.sentAt,messageKey);ui.sendAck[task.id]=result.sentAt;
+      }
+      if(s.settings.pendingTelegram?.[c.id]?.key===operation.key)delete s.settings.pendingTelegram[c.id];
+    });message('Отправлено · '+formatDate(result.sentAt,true));
+  }finally{ui.busy.delete(busy);}
+}
+
+function telegramAttemptPanel(c,attempt){
+  const pending=el('div',null,'stack telegram-delivery');
+  const status=text(telegramDeliveryNotice(attempt));status.setAttribute('role','status');
+  const same=sameTelegramDestination(c.telegram,attempt);
+  return append(pending,el('strong',attempt.text),status,
+    !same&&text('Эта попытка относится к прежней привязке.'),
+    row(same&&button('Скопировать и открыть чат',()=>openTelegramDraft(c,attempt.text),'subtle'),
+      button('Закрыть попытку',()=>{
+        if(ui.busy.has('telegram-'+c.id))throw Error('Дождись завершения отправки');
+        modal('Закрыть попытку отправки',form=>{
+          form.append(text(attempt.delivery==='not-sent'
+            ?'Попытка исчезнет из карточки. Отправку можно будет начать заново.'
+            :'Если сообщение уже есть в чате, повторять его не нужно. Закрытие попытки не отмечает сообщение отправленным.'));
+          return ()=>commit(s=>{
+            if(s.settings.pendingTelegram?.[c.id]?.key===attempt.key)delete s.settings.pendingTelegram[c.id];
+          });
+        },{saveLabel:'Закрыть попытку'});
+      },'subtle')));
+}
+
 function telegramPanel(c){
   const panel=el('section',null,'stack telegram-panel'),bound=!!c.telegram?.peerId;
+  const pending=state().settings.pendingTelegram?.[c.id];
   if(bound){
     panel.append(text('Переписка привязана','telegram-linked small'),el('div',(c.telegram.displayName||'Telegram')+(c.telegram.username?' · @'+c.telegram.username:''),'telegram-recipient'),...detailsUI.telegramOptions(c));
     panel.append(append(el('div',null,'row telegram-controls'),
@@ -1189,38 +1273,25 @@ function telegramPanel(c){
       button('Отвязать переписку',()=>unbindTelegram(c),'subtle')));
   }else{
     append(panel,text('Переписка ещё не привязана'),button('Привязать переписку',()=>bindTelegram(c),'subtle'));
+    if(pending)panel.append(telegramAttemptPanel(c,pending));
     return panel;
   }
   const connected=!!state().settings.serviceURL;
-  if(!connected)panel.append(text('Для отправки подключи сервис в настройках. Привязка получателя сохранена.'));
+  if(!connected)panel.append(text('Заготовку можно скопировать и отправить в Telegram.'));
   const replies=C.clientTasks(state(),c.id).filter(t=>t.needsReply),linked=select([['','Без привязки к задаче'],...replies.map(t=>[t.id,t.title])],'');
-  if(replies.length)panel.append(field('Ожидать ответ по задаче',linked));
+  if(connected&&replies.length)panel.append(field('Ожидать ответ по задаче',linked));
   const list=el('div',null,'telegram-templates');
-  panel.append(text('Заготовки · нажатие отправит сообщение'));
+  panel.append(text(connected?'Заготовки · нажатие отправит сообщение':'Заготовки · открыть в Telegram'));
   for(const template of C.TEMPLATES){
-    const send=button(template,async()=>{
-      if(!connected)throw Error('Сначала подключи сервис в настройках');
-      if(ui.busy.has('telegram-'+c.id))return;
-      ui.busy.add('telegram-'+c.id);
-      const pending=state().settings.pendingTelegram||{};
-      if(pending[c.id]&&pending[c.id].text!==template){ui.busy.delete('telegram-'+c.id);throw Error('Предыдущая отправка не подтверждена. Сначала повтори её заготовку.');}
-      const operation=pending[c.id]||{key:C.id('message'),text:template,taskId:linked.value||null};
-      try{
-        await commit(s=>{s.settings.pendingTelegram={...s.settings.pendingTelegram,[c.id]:operation};},false);
-        const result=await service('/telegram/send',{peerId:c.telegram.peerId,accountPeerId:c.telegram.accountPeerId||null,text:template,idempotencyKey:operation.key});
-        if(!result.messageId||!result.sentAt||!Number.isFinite(Date.parse(result.sentAt)))throw Error('Сервис не подтвердил отправку');
-        await commit(s=>{
-          const messageKey=c.telegram.peerId+':'+result.messageId;
-          C.confirmedContact(s,c.id,{at:result.sentAt,messageKey,source:'telegram-api'});
-          const task=s.tasks[operation.taskId];
-          if(task?.clientId===c.id&&task.needsReply&&task.phase!=='done'){C.markSent(s,task.id,result.sentAt,messageKey);ui.sendAck[task.id]=result.sentAt;}
-          if(s.settings.pendingTelegram)delete s.settings.pendingTelegram[c.id];
-        });message('Отправлено · '+formatDate(result.sentAt,true));
-      }finally{ui.busy.delete('telegram-'+c.id);}
-    },'template-button');
-    send.disabled=!connected;send.setAttribute('aria-label','Отправить в Telegram: '+template);list.append(send);
+    const retry=connected&&pending?.text===template;
+    const send=button(retry?'Повторить · '+template:template,()=>connected
+      ?sendTelegramTemplate(c,template,linked.value||null):openTelegramDraft(c,template),'template-button');
+    send.disabled=Boolean(pending&&(!sameTelegramDestination(c.telegram,pending)
+      ||pending.delivery!=='not-sent'&&(!connected||pending.text!==template)));
+    send.setAttribute('aria-label',(connected?'Отправить в Telegram: ':'Подготовить в Telegram: ')+template);
+    list.append(send);
   }
-  panel.append(list);return panel;
+  append(panel,list,pending&&telegramAttemptPanel(c,pending));return panel;
 }
 async function unbindTelegram(c){
   if(ui.busy.has('telegram-'+c.id))throw Error('Дождись завершения отправки');
@@ -1444,8 +1515,11 @@ function render(){
     const [,id,type,target]=hash.split('/');
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
     const client=state().clients[id];
-    if(type==='restriction'&&target&&client?.athlete&&!client.mergedInto)root.append(restrictionCard(client,target));
+    if(type==='restriction'&&target&&hasAthleteCard(client)&&!client.mergedInto)root.append(restrictionCard(client,target));
     else if(type==='training'&&target&&client?.athlete&&!client.mergedInto)root.append(athleteUI.entry(client,target));
+    else if(hasAthleteCard(client)&&!client.mergedInto&&['load','recovery'].includes(type))root.append(athleteUI.logPage(client,type));
+    else if(hasAthleteCard(client)&&!client.mergedInto&&type==='metric'&&['restHr','lt1','lthr','zones'].includes(target))
+      root.append(athleteUI.metricPage(client,target));
     else {
       if(type==='training')ui.open.add(id+'-zones');
       root.append(renderClient(id,type,target));
