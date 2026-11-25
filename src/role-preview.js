@@ -47,11 +47,17 @@ export function previewScheduleVisible(event,client,task,{role,athleteId,coachId
   return true;
 }
 
+export function previewTrainingVisible(state,client,{role,athleteId,coachId=OWNER_COACH}){
+  if(!available(client))return false;
+  return role==='superadmin'||role==='athlete'&&client.id===athleteId
+    ||role==='coach'&&assignedCoach(state,client)===coachId;
+}
+
 export function previewRoute(hash,{role,athleteId}){
   if(role!=='superadmin'&&(hash==='#settings'||hash==='#assistant'))return '#todo';
   if(role==='accountant'&&hash==='#races')return '#todo';
   if(role==='coach'&&(hash==='#account'||hash==='#todo/payments'))return '#todo';
-  if(hash==='#calendar'&&role!=='coach')return '#todo';
+  if(hash==='#calendar'&&!['coach','athlete'].includes(role))return '#todo';
   if(hash==='#profile'&&!isAthlete(role))return '#clients';
   if(isAthlete(role)){
     if(hash==='#clients'||hash.startsWith('#clients/')||hash.startsWith('#client/')&&hash.split('/')[1]!==athleteId)return '#profile';

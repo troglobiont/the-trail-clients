@@ -11,7 +11,7 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
     const members=teamMembers(state());
     if(athlete){
       const partners=Object.values(state().partners||{}).filter(partner=>!partner.archivedAt);
-      return append(el('div',null,'stack-lg admin-page'),el('h1','Админ'),
+      return append(el('div',null,'stack-lg admin-page'),el('h1','Ещё'),
         section('Партнёры','preview-athlete-partners',partners.length
           ?partners.map(partner=>el('div',partner.name)):[text('Партнёров пока нет.')]),
         section('Команда','preview-athlete-team',members.length

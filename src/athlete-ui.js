@@ -68,8 +68,9 @@ export function createAthleteUI({ui,el,append,button,text,section,navigate,rende
   function storedZones(c){
     return athleteZones(c)||(!c.athlete?c.zones:null);
   }
-  function summary(c,goals){
+  function summary(c,goals,trainingPlan){
     const out=el('div',null,'stack');
+    if(trainingPlan)out.append(trainingPlan);
     const metrics=el('div',null,'athlete-metrics');
     const today=localDate(),measuredRest=c.sportLog?.recovery?.[today]?.restingHeartRate;
     const garminRest=latestGarminPulse(garminData(c),today);

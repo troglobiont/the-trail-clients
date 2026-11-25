@@ -8,6 +8,8 @@ import {validateTeam} from './team.js';
 import {validateAthletes} from './athlete.js';
 import {validateSportLog} from './sport-log.js';
 import {goalProposal} from './goal-record.js';
+import {validateStoredTrainingWeek} from './training-week.js';
+import {validateTrainingAssignments} from './training-assignment.js';
 export { TIMEZONE, id, localDate, validDate, addDays } from './model-utils.js';
 
 export const SCHEMA=1;
@@ -45,6 +47,8 @@ export function validateState(s){
   validatePartners(s);
   validateTeam(s);
   validateAthletes(s);
+  if(s.settings.trainingWeek!==undefined)s.settings.trainingWeek=validateStoredTrainingWeek(s);
+  if(s.settings.trainingAssignments!==undefined)s.settings.trainingAssignments=validateTrainingAssignments(s.settings.trainingAssignments);
   for(const client of Object.values(s.clients))if(client.sportLog!==undefined)validateSportLog(client.sportLog);
   return s;
 }
