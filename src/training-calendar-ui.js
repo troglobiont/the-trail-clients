@@ -103,7 +103,9 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,format
       back&&row(button('← К профилю',()=>navigate(back),'subtle')),
       append(el('header',null,'stack'),el('h1',calendar?'Календарь':'Детали тренировок'),
         text([calendar?'Мои тренировки':client?.name,week&&range(week)].filter(Boolean).join(' · '))),
-      week?weekPanel(week):text('Личная тренировочная неделя пока не загружена.'),
+      week?weekPanel(week):text(canImport
+        ?'Личная тренировочная неделя пока не загружена. Выбери файл недели и нажми «Сохранить неделю».'
+        :'Личная тренировочная неделя пока не загружена. Её может загрузить суперадмин из карточки спортсмена.'),
       canImport&&row(button(week?'Обновить неделю':'Загрузить неделю',()=>load(client),'subtle')));
     return page;
   }

@@ -193,13 +193,17 @@ function renderRoleSwitch(){
     coach.addEventListener('change',()=>{ui.previewCoachId=coach.value;switcher.open=false;render();});
     person=field('Тренер в просмотре',coach);
   }else if(isAthlete(ui.role)){
-    const athlete=select([['','Выбрать спортсмена'],...previewAthletes(state()).map(client=>[client.id,client.name])],ownAthlete()?.id||'');
-    athlete.addEventListener('change',()=>{
+    const activeId=ownAthlete()?.id||'';
+    const options=previewAthletes(state()).map(client=>[client.id,client.name]);
+    if(!activeId)options.unshift(['','Выбрать спортсмена']);
+    const athlete=inlineSelect(document,options,activeId,'Карточка в просмотре');
+    athlete.element.addEventListener('change',()=>{
       if(!athlete.value)return;
       ui.previewAthleteId=athlete.value;ui.returnTo='#profile';switcher.open=false;
+      switcher.querySelector('summary').focus();
       if(['#profile','#calendar'].includes(location.hash))render();else navigate('#calendar');
     });
-    person=field('Карточка в просмотре',athlete);
+    person=athlete.field;
   }
   menu.replaceChildren(...[text('Просмотр ролей'),...choices,person].filter(Boolean));
   const nav=document.querySelector('.app-nav');
