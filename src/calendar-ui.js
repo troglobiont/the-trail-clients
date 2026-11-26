@@ -1,11 +1,13 @@
-import {localDate, TIMEZONE} from './model-utils.js';
+import {addDays, localDate, TIMEZONE} from './model-utils.js';
 import {linkCalendarTask, normalizeSearch} from './core.js';
 import {accounting, activeService, clientServices, money, serviceBalance, tariffLabel} from './accounting.js';
 import {createCalendarData} from './calendar-data.js';
 import {OWNER_COACH,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
 
 const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit'});
+const monthFormat = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, month:'long', year:'numeric'});
 const hasEnded = event => Date.parse(event.end) <= Date.now();
+const historyPageSize = 6;
 
 export function isSchedulingTask(task) {
   return !task.pauseContact && (task.calendarEvent ||
@@ -58,8 +60,9 @@ export function matchesScheduleKind(event, kind) {
 }
 
 export const CALENDAR_ARCHIVE_ROUTE = '#todo/schedule/past';
+export const CALENDAR_ARCHIVE_SECTION = 'calendar-past';
 
-export function createCalendarUI({state, service, readCalendar, saveCalendar, roleContext=()=>({role:'superadmin'}), el, append, button, row, field, input, select, text, modal, commit, formatDate,
+export function createCalendarUI({state, service, readCalendar, saveCalendar, roleContext=()=>({role:'superadmin'}), el, append, button, row, field, input, select, text, section, modal, commit, formatDate,
     navigate, openClient, message, searchClients, scheduledSession, addScheduledTariff, groupProtocol}) {
   const dataSource = createCalendarData({read:readCalendar,saved:()=>state().settings.calendarCache,save:saveCalendar});
   const selectedClients = new Map();
@@ -111,10 +114,12 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
   function schedule(kind) {
     const context=roleContext();
     const list = el('div', null, 'stack'), status = text(''), box = el('section', null, 'stack');
+    const archive = pastSchedule(kind,context);
     status.setAttribute('role', 'status');
     const display = async data => {
         const upcoming = scheduleEntries(data.events.filter(event=>!hasEnded(event)),kind,context);
         status.textContent = modeHint(data);
+        archive.display(data);
         list.replaceChildren();
         append(list,upcoming.length ? calendarEntries(upcoming) :
           data.mode === 'live' && text(kind==='group'?'На ближайшие 30 дней групповых тренировок нет.':
@@ -135,65 +140,72 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
         status.textContent = error.message;
       }
     };
-    append(box,append(el('div',null,'page-title calendar-heading'),el('h2','Предстоящие'),row(
-      button('Прошлые',()=>navigate(CALENDAR_ARCHIVE_ROUTE),'subtle'),button('Обновить',()=>update(true),'subtle'))),status,list);
+    append(box,append(el('div',null,'page-title calendar-heading'),el('h2','Тренировки'),
+      button('Обновить',()=>update(true),'subtle')),status,archive.fold,archive.nextLabel,list);
     void update(false);
     return box;
   }
 
-  function archive(kind, month) {
-    const context = roleContext(), currentMonth = localDate().slice(0,7);
-    const archiveRoute = CALENDAR_ARCHIVE_ROUTE+'/'+month;
-    const page = el('section',null,'stack'), status = text(''), summary = text(''), list = el('div',null,'stack');
-    const monthPicker = input('month',month);
-    monthPicker.max = currentMonth;
-    monthPicker.addEventListener('change',()=>{
-      if (monthPicker.value && monthPicker.validity.valid) navigate(CALENDAR_ARCHIVE_ROUTE+'/'+monthPicker.value);
-    });
-    status.setAttribute('role','status');
-    if (archiveView?.month!==month || archiveView.kind!==kind) archiveView = {month,kind,limit:5};
+  function pastSchedule(kind, context) {
+    const month = localDate().slice(0,7);
+    const key = [month,kind,context.role,context.coachId,context.athleteId].join('|');
+    if (archiveView?.key!==key) archiveView = {key,limit:historyPageSize,months:new Map()};
     const view = archiveView;
-    let entries = [], days = [];
-    const more = button('Показать ещё',()=>{
-      view.limit += 5;
-      showEntries();
-    });
+    const status = text('','muted small calendar-history-status'), list = el('div',null,'stack');
+    const nextLabel = el('h3','Ближайшие','calendar-next-label muted small');
+    status.setAttribute('role','status');
+    let current, entries = [], rendering = 0;
+    const more = button('Показать ещё',async()=>{
+      const shown = Math.min(entries.length,view.limit);
+      if (shown===entries.length) {
+        const oldest = [...view.months.keys()].at(-1) || month;
+        const previous = addDays(oldest+'-01',-1).slice(0,7);
+        status.textContent = 'Загружаю более ранние тренировки…';
+        try {
+          const data = await dataSource.loadHistory(previous);
+          view.months.set(previous,data);
+          const found = scheduleEntries(data.events.filter(hasEnded),kind,context).length;
+          const period = monthFormat.format(new Date(previous+'-15T12:00:00Z'));
+          status.textContent = found ? '' : 'Нет тренировок за '+period;
+          if (data.mode==='saved') status.textContent = [status.textContent,'Показаны сохранённые данные.'].filter(Boolean).join(' ');
+        } catch(error) {
+          status.textContent = error.message;
+          return;
+        }
+      } else status.textContent = '';
+      view.limit = shown+historyPageSize;
+      await draw();
+    },'subtle');
     more.hidden = true;
-    function showEntries() {
-      const visibleDays = new Set(days.slice(0,view.limit));
-      list.replaceChildren(entries.length ? calendarEntries(entries.filter(item=>visibleDays.has(item.day)),archiveRoute)
-        : text('За этот месяц прошедших тренировок нет.'));
-      more.hidden = days.length<=view.limit;
-    }
-    async function display(data) {
-      const past = data.events.filter(hasEnded).sort((a,b)=>Date.parse(b.start)-Date.parse(a.start));
-      const result = scheduleEntries(past,kind,context);
+    const fold = section('Прошлые тренировки',CALENDAR_ARCHIVE_SECTION,[list,status,more]);
+    fold.classList.add('calendar-history');
+    async function draw() {
+      nextLabel.hidden = !fold.open;
+      if (!fold.open || !current) return;
+      const run = ++rendering;
+      const past = [...view.months.values()].flatMap(data=>data.events);
+      past.push(...current.events.filter(event=>localDate(new Date(event.start)).startsWith(month+'-')));
+      const newestFirst = [...new Map(past.filter(hasEnded).map(event=>[event.id,event])).values()]
+        .sort((a,b)=>Date.parse(b.start)-Date.parse(a.start));
+      entries = scheduleEntries(newestFirst,kind,context);
+      const visibleEntries = entries.slice(0,view.limit);
       const operations = accounting(state()).operations;
-      await Promise.all(result.filter(item=>item.event.kind!=='group').map(async item=>{
+      await Promise.all(visibleEntries.filter(item=>item.event.kind!=='group').map(async item=>{
         const operation = operations[(await sessionIds(item.event.id)).sessionId];
         item.recorded = Boolean(operation && !operation.voided);
       }));
-      entries = result;
-      days = [...new Set(entries.map(item=>item.day))];
-      status.textContent = data.mode==='saved'?'Сохранено на устройстве · '+formatDate(data.asOf,true)+'.':'';
-      summary.textContent = entries.length ? 'В расписании · '+entries.length+' / Отмечено через расписание · '+entries.filter(item=>item.recorded).length : '';
-      showEntries();
+      if (run!==rendering) return;
+      list.replaceChildren(visibleEntries.length ? calendarEntries(visibleEntries,true) : text('В загруженном периоде тренировок нет.'));
+      const remaining = entries.length-visibleEntries.length;
+      more.textContent = 'Показать ещё'+(remaining?' · '+remaining:'');
+      more.hidden = false;
     }
-    async function update(force) {
-      const saved = dataSource.historySnapshot(month);
-      if (saved && !list.children.length) await display(saved);
-      status.textContent = 'Загружаю прошедшие тренировки…';
-      try { await display(await dataSource.loadHistory(month,force)); }
-      catch(error) { status.textContent = error.message; }
-    }
-    append(page,button('← К предстоящим',()=>navigate('#todo/schedule'),'back subtle'),
-      append(el('div',null,'page-title calendar-heading'),el('h2','Прошлые тренировки'),button('Обновить',()=>update(true),'subtle')),
-      field('Месяц',monthPicker),status,summary,list,more);
-    void update(false);
-    return page;
+    nextLabel.hidden = !fold.open;
+    fold.addEventListener('toggle',()=>void draw());
+    return {fold,nextLabel,display(data){current=data;void draw();}};
   }
 
-  function calendarEntries(entries, archiveRoute) {
+  function calendarEntries(entries, past = false) {
     const list = el('div',null,'stack');
     let previousDay;
     for (const {event,client,day,recorded} of entries) {
@@ -201,13 +213,14 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
       if (day !== previousDay) list.append(el('h3',formatDate(day),'calendar-day'));
       previousDay = day;
       const title = group ? (event.location?'Групповая · '+event.location:'Групповая тренировка') : client?.name || calendarName(event);
-      const card = button('',()=>navigate((archiveRoute||'#todo/schedule')+'/'+encodeURIComponent(event.id)),'panel calendar-event');
+      const route = past ? CALENDAR_ARCHIVE_ROUTE+'/'+day.slice(0,7) : '#todo/schedule';
+      const card = button('',()=>navigate(route+'/'+encodeURIComponent(event.id)),'panel calendar-event');
       card.dataset.kind = group?'group':'personal';
       list.append(append(card,
         text(timeRange(event),'calendar-time'),
         append(el('div'),el('strong',title),
           group?text(event.coachName):event.location&&text(event.location),
-          archiveRoute&&!group&&el('span',recorded?'Проведена':'Без отметки','chip'))));
+          past&&!group&&el('span',recorded?'Проведена':'Без отметки','chip'))));
     }
     return list;
   }
@@ -220,6 +233,10 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
       throw Error('Не удалось сохранить изменения в календаре');
     }
     dataSource.invalidate();
+    if (archiveView) for (const data of archiveView.months.values()) {
+      data.events = data.events.filter(item=>item.id!==event.id);
+      if (action==='edit' && localDate(new Date(response.event.start)).startsWith(data.from.slice(0,7)+'-')) data.events.push(response.event);
+    }
     if (Object.values(state().tasks).some(task=>task.calendarEvent?.id===event.id)) await commit(s=>{
       for (const task of Object.values(s.tasks)) if (task.calendarEvent?.id===event.id) {
         if (action==='cancel') task.calendarEvent.cancelled = true;
@@ -263,7 +280,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
   function session(eventId, month) {
     const context=roleContext();
     const restricted=context.role==='athlete'||context.role==='coach';
-    const back = month ? CALENDAR_ARCHIVE_ROUTE+'/'+month : '#todo/schedule';
+    const back = month ? CALENDAR_ARCHIVE_ROUTE : '#todo/schedule';
     const content = el('section',null,'stack-lg');
     const page = append(el('div',null,'stack-lg'),button(month?'← К прошлым тренировкам':'← К расписанию',()=>navigate(back),'back subtle'),content);
     const display = (event, ids, mode) => {
@@ -416,5 +433,5 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
       !event.cancelled&&eventLink(event,'Календарь'));
   }
 
-  return {schedule, archive, session, book, linked,preload:()=>dataSource.refresh().catch(()=>{})};
+  return {schedule, session, book, linked,preload:()=>dataSource.refresh().catch(()=>{})};
 }
