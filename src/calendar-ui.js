@@ -179,6 +179,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     },'subtle');
     more.hidden = true;
     const fold = section('Прошлые тренировки',CALENDAR_ARCHIVE_SECTION,[list,status,more]);
+    fold.classList.add('calendar-history');
     async function draw() {
       if (!fold.open || !current) return;
       const run = ++rendering;
