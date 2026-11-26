@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyState,createClient,validateState,exportState,parseImport,mergeState} from '../src/core.js';
-import {teamMembers,teamRole,teamEntries,teamSummary,saveTeamEntry,saveTeamNotes} from '../src/team.js';
+import {teamMembers,teamRole,teamEntries,teamSummary,saveTeamEntry,saveTeamNotes,saveTeamVisibility} from '../src/team.js';
+import {previewAthletes,previewCoaches} from '../src/role-preview.js';
 import {beginCloudSync,cloudData,receiveCloudData,trackCloudChanges,prepareCloudWrite} from '../src/cloud-state.js';
 const owner='10000000-0000-4000-8000-000000000001';
 function fixture(){const state=emptyState(),member=createClient(state,{name:'Тестов Алексей',role:'Тренер'});return {state,member};}
@@ -34,6 +35,27 @@ test('monthly work and cash totals preserve currencies, carry unpaid balances, a
   assert.deepEqual(totals.currencies.EUR,{accrued:0,paid:5000,expenses:0,balance:-5000});
   assert.equal(teamEntries(state,member.id,'2026-11').length,4);
   assert.throws(()=>teamSummary(state,member.id,'2026-13'),/месяц/u);
+});
+
+test('team visibility syncs and a coach can keep the same athlete card',()=>{
+  const {state,member}=fixture(),athlete=createClient(state,{name:'Тестовый спортсмен'});
+  athlete.teamAdmin={role:'Тренер',notes:'',entries:{}};
+  entry(state,member,'payout','2026-11-19',10000);
+  beginCloudSync(state,owner);receiveCloudData(state,{revision:1,data:cloudData(state)});
+  const before=structuredClone(state);
+  saveTeamVisibility(state,member.id,false);
+  trackCloudChanges(before,state);
+  const flight=prepareCloudWrite(state);
+  assert.equal(flight.changes.clients[member.id].teamAdmin.visible,false);
+  assert.equal(teamEntries(state,member.id).length,1);
+  assert.equal(teamMembers(state).length,2);
+  assert.deepEqual(teamMembers(state,{includeHidden:false}).map(c=>c.id),[athlete.id]);
+  assert.equal(teamRole(state.clients[athlete.id]),'Тренер');
+  assert.equal(previewAthletes(state)[0].id,athlete.id);
+  assert.equal(previewCoaches(state,{includeHidden:false}).some(([id])=>id===member.id),false);
+  assert.equal(parseImport(exportState(state)).clients[member.id].teamAdmin.visible,false);
+  saveTeamVisibility(state,member.id,true);
+  assert.equal(teamMembers(state,{includeHidden:false}).length,2);
 });
 
 test('editing replaces one team entry; invalid financial and duration data do not alter history',()=>{

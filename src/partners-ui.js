@@ -8,9 +8,10 @@ const dated=value=>!value?'':/^\d{4}-\d{2}$/u.test(value)?monthDate.format(new D
   /^\d{4}-\d{2}-\d{2}$/u.test(value)?fullDate.format(new Date(value+'T12:00:00Z')):value;
 const amount=value=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:2}).format(value);
 const price=term=>term.price==null?'':amount(term.price)+(term.currency?' '+term.currency:'');
+const displayStatus=partner=>['terms_agreed','owner_confirmed'].includes(partner.relationshipStatus)
+  ?'' : PARTNER_STATUSES[partner.relationshipStatus];
 
 export function createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message,openList=()=>navigate('#partners')}) {
-  let query='';
   const link=(label,value)=>{
     const url=partnerURL(value);if(!url)return text(label);
     const a=el('a',label,'partner-link');a.href=url;a.target='_blank';a.rel='noopener noreferrer';return a;
@@ -20,9 +21,8 @@ export function createPartnersUI({state,el,append,button,row,text,field,input,se
   };
   const confirmation=(partner,term)=>{
     const source=termConfirmation(partner,term);
-    const level=source.level==='owner_statement'&&!term.manualConfirmation&&term.discountPercent==null&&term.price==null
-      ? 'Партнёра подтвердил Сергей'
-      : {counterparty_email:'Подтверждено письмом',owner_statement:'Подтвердил Сергей',unknown:'Условия уточняются'}[source.level]||'Условия уточняются';
+    if(source.level==='owner_statement')return null;
+    const level=source.level==='counterparty_email'?'Подтверждено письмом':'Условия уточняются';
     return text([level,dated(source.date)].filter(Boolean).join(' · '));
   };
 
@@ -110,38 +110,40 @@ export function createPartnersUI({state,el,append,button,row,text,field,input,se
       button('Изменить',()=>editTask(task.partnerId,task),'subtle')));
   }
 
-  function page({embedded=false}={}) {
-    const page=el('div',null,'stack-lg'),search=input('search',query,'Поиск партнёра');search.setAttribute('aria-label','Поиск партнёра');
-    const list=el('div',null,'partner-list');
-    const update=()=>{
-      const q=search.value.trim().toLocaleLowerCase('ru');query=search.value;
-      const partners=partnerList(state()).filter(p=>(p.name+' '+p.category+' '+(p.legalEntity||'')).toLocaleLowerCase('ru').includes(q));
-      list.replaceChildren(...partners.map(p=>append(button('',()=>navigate('#partners/'+p.id),'partner-tile'),
-        el('strong',p.name),text(p.category),
-        p.benefits.some(term=>term.discountPercent!=null)&&text(p.benefits.map(term=>term.discountPercent==null?'':(term.condition?term.condition+' · ':'')+amount(term.discountPercent)+'%').filter(Boolean).join(' / ')),
-        text(PARTNER_STATUSES[p.relationshipStatus]))));
-      if(!partners.length)list.append(text(q?'Партнёры не найдены.':'Партнёров пока нет. После синхронизации здесь появятся подготовленные карточки.'));
-    };
-    search.addEventListener('input',update);update();
-    return append(page,append(el('div',null,'page-title'),!embedded&&el('h1','Партнёры'),button('+ Добавить',()=>editPartner(),'subtle')),search,list);
+  function page({embedded=false,readOnly=false}={}) {
+    const page=el('div',null,'stack-lg');
+    const partners=partnerList(state()).filter(p=>!readOnly||!p.archivedAt);
+    const list=append(el('div',null,'partner-list'),...partners.map(p=>{
+      const discounts=p.benefits.filter(term=>term.discountPercent!=null).map(term=>
+        (term.condition?term.condition+' · ':'')+amount(term.discountPercent)+'%').join(' / ');
+      const status=displayStatus(p);
+      return append(button('',()=>navigate('#partners/'+p.id),'partner-tile'),
+        el('strong',p.name),text(p.category),discounts&&text(discounts),status&&text(status));
+    }));
+    if(!partners.length)list.append(text('Партнёров пока нет.'));
+    return append(page,(!embedded||!readOnly)&&append(el('div',null,'page-title'),!embedded&&el('h1','Партнёры'),
+      !readOnly&&button('+ Добавить',()=>editPartner(),'subtle')),list);
   }
 
-  function card(partnerId,taskId=null) {
-    const p=state().partners?.[partnerId];if(!p)return append(el('div',null,'stack'),button('← К партнёрам',openList,'back subtle'),text('Карточка не найдена. Проверь синхронизацию.'));
+  function card(partnerId,taskId=null,{readOnly=false}={}) {
+    const p=state().partners?.[partnerId];
+    if(!p||readOnly&&p.archivedAt)return append(el('div',null,'stack'),button('← К партнёрам',openList,'back subtle'),text('Карточка не найдена. Проверь синхронизацию.'));
     const page=append(el('div',null,'stack-lg'),button('← К партнёрам',openList,'back subtle'),
-      append(el('div',null,'page-title'),el('h1',p.name),button('Изменить',()=>editPartner(p.id),'subtle')),
-      text([p.category,PARTNER_STATUSES[p.relationshipStatus]].join(' · ')));
-    const terms=append(el('section',null,'stack'),append(el('div',null,'row between'),el('h2','Условия для участников'),button('+ Условие',()=>editTerm(p),'subtle')));
+      append(el('div',null,'page-title'),el('h1',p.name),!readOnly&&button('Изменить',()=>editPartner(p.id),'subtle')),
+      text([p.category,displayStatus(p)].filter(Boolean).join(' · ')));
+    const terms=append(el('section',null,'stack'),append(el('div',null,'row between'),el('h2','Условия для участников'),
+      !readOnly&&button('+ Условие',()=>editTerm(p),'subtle')));
     for(const term of p.benefits)append(terms,append(el('div',null,'panel stack'),
-      append(el('div',null,'row between'),el('strong',term.condition||term.description||term.service),
+      append(el('div',null,'row between'),el('strong',term.condition||term.description||term.service||p.category),
         term.discountPercent!=null&&el('span','−'+amount(term.discountPercent)+'%','chip emphasis')),
       term.service&&term.service!==term.condition&&text(term.service),
       term.price!=null&&row(el('strong',price(term),'money-amount'),term.priceBasis?.startsWith('Расчёт')&&el('span','Расчёт','chip')),
-      term.priceBasis&&section('Основание цены',p.id+'-'+term.id+'-basis',[text(term.priceBasis)]),
-      term.discountPercent==null&&term.price==null&&text('Скидка и цена пока не указаны.'),confirmation(p,term),
-      button('Изменить условие',()=>editTerm(p,term),'subtle')));
+      !readOnly&&term.priceBasis&&section('Основание цены',p.id+'-'+term.id+'-basis',[text(term.priceBasis)]),
+      term.discountPercent==null&&term.price==null&&text('Скидка и цена пока не указаны.'),!readOnly&&confirmation(p,term),
+      !readOnly&&button('Изменить условие',()=>editTerm(p,term),'subtle')));
     if(!p.benefits.length)terms.append(text('Условия пока не указаны.'));
     page.append(terms);
+    if(readOnly)return append(page,p.website&&link('Сайт партнёра',p.website));
 
     const contacts=p.contacts.map((contact,index)=>append(el('div',null,'stack'),contact.name&&el('strong',contact.name),
       contact.email&&contactLink(contact.email,'mailto:',contact.email),contact.phone&&contactLink(contact.phone,'tel:',contact.phone.replace(/[^+\d]/gu,'')),

@@ -22,6 +22,7 @@ import {createPartnersUI} from './partners-ui.js';
 import {partnerTasks} from './partners.js';
 import {syncIndicatorState,cloudIcon,settingsWheel} from './sync-indicator.js';
 import {createAdminUI} from './admin-ui.js';
+import {isTeamMember,sharesTeamProfile,teamRole} from './team.js';
 import {createAthleteUI} from './athlete-ui.js';
 import {createSportLogUI} from './sport-log-ui.js';
 import {inlineSelect} from './inline-select.js';
@@ -117,7 +118,8 @@ const calendarUI=createCalendarUI({state,service,roleContext,el,append,button,ro
   scheduledSession:accountingUI.scheduledSession,addScheduledTariff:accountingUI.addScheduledTariff,groupProtocol:trainingWeekUI.groupProtocol});
 const partnersUI=createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message,
   openList:()=>{ui.open.add('admin-partners');navigate('#admin');}});
-const adminUI=createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,render,formatDate,partnersUI});
+const adminUI=createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,render,formatDate,partnersUI,
+  addCoach:()=>editClient(null,'Тренер')});
 const logUI=createSportLogUI({el,append,button,row,text,section,modal,commit,input,select,field,navigate,formatDate,garminData});
 const athleteUI=createAthleteUI({ui,el,append,button,text,section,navigate,logUI,garminData,
   renderRestrictions:c=>renderFeatures(c,{embedded:true})});
@@ -203,7 +205,9 @@ function renderRoleSwitch(){
   });
   let person;
   if(ui.role==='coach'){
-    const coach=select(previewCoaches(state()),ui.previewCoachId);
+    const options=previewCoaches(state(),{includeHidden:false});
+    if(!options.some(([id])=>id===ui.previewCoachId))ui.previewCoachId=OWNER_COACH;
+    const coach=select(options,ui.previewCoachId);
     coach.addEventListener('change',()=>{ui.previewCoachId=coach.value;switcher.open=false;render();});
     person=field('Тренер в просмотре',coach);
   }else if(isAthlete(ui.role)){
@@ -400,12 +404,14 @@ function pauseEditor(client) {
   return {element,values};
 }
 
-function editClient(clientId=null) {
+function editClient(clientId=null,initialRole='Клиент') {
   const c = clientId ? state().clients[clientId] : null;
-  modal(c ? 'Данные клиента' : 'Новый клиент', form => {
+  const canManageTeam=ui.role==='superadmin';
+  if(!canManageTeam&&(c?.role==='Тренер'||initialRole!=='Клиент'))return;
+  modal(c ? 'Данные клиента' : initialRole==='Тренер'?'Новый тренер':'Новый клиент', form => {
     const name = input('text', c?.name || '');
     name.maxLength = 180;
-    const role = select(['Клиент','Тренер','Организатор'], c ? C.clientRole(c) : 'Клиент');
+    const role = select(['Клиент','Тренер','Организатор'], c ? C.clientRole(c) : initialRole);
     const status = select([...C.STATUSES, ['occasional','Разово']], c?.engagement === 'occasional' ? 'occasional' : C.STATUSES.includes(c?.status) ? c.status : 'Активный');
     const pause = pauseEditor(c);
     const pauseFields = pause.element;
@@ -417,7 +423,7 @@ function editClient(clientId=null) {
     const statusField = field('Статус сотрудничества',status);
     form.append(field('Фамилия Имя',name));
     const classification=el('div',null,'stack');
-    append(classification,field('Роль',role),statusField,pauseFields,coachField);
+    append(classification,canManageTeam&&field('Роль',role),statusField,pauseFields,coachField);
     const controls = {
       format:select(['Очно','Дистанционно','Уточнить'],c?.format||'Уточнить'),
       basis:select(planBasisOptions,c?.basis||'Сейчас плана нет'),
@@ -450,6 +456,7 @@ function editClient(clientId=null) {
     syncFields();
     return () => {
       const isClient = role.value === 'Клиент';
+      if(ui.role!=='superadmin'&&(!isClient||state().clients[clientId]?.role==='Тренер'))throw Error('Командой управляет суперадмин');
       const values = {
         ...Object.fromEntries(Object.entries(controls).map(([key,control])=>[key,control.value])),
         name:name.value.trim(), context:context.value.trim(), rules:rules.value.split('\n').map(r=>r.trim()).filter(Boolean), role:isClient ? 'Клиент' : 'Тренер', teamRole:role.value === 'Организатор' ? 'Организатор' : null,
@@ -460,7 +467,10 @@ function editClient(clientId=null) {
       };
       if (!values.name) throw Error('Введи имя');
       if (profileEditor) values.profile = profileEditor.values();
-      return commit(s=>c ? C.editClient(s,c.id,values,date.value) : C.createClient(s,values,date.value));
+      if(c)return commit(s=>C.editClient(s,c.id,values,date.value));
+      return commit(s=>C.createClient(s,values,date.value)).then(created=>{
+        if(!isClient&&initialRole==='Тренер')navigate('#admin/team/'+created.id);
+      });
     };
   });
 }
@@ -537,6 +547,8 @@ function renderCatalog(scope) {
     const counts = {};
     for (const c of Object.values(state().clients)) {
       const key = C.clientSection(c);
+      if(isTeamMember(c)&&(ui.role==='superadmin'||sharesTeamProfile(c)))counts.team=(counts.team||0)+1;
+      if(key==='team')continue;
       if (key) counts[key] = (counts[key] || 0) + 1;
     }
     for (const key of ['occasional','paused','archive','team','pending']) {
@@ -673,30 +685,34 @@ function renderCatalogResults() {
   const scope = ui.catalogScope;
   const tariffs = hasFinance(ui.role)&&scope === 'active' ? matchingTariffClients(state(),ui.filters) : null;
   const payment = hasFinance(ui.role)&&scope === 'active' && ui.filters.paymentStatus !== 'all' ? clientPaymentStatuses(state()) : null;
-  const clients = C.filterClients(state(),{ ...ui.filters,section:scope,pauseGroup:ui.pauseFilter })
-    .filter(c=>(!tariffs || tariffs.has(c.id)) && (!payment || payment.get(c.id) === ui.filters.paymentStatus));
+  const canManageTeam=ui.role==='superadmin';
+  const clients = C.filterClients(state(),{ ...ui.filters,section:scope==='team'?null:scope,pauseGroup:ui.pauseFilter })
+    .filter(c=>(scope!=='team'||isTeamMember(c)&&(canManageTeam||sharesTeamProfile(c)))
+      &&(!tariffs || tariffs.has(c.id)) && (!payment || payment.get(c.id) === ui.filters.paymentStatus));
   const byContact=scope==='active'&&ui.contactOrder;
   const activities = byContact ? new Map(clients.map(client=>[client.id,pingActivity(client)])) : null;
   if (activities) clients.sort((a,b)=>(activities.get(a.id)?.time ?? Number.MIN_SAFE_INTEGER) -
     (activities.get(b.id)?.time ?? Number.MIN_SAFE_INTEGER));
   if (scope === 'active' && ui.filters.query.trim()) {
-    clients.push(...C.filterClients(state(),{query:ui.filters.query}).filter(c=>C.clientSection(c)!=='active'));
+    clients.push(...C.filterClients(state(),{query:ui.filters.query}).filter(c=>C.clientSection(c)!=='active'
+      &&(c.role!=='Тренер'||canManageTeam||sharesTeamProfile(c))));
   }
   const accountingClients = hasFinance(ui.role)?accountingUI.activeClientIds():new Set();
   list.replaceChildren();
   for (const c of clients.slice(0,ui.catalogLimit)) {
-    const item = button(c.name,()=>openClient(c.id),'client-directory-item');
-    item.setAttribute('aria-label','Открыть клиента: '+c.name);
+    const readOnlyTeam=!canManageTeam&&(scope==='team'||c.role==='Тренер');
+    const item = readOnlyTeam?el('div',c.name,'client-directory-item'):button(c.name,()=>openClient(c.id),'client-directory-item');
+    if(!readOnlyTeam)item.setAttribute('aria-label','Открыть клиента: '+c.name);
     const category = C.clientSection(c);
     const activity = activities?.get(c.id);
     const pingDetail = activity ? `${activity.kind === 'telegram-opened' ? 'Чат открыт' : 'Контакт'} ${formatDate(activity.at)} ${C.localDate(new Date(activity.time)).slice(0,4)}`
       : 'Контакт не записан';
-    const detail = category !== scope ? category === 'paused' ? clientStatus(c) : catalogViews[category]
+    const detail = scope === 'team' ? teamRole(c) : category !== scope ? category === 'paused' ? clientStatus(c) : catalogViews[category]
       : scope === 'paused' ? [C.pauseGroup(c)==='returning' && 'К возврату', c.pause?.returnWindow,
         c.pause?.contactOn && 'Связаться ' + formatDate(c.pause.contactOn)].filter(Boolean).join(' · ')
-      : scope === 'team' ? C.clientRole(c) : byContact ? pingDetail : '';
+      : byContact ? pingDetail : '';
     if (detail) item.append(text(detail));
-    const quick = accountingClients.has(c.id) && button('Учёт',()=>accountingUI.quickEntry(c.id),'directory-account');
+    const quick = scope!=='team'&&accountingClients.has(c.id) && button('Учёт',()=>accountingUI.quickEntry(c.id),'directory-account');
     if (quick) quick.setAttribute('aria-label','Учёт · '+c.name);
     list.append(append(el('div',null,'directory-row'),item,quick));
   }
@@ -1122,7 +1138,7 @@ function renderClient(clientId,targetType,targetId){
   },{compact:sport,readOnly:athlete});
   if(sport)page.append(athleteUI.summary(c,goals,previewTrainingVisible(state(),c,roleContext())
     &&button('Детали тренировок',()=>openClient(c.id,'training-plan'),'back subtle calendar-link')));
-  if(c.role==='Тренер')page.append(button('Работа и выплаты',()=>navigate('#admin/team/'+c.id),'subtle'));
+  if(ui.role==='superadmin'&&isTeamMember(c))page.append(button('Работа и выплаты',()=>navigate('#admin/team/'+c.id),'subtle'));
   const tasks=[...C.clientTasks(state(),clientId),...Array.from(ui.recentlyCompleted,id=>state().tasks[id])
     .filter(t=>t?.clientId===clientId&&t.phase==='done')].filter(visibleTask);
   if(tasks.length)page.append(append(el('section',null,'panel action-panel'),el('h2',athlete?'Задачи от тренера':'Действия по клиенту','block-heading'),...tasks.map(task)));
@@ -1808,7 +1824,8 @@ function render(){
     const [,id,type,target]=hash.split('/');
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
     const client=state().clients[id];
-    if(type==='sources'){
+    if(ui.role!=='superadmin'&&client?.role==='Тренер')navigate('#clients/team');
+    else if(type==='sources'){
       if(athlete&&person?.id===id&&isOwnerPerson(person))root.append(athleteSourcesPage(person));
       else navigate(athlete?'#profile':'#client/'+id);
     }
@@ -1853,8 +1870,8 @@ function render(){
   else if(hash==='#races')root.append(detailsUI.races(athlete?{participantId:person?.id||null}:undefined));
   else if(hash==='#admin')root.append(adminUI.page({athlete,person}));
   else if(hash.startsWith('#admin/team/'))root.append(adminUI.card(hash.split('/')[2]));
-  else if(hash==='#partners'){ui.open.add('admin-partners');root.append(adminUI.page());}
-  else if(hash.startsWith('#partners/')){const [,id,,taskId]=hash.split('/');root.append(partnersUI.card(id,taskId));}
+  else if(hash==='#partners'){ui.open.add('admin-partners');root.append(adminUI.page({athlete,person}));}
+  else if(hash.startsWith('#partners/')){const [,id,,taskId]=hash.split('/');root.append(partnersUI.card(id,taskId,{readOnly:athlete}));}
   else if(hash==='#assistant')root.append(renderAssistant());
   else if(hash==='#settings'){
     root.append(renderSettings());renderUpdate();renderCloudPanel();

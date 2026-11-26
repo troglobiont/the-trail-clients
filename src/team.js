@@ -6,12 +6,15 @@ const key=value=>typeof value==='string'&&/^[-a-zA-Z0-9_]{1,180}$/.test(value)&&
 const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
 const money=value=>Number.isSafeInteger(value)&&value>0&&value<=1e11;
 const note=value=>typeof value==='string'&&value.length<=2000;
-export const teamMembers=state=>Object.values(state.clients).filter(c=>!c.mergedInto&&c.role==='Тренер')
+export const isTeamMember=member=>Boolean(member&&!member.mergedInto&&(member.role==='Тренер'||member.teamAdmin?.role==='Тренер'));
+export const sharesTeamProfile=member=>member.teamAdmin?.visible!==false;
+export const teamMembers=(state,{includeHidden=true}={})=>Object.values(state.clients)
+  .filter(member=>isTeamMember(member)&&(includeHidden||sharesTeamProfile(member)))
   .sort((a,b)=>a.name.localeCompare(b.name,'ru'));
-export const teamRole=member=>member.teamRole==='Организатор'?'Организатор':'Тренер';
+export const teamRole=member=>member.role==='Тренер'&&member.teamRole==='Организатор'?'Организатор':'Тренер';
 function memberFor(state,memberId){
   const member=state.clients[memberId];
-  if(!member||member.mergedInto||member.role!=='Тренер')throw Error('Участник команды не найден');
+  if(!isTeamMember(member))throw Error('Участник команды не найден');
   return member;
 }
 function checkEntry(entry,k){
@@ -28,10 +31,16 @@ export function validateTeam(state){
   for(const member of Object.values(state.clients)){
     const admin=member.teamAdmin;if(admin===undefined)continue;
     // Keep the business history when a person's directory role is later changed.
-    if(!object(admin)||!note(admin.notes)||!object(admin.entries)||Object.keys(admin.entries).length>10000)
+    if(!object(admin)||!note(admin.notes)||!object(admin.entries)||Object.keys(admin.entries).length>10000
+      ||admin.role!==undefined&&admin.role!=='Тренер'||admin.visible!==undefined&&typeof admin.visible!=='boolean')
       throw Error('Некорректные данные команды');
     for(const [k,entry] of Object.entries(admin.entries))checkEntry(entry,k);
   }
+}
+export function saveTeamVisibility(state,memberId,visible){
+  const member=memberFor(state,memberId);
+  if(typeof visible!=='boolean')throw Error('Укажи видимость участника');
+  member.teamAdmin={notes:'',entries:{},...member.teamAdmin,visible};
 }
 export function saveTeamNotes(state,memberId,notes){
   const member=memberFor(state,memberId);

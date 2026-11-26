@@ -1,4 +1,5 @@
 import {normalizeSearch} from './core.js';
+import {sharesTeamProfile} from './team.js';
 
 export const ROLES={superadmin:'Суперадмин',coach:'Тренер',accountant:'Бухгалтер',athlete:'Спортсмен'};
 export const OWNER_COACH='owner-coach';
@@ -18,9 +19,10 @@ export function previewAthlete(state,id){
   return available(client)?client:Object.values(state.clients).find(client=>available(client)&&isOwnerPerson(client));
 }
 
-export function previewCoaches(state){
+export function previewCoaches(state,{includeHidden=true}={}){
   return [[OWNER_COACH,ownerName],...Object.values(state.clients).filter(client=>client.role==='Тренер'
-    &&client.teamRole!=='Организатор'&&!client.mergedInto&&!isOwnerPerson(client)).map(client=>[client.id,client.name])];
+    &&client.teamRole!=='Организатор'&&!client.mergedInto&&!isOwnerPerson(client)
+    &&(includeHidden||sharesTeamProfile(client))).map(client=>[client.id,client.name])];
 }
 
 export function assignedCoach(state,client){
@@ -66,13 +68,14 @@ export function previewTrainingVisible(state,client,{role,athleteId,coachId=OWNE
 
 export function previewRoute(hash,{role,athleteId}){
   if(role!=='superadmin'&&hash==='#assistant')return '#todo';
+  if(role!=='superadmin'&&hash.startsWith('#admin/team/'))return '#admin';
   if(role==='accountant'&&hash==='#races')return '#todo';
   if(role==='coach'&&(hash==='#account'||hash==='#todo/payments'))return '#todo';
   if(hash==='#calendar'&&!['coach','athlete'].includes(role))return '#todo';
   if(hash==='#profile'&&!isAthlete(role))return '#clients';
   if(isAthlete(role)){
     if(hash==='#clients'||hash.startsWith('#clients/')||hash.startsWith('#client/')&&hash.split('/')[1]!==athleteId)return '#profile';
-    if(hash.startsWith('#admin/')||hash==='#partners'||hash.startsWith('#partners/'))return '#admin';
+    if(hash.startsWith('#admin/')||/^#partners\/[^/]+\//u.test(hash))return '#admin';
   }
   return hash;
 }

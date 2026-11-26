@@ -18,7 +18,10 @@ test('role routes do not open hidden pages or another athlete card',()=>{
   assert.equal(previewRoute('#client/'+owner.id+'/training',personal),'#profile');
   assert.equal(previewRoute('#client/'+athlete.id+'/load',personal),'#client/'+athlete.id+'/load');
   assert.equal(previewRoute('#admin/team/somebody',personal),'#admin');
-  assert.equal(previewRoute('#partners/some-partner',personal),'#admin');
+  assert.equal(previewRoute('#partners/some-partner',personal),'#partners/some-partner');
+  assert.equal(previewRoute('#partners/some-partner/task/one',personal),'#admin');
+  for(const role of ['coach','accountant'])assert.equal(previewRoute('#admin/team/somebody',{role}),'#admin');
+  assert.equal(previewRoute('#admin/team/somebody',{role:'superadmin'}),'#admin/team/somebody');
   assert.equal(previewRoute('#settings',personal),'#settings');
   assert.equal(previewRoute('#settings',{role:'coach'}),'#settings');
   assert.equal(previewRoute('#settings',{role:'accountant'}),'#settings');

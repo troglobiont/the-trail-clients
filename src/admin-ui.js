@@ -1,32 +1,29 @@
-import {teamMembers,teamRole,teamEntries,teamSummary,saveTeamEntry,saveTeamNotes,TEAM_ENTRY_KINDS} from './team.js';
+import {teamMembers,teamRole,teamEntries,teamSummary,saveTeamEntry,saveTeamNotes,saveTeamVisibility,sharesTeamProfile,TEAM_ENTRY_KINDS} from './team.js';
 import {amountMinor,money,CURRENCIES} from './accounting.js';
 import {localDate,validDate} from './model-utils.js';
 import {isOwnerPerson} from './role-preview.js';
 
 const duration=minutes=>[Math.floor(minutes/60)?Math.floor(minutes/60)+' ч':'',minutes%60?minutes%60+' мин':''].filter(Boolean).join(' ')||'0 ч';
-export function createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,render,formatDate,partnersUI}){
+export function createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,addCoach,render,formatDate,partnersUI}){
   let month=localDate().slice(0,7);
   const adminBack=()=>navigate('#admin');
   function page({athlete=false,person}={}){
-    const members=teamMembers(state());
-    if(athlete){
-      const partners=Object.values(state().partners||{}).filter(partner=>!partner.archivedAt);
-      return append(el('div',null,'stack-lg admin-page'),el('h1','Ещё'),
-        section('Партнёры','preview-athlete-partners',partners.length
-          ?partners.map(partner=>el('div',partner.name)):[text('Партнёров пока нет.')]),
-        section('Команда','preview-athlete-team',members.length
-          ?members.map(member=>el('div',member.name+' · '+teamRole(member))):[text('Команда пока не добавлена.')]),
-        isOwnerPerson(person)&&section('Интеграции','preview-athlete-integrations',[
-          button('Источники данных',()=>openClient(person.id,'sources'),'subtle')
-        ]));
-    }
+    const canManageTeam=ui.role==='superadmin';
+    const members=teamMembers(state(),{includeHidden:canManageTeam});
     const list=el('div',null,'team-list');
-    for(const member of members)list.append(append(button('',()=>navigate('#admin/team/'+member.id),'team-tile'),
-      el('strong',member.name),text(teamRole(member)),el('span','›','team-chevron')));
-    if(!members.length)list.append(text('Добавь человека с ролью «Тренер» или «Организатор» в разделе «Клиенты».'));
-    const team=section('Команда','admin-team',[list]);
-    const partners=section('Партнёры','admin-partners',[partnersUI.page({embedded:true})]);
-    return append(el('div',null,'stack-lg admin-page'),el('h1','Админ'),partners,team);
+    for(const member of members){
+      const item=canManageTeam?button('',()=>navigate('#admin/team/'+member.id),'team-tile'):el('div',null,'team-tile');
+      list.append(append(item,el('strong',member.name),text(teamRole(member)),
+        canManageTeam&&!sharesTeamProfile(member)&&text('Только суперадмин'),
+        canManageTeam&&el('span','›','team-chevron')));
+    }
+    if(!members.length)list.append(text('Команда пока не добавлена.'));
+    const team=section('Команда','admin-team',[canManageTeam&&row(button('+ Добавить тренера',addCoach,'subtle')),list]);
+    const partners=section('Партнёры','admin-partners',[partnersUI.page({embedded:true,readOnly:athlete})]);
+    return append(el('div',null,'stack-lg admin-page'),el('h1',athlete?'Ещё':'Админ'),partners,team,
+      athlete&&isOwnerPerson(person)&&section('Интеграции','preview-athlete-integrations',[
+        button('Источники данных',()=>openClient(person.id,'sources'),'subtle')
+      ]));
   }
   function editNotes(member){
     modal('Заметки · '+member.name,form=>{
@@ -67,13 +64,19 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
     });
   }
   function card(memberId){
+    if(ui.role!=='superadmin')return page();
     const member=teamMembers(state()).find(c=>c.id===memberId);
     if(!member)return append(el('div',null,'stack'),button('← Админ',adminBack,'back subtle'),text('Участник команды не найден. Проверь синхронизацию.'));
     ui.open.add('admin-team');
     const picker=input('month',month);picker.setAttribute('aria-label','Месяц учёта команды');picker.className='team-month';
     picker.addEventListener('change',()=>{if(validDate(picker.value+'-01')){month=picker.value;render();}});
+    const visible=sharesTeamProfile(member);
+    const visibility=button(visible?'Скрыть от других ролей':'Показывать другим ролям',
+      ()=>commit(s=>saveTeamVisibility(s,member.id,!visible)),'subtle');
     const page=append(el('div',null,'stack-lg team-card'),button('← Админ',adminBack,'back subtle'),
       append(el('div',null,'page-title'),el('h1',member.name),el('span',teamRole(member),'chip')),
+      append(el('section',null,'panel stack'),el('h2','Видимость в команде'),
+        text(visible?'Виден тренеру, бухгалтеру и спортсмену.':'Виден только суперадмину.'),row(visibility)),
       button('Карточка человека',()=>openClient(member.id),'subtle'),
       row(picker,button('+ Запись',()=>editEntry(member),'primary')));
     const summary=teamSummary(state(),member.id,month),entries=teamEntries(state(),member.id,month);
