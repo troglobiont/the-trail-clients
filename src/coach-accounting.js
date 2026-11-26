@@ -2,6 +2,7 @@ import {CURRENCIES,accounting,activeService,saveOperation} from './accounting.js
 import {localDate,validDate} from './model-utils.js';
 
 export const GROUP_COMPLETION='coach-group-completion';
+export const GROUP_REPORT='coach-group-report';
 export const COACH_CASH='coach-cash';
 export const GROUP_RATE=200000;
 export const CASH_STATUS={pending:'На проверке',returned:'Нужно уточнить',approved:'Подтверждено'};
@@ -15,7 +16,15 @@ const staff=(state,id)=>Object.hasOwn(state.clients,id)?state.clients[id]:null;
 const trainer=person=>person&&!person.mergedInto&&
   (person.teamAdmin?.role==='Тренер'||person.role==='Тренер'&&person.teamRole!=='Организатор');
 
-export const groupCompletion=(state,eventKey)=>state.events.find(e=>e.type===GROUP_COMPLETION&&e.id===eventKey);
+export const isGroupRecord=entry=>entry?.type===GROUP_COMPLETION||entry?.type===GROUP_REPORT;
+export const groupCompletion=(state,eventKey,calendarRef)=>
+  state.events.find(e=>e.type===GROUP_REPORT&&calendarRef&&e.calendarRef===calendarRef)
+  ?? state.events.find(e=>isGroupRecord(e)&&e.id===eventKey);
+
+export function groupRecords(state){
+  const reports=new Set(state.events.filter(e=>e.type===GROUP_REPORT&&e.calendarRef).map(e=>e.calendarRef));
+  return state.events.filter(e=>e.type===GROUP_REPORT||e.type===GROUP_COMPLETION&&!reports.has(e.calendarRef));
+}
 export function groupEventReference(event){
   try{ return new URL(event.url).searchParams.get('eid')||event.id; }
   catch{ return event.id; }
@@ -31,7 +40,7 @@ function replaceEvent(state,entry){
 }
 
 export function saveGroupCompletion(state,eventKey,event,coachId,context,voided=false,now=new Date()){
-  const previous=groupCompletion(state,eventKey);
+  const calendarRef=groupEventReference(event),previous=groupCompletion(state,eventKey,calendarRef);
   if(!key(eventKey)||event.kind!=='group'||!timestamp(event.start)||!timestamp(event.end))throw Error('Тренировка не найдена');
   if(context.role!=='superadmin'&&(context.role!=='coach'||context.coachId!==coachId||voided||
     previous)) {
@@ -43,7 +52,7 @@ export function saveGroupCompletion(state,eventKey,event,coachId,context,voided=
   if(minutes<1||minutes>1440||Date.parse(event.end)>now.getTime())throw Error('Отметку можно поставить после занятия');
   if(voided&&!previous)throw Error('Отметка о проведении не найдена');
   const at=now.toISOString();
-  const next={id:eventKey,type:GROUP_COMPLETION,calendarRef:groupEventReference(event),clientId:coachId,at:previous?.at??at,updatedAt:at,
+  const next={...previous,id:previous?.id??eventKey,type:previous?.type??GROUP_COMPLETION,calendarRef,clientId:coachId,at:previous?.at??at,updatedAt:at,
     day:localDate(new Date(event.start)),minutes,
     amount:(previous?.clientId===coachId?previous.amount:staff(state,coachId).teamAdmin?.groupRate)??GROUP_RATE,currency:'RSD',
     note:String(event.location||'').trim().slice(0,180),voided};
@@ -108,14 +117,18 @@ export function reviewCoachCash(state,requestId,expectedUpdatedAt,decision,value
 export function validateCoachAccounting(state){
   const seen=new Set();
   for(const e of state.events){
-    if(e?.type!==GROUP_COMPLETION&&e?.type!==COACH_CASH)continue;
+    if(!isGroupRecord(e)&&e?.type!==COACH_CASH)continue;
     if(!key(e.id)||seen.has(e.id)||!state.clients[e.clientId]||!timestamp(e.at)||!timestamp(e.updatedAt))
       throw Error('Некорректная запись учёта тренера');
     seen.add(e.id);
-    if(e.type===GROUP_COMPLETION){
-      if(!validDate(e.day)||!Number.isInteger(e.minutes)||e.minutes<1||e.minutes>1440||!amount(e.amount)||
-        e.currency!=='RSD'||typeof e.voided!=='boolean'||!note(e.note,180)||!e.calendarRef||!note(e.calendarRef,1000))
-        throw Error('Некорректное начисление за группу');
+    if(isGroupRecord(e)){
+      const report=e.type===GROUP_REPORT;
+      const hasDuration=Number.isInteger(e.minutes)&&e.minutes>=1&&e.minutes<=1440;
+      const hasCalendarRef=Boolean(e.calendarRef)&&note(e.calendarRef,1000);
+      if(!validDate(e.day)||!amount(e.amount)||e.currency!=='RSD'||typeof e.voided!=='boolean'||!note(e.note,180)
+        ||!(hasDuration||report&&e.minutes===null)||!(hasCalendarRef||report&&e.calendarRef===null)
+        ||report&&(!e.source||!note(e.source,180)))
+        throw Error('Некорректная отметка о групповой тренировке');
     }else if(!Object.hasOwn(CASH_STATUS,e.status)||!state.clients[e.payerClientId]||
       !key(e.serviceId)||!validDate(e.date)||!CURRENCIES.includes(e.currency)||!amount(e.amount)||!note(e.note)||
       !(e.period===null||month(e.period))||!Array.isArray(e.history)||!e.history.length||

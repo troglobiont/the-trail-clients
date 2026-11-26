@@ -22,7 +22,7 @@ import {createPartnersUI} from './partners-ui.js';
 import {partnerTasks} from './partners.js';
 import {syncIndicatorState,cloudIcon,settingsWheel} from './sync-indicator.js';
 import {createAdminUI} from './admin-ui.js';
-import {COACH_CASH,GROUP_COMPLETION} from './coach-accounting.js';
+import {COACH_CASH,isGroupRecord} from './coach-accounting.js';
 import {createCoachAccountingUI} from './coach-accounting-ui.js';
 import {isTeamMember,sharesTeamProfile,teamRole} from './team.js';
 import {createAthleteUI} from './athlete-ui.js';
@@ -1046,7 +1046,7 @@ function renderHistory(c) {
     'feature-created','feature-edited','feature-archived','feature-restored']);
   const coachEvents=new Set([...athleteEvents,'record-created','pause-contact-completed','contact','telegram-opened','telegram-linked','telegram-unlinked']);
   const related=Object.values(state().tasks).filter(task=>task.clientId===c.id);
-  const events=state().events.filter(e=>e.clientId===c.id&&![GROUP_COMPLETION,COACH_CASH].includes(e.type)).slice().reverse()
+  const events=state().events.filter(e=>e.clientId===c.id&&!isGroupRecord(e)&&e.type!==COACH_CASH).slice().reverse()
     .filter(e=>{
       const task=state().tasks[e.entityId],record=state().records[e.entityId];
       if(e.type==='task-closed'&&task?.phase==='done'||e.type==='feature-archived'&&features.get(e.entityId)?.active===false)return false;

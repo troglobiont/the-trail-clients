@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createClient,emptyState,mergeState,validateState} from '../src/core.js';
 import {accounting,clientAccountHistory,saveService} from '../src/accounting.js';
-import {groupEventReference,saveGroupCompletion,submitCoachCash,reviewCoachCash,coachCash} from '../src/coach-accounting.js';
+import {GROUP_REPORT,groupCompletion,groupEventReference,saveGroupCompletion,submitCoachCash,reviewCoachCash,coachCash} from '../src/coach-accounting.js';
 import {groupCoach,OWNER_COACH} from '../src/role-preview.js';
 import {saveTeamGroupRate,teamEntries,teamSummary} from '../src/team.js';
 import {beginCloudSync,cloudData,prepareCloudWrite,receiveCloudData,trackCloudChanges} from '../src/cloud-state.js';
@@ -98,4 +98,23 @@ test('calendar attribution uses a unique name and prefers an exact full name',()
   assert.equal(groupCoach({coachName:'Алексей Тестов'},state),trainer.id);
   assert.equal(groupCoach({coachName:'Сергей Шелковой'},state),OWNER_COACH);
   assert.equal(groupCoach({coachName:'Другой Сергей'},state),anotherSergei.id);
+});
+
+test('group reports retain dates without inventing duration or affecting the live balance',()=>{
+  const {state,trainer,coach}=fixture();
+  const calendarRef=groupEventReference(group);
+  const live=saveGroupCompletion(state,'calendar-group',group,trainer.id,coach,false,now);
+  const linked={...live,id:'report-linked',type:GROUP_REPORT,source:'Архивный отчёт'};
+  const dated={...linked,id:'report-dated',calendarRef:null,minutes:null};
+  state.events.push(linked,dated);
+  validateState(state);
+  assert.equal(groupCompletion(state,live.id,calendarRef),linked);
+  assert.equal(teamEntries(state,trainer.id).length,2);
+  assert.deepEqual(teamSummary(state,trainer.id,'2026-11').currencies,{});
+  assert.equal(teamSummary(state,trainer.id,'2026-11').minutes,75);
+  assert.equal(saveGroupCompletion(state,live.id,group,trainer.id,coach,false,later),linked);
+  saveGroupCompletion(state,live.id,group,trainer.id,admin,true,later);
+  assert.equal(teamEntries(state,trainer.id).length,1);
+  assert.deepEqual(teamSummary(state,trainer.id,'2026-11').currencies,{});
+  validateState(state);
 });

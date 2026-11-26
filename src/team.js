@@ -1,6 +1,6 @@
 import {id,validDate} from './model-utils.js';
 import {CURRENCIES} from './accounting.js';
-import {GROUP_COMPLETION} from './coach-accounting.js';
+import {GROUP_REPORT,groupRecords} from './coach-accounting.js';
 
 export const TEAM_ENTRY_KINDS={work:'Работа',accrual:'Начисление',payout:'Выплата',expense:'Расход'};
 const key=value=>typeof value==='string'&&/^[-a-zA-Z0-9_]{1,180}$/.test(value)&&!['__proto__','constructor','prototype'].includes(value);
@@ -68,8 +68,8 @@ export function saveTeamEntry(state,memberId,values){
 }
 export function teamEntries(state,memberId,month=null){
   const manual=Object.values(memberFor(state,memberId).teamAdmin?.entries||{});
-  const calendar=state.events.filter(e=>e.type===GROUP_COMPLETION&&e.clientId===memberId&&!e.voided)
-    .map(e=>({...e,kind:'work',createdAt:e.at,group:true}));
+  const calendar=groupRecords(state).filter(e=>e.clientId===memberId&&!e.voided)
+    .map(e=>({...e,kind:'work',createdAt:e.at,group:true,historical:e.type===GROUP_REPORT}));
   return [...manual,...calendar]
     .filter(e=>!month||e.day.slice(0,7)===month)
     .sort((a,b)=>b.day.localeCompare(a.day)||b.createdAt.localeCompare(a.createdAt)||a.id.localeCompare(b.id));
@@ -79,7 +79,7 @@ export function teamSummary(state,memberId,month){
   const entries=teamEntries(state,memberId),monthly=entries.filter(e=>e.day.slice(0,7)===month);
   const currencies={};
   for(const entry of entries){
-    if(entry.day.slice(0,7)>month||entry.amount===null)continue;
+    if(entry.day.slice(0,7)>month||entry.amount===null||entry.historical)continue;
     const sums=currencies[entry.currency]??={accrued:0,paid:0,expenses:0,balance:0};
     if(['work','accrual'].includes(entry.kind))sums.balance+=entry.amount;
     if(entry.kind==='payout')sums.balance-=entry.amount;

@@ -5,7 +5,7 @@ import { validateCloudState } from './cloud-state.js';
 import { raceById, raceCatalog, raceDefinition, raceGoal, sameRace, setProfile, setTraining } from './client-details.js';
 import {validatePartners} from './partners.js';
 import {validateTeam} from './team.js';
-import {COACH_CASH,GROUP_COMPLETION,validateCoachAccounting} from './coach-accounting.js';
+import {COACH_CASH,isGroupRecord,validateCoachAccounting} from './coach-accounting.js';
 import {validateAthletes} from './athlete.js';
 import {validateSportLog} from './sport-log.js';
 import {goalProposal} from './goal-record.js';
@@ -358,7 +358,7 @@ export function mergeState(current,incoming){
   const events=new Map(next.events.map(e=>[e.id,e]));
   for(const event of incoming.events){
     const previous=events.get(event.id);
-    const coachEntry=previous?.type===event.type&&[COACH_CASH,GROUP_COMPLETION].includes(event.type);
+    const coachEntry=previous?.type===event.type&&(event.type===COACH_CASH||isGroupRecord(event));
     const newer=coachEntry&&Date.parse(event.updatedAt)>Date.parse(previous.updatedAt);
     if(!previous||coachEntry&&event.type===COACH_CASH&&event.status==='approved'&&previous.status!=='approved'||
       newer&&previous.status!=='approved')events.set(event.id,clone(event));

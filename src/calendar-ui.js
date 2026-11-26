@@ -3,7 +3,7 @@ import {linkCalendarTask, normalizeSearch} from './core.js';
 import {accounting, activeService, clientServices, money, serviceBalance, tariffLabel} from './accounting.js';
 import {createCalendarData} from './calendar-data.js';
 import {assignedCoach,coachContact,groupCoach,OWNER_COACH,previewCoaches,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
-import {GROUP_COMPLETION,groupCompletion,groupEventReference,saveGroupCompletion} from './coach-accounting.js';
+import {GROUP_REPORT,groupCompletion,groupEventReference,groupRecords,saveGroupCompletion} from './coach-accounting.js';
 
 const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit'});
 const monthFormat = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, month:'long', year:'numeric'});
@@ -274,7 +274,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
   function calendarEntries(entries, past = false) {
     const list = el('div',null,'stack');
     const athlete = roleContext().role==='athlete';
-    const completed=new Map(state().events.filter(e=>e.type===GROUP_COMPLETION).map(e=>[e.calendarRef,e]));
+    const completed=new Map(groupRecords(state()).filter(e=>e.calendarRef).map(e=>[e.calendarRef,e]));
     let previousDay;
     for (const {event,client,day,recorded} of entries) {
       const group=event.kind==='group';
@@ -293,7 +293,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
         text(timeRange(event),'calendar-time'),
         append(el('div'),el('strong',title),
           group?text('Ответственный · '+responsible):event.location&&text(event.location),
-          past&&el('span',group&&completion?.voided?'Не проведена':(group?completion:recorded)?'Проведена':'Без отметки','chip'))));
+          past&&el('span',group&&completion?.voided?'Не проведена':group&&completion?.type===GROUP_REPORT?'Проведена · отчёт':(group?completion:recorded)?'Проведена':'Без отметки','chip'))));
     }
     return list;
   }
@@ -367,9 +367,10 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
           content.replaceChildren(text('Тренировка недоступна в этом режиме.'));
           return;
         }
-        const hash=await sessionIds('group:'+groupEventReference(event));
+        const calendarRef=groupEventReference(event);
+        const hash=await sessionIds('group:'+calendarRef);
         if(!content.isConnected)return;
-        const entry=groupCompletion(state(),hash.sessionId);
+        const entry=groupCompletion(state(),hash.sessionId,calendarRef);
         const matched=groupCoach(event,state()),expectedCoach=matched&&coachContact(state(),matched);
         const actual=state().clients[entry?.clientId]||expectedCoach;
         const complete=(memberId,voided=false)=>commit(draft=>{
@@ -396,7 +397,8 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
           },{saveLabel:'Снять отметку'}),'subtle'));
         content.replaceChildren(el('h1','Групповая тренировка'),append(el('section',null,'panel stack calendar-detail'),
           event.location&&el('h2',event.location),text('Ответственный · '+(actual?.name||event.coachName||'требует уточнения')),
-          entry&&el('span',entry.voided?'Не проведена':'Проведена','chip'),
+          entry&&el('span',entry.voided?'Не проведена':entry.type===GROUP_REPORT?'Проведена · отчёт':'Проведена','chip'),
+          !athlete&&entry?.source&&text(entry.source),
           !athlete&&entry&&expectedCoach?.id!==actual?.id&&text('В Google Календаре · '+event.coachName),
           text([formatDate(date),timeRange(event)].join(' · '),'calendar-time'),
           !athlete&&eventLink(event,'Открыть в Google Календаре'),actions?.children?.length&&actions),...(athlete?[]:[groupProtocol(date)]));
