@@ -108,7 +108,7 @@ export function createCloudSync({ store, api, vault, onChange = () => {}, onRece
     groupWeek: day => request(token=>api.groupWeek(day,token)),
     garmin: clientId => request(token=>api.garmin(clientId,token)),
     garminConnection: (clientId,action) => request(token=>api.garminConnection(clientId,action,token)),
-    trainingWeek: (clientId,prepared) => request(token=>api.trainingWeek(clientId,prepared,token)),
+    trainingWeek: (clientId,prepared,weekStart) => request(token=>api.trainingWeek(clientId,prepared,token,weekStart)),
     publishTrainingWeek: (clientId,week) => request(token=>api.publishTrainingWeek(clientId,week,token)),
     async restore() {
       const value = await vault.load();

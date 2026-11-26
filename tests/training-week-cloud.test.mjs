@@ -14,10 +14,12 @@ test('published week reads and explicit publication use the signed-in account an
   const week={weekStart:'2026-11-23',checkedAt:'2026-11-25T18:40:00Z'};
   await api.trainingWeek('client-test',false,'session');
   await api.trainingWeek('client-test',true,'session');
+  await api.trainingWeek('client-test',false,'session','2026-11-30');
   assert.equal(await api.publishTrainingWeek('client-test',week,'session'),true);
   assert.deepEqual(calls.map(call=>[new URL(call.url).pathname,call.headers.Authorization,call.data]),[
     ['/rest/v1/rpc/trail_training_week_read','Bearer session',{p_client_id:'client-test',p_prepared:false}],
     ['/rest/v1/rpc/trail_training_week_read','Bearer session',{p_client_id:'client-test',p_prepared:true}],
+    ['/rest/v1/rpc/trail_training_week_read','Bearer session',{p_client_id:'client-test',p_prepared:false,p_week_start:'2026-11-30'}],
     ['/rest/v1/rpc/trail_training_week_publish','Bearer session',{
       p_client_id:'client-test',p_week_start:week.weekStart,p_checked_at:week.checkedAt
     }]

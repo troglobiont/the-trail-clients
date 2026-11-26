@@ -425,9 +425,9 @@ button.athlete-row{position:relative;padding-inline-end:15px;color:var(--text);f
 .calendar-history-status:empty,.calendar-load-status:empty{display:none}
 .calendar-day{margin:8px 0 0;font-size:14px;color:var(--muted)}
 .calendar-event{--training-kind-color:#af8650;display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start;padding:12px;text-align:left;color:var(--text);border-inline-start:3px solid var(--training-kind-color)}
-:is(.calendar-event,.training-calendar-dot)[data-kind=group]{--training-kind-color:#688966}
-:is(.calendar-event,.training-calendar-dot)[data-kind=gym]{--training-kind-color:#af8650}
-:is(.calendar-event,.training-calendar-dot)[data-kind=outside]{--training-kind-color:#5e849c}
+:is(.calendar-event,.training-calendar-dot,.training-calendar-session-marked)[data-kind=group]{--training-kind-color:#688966}
+:is(.calendar-event,.training-calendar-dot,.training-calendar-session-marked)[data-kind=gym]{--training-kind-color:#af8650}
+:is(.calendar-event,.training-calendar-dot,.training-calendar-session-marked)[data-kind=outside]{--training-kind-color:#5e849c}
 .calendar-event strong{overflow-wrap:anywhere}
 .calendar-time{font-variant-numeric:tabular-nums;font-size:14px;white-space:nowrap}
 .training-protocol{margin:0}
@@ -446,6 +446,10 @@ button.athlete-row{position:relative;padding-inline-end:15px;color:var(--text);f
 .training-calendar-list{gap:6px}
 .athlete-calendar-notices:empty{display:none}
 .training-calendar-session{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;text-align:left;min-width:0;padding:10px}
+.training-calendar-session-marked{position:relative;padding-inline-start:14px}
+.training-calendar-session-marked::before{content:"";position:absolute;inset-block:6px;inset-inline-start:4px;width:3px;border-radius:2px;background:var(--training-kind-color,var(--muted))}
+.training-calendar-week-nav{display:grid;grid-template-columns:44px minmax(0,1fr) 44px;align-items:center;gap:8px;text-align:center}
+.training-calendar-week-nav button{padding:0;min-height:44px;font-size:24px}
 .training-calendar-session strong{overflow-wrap:anywhere}
 .training-calendar-chevron{color:var(--ink)}
 .training-calendar-date[aria-pressed=true],.training-calendar-session[aria-pressed=true]{background:var(--soft);border-color:var(--ink)}

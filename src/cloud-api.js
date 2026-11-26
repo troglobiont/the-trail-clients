@@ -45,8 +45,10 @@ export function createCloudAPI({ url, key, request }) {
     groupWeek(day, token) { return post('/rest/v1/rpc/trail_group_week_read',{p_day:day},token); },
     garmin(clientId, token) { return post('/functions/v1/trail-garmin',{clientId},token); },
     garminConnection(clientId, action, token) { return post('/functions/v1/trail-garmin-connect',{clientId,action},token); },
-    trainingWeek(clientId, prepared, token) {
-      return post('/rest/v1/rpc/trail_training_week_read',{p_client_id:clientId,p_prepared:prepared},token);
+    trainingWeek(clientId, prepared, token, weekStart) {
+      return post('/rest/v1/rpc/trail_training_week_read',{
+        p_client_id:clientId,p_prepared:prepared,...(weekStart&&{p_week_start:weekStart})
+      },token);
     },
     publishTrainingWeek(clientId, week, token) {
       return post('/rest/v1/rpc/trail_training_week_publish',{

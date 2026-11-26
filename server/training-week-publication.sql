@@ -15,7 +15,7 @@ create table if not exists trail_private.training_week_publications (
 alter table trail_private.training_week_publications enable row level security;
 revoke all on trail_private.training_week_publications from public, anon, authenticated;
 
-create or replace function public.trail_training_week_read(p_client_id text, p_prepared boolean default false)
+create or replace function public.trail_training_week_read(p_client_id text, p_prepared boolean, p_week_start date)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
   uid uuid := auth.uid();
@@ -32,17 +32,24 @@ begin
       and coalesce(data #>> array['clients', p_client_id, 'mergedInto'], '') = '';
   select published into visible_week from trail_private.training_week_publications
     where owner = uid and client_id = p_client_id and published ->> 'athleteId' = athlete
-    order by week_start desc limit 1;
+      and (p_week_start is null or week_start = p_week_start)
+    order by (week_start = date_trunc('week', now() at time zone 'Europe/Belgrade')::date) desc, week_start desc limit 1;
   if p_prepared then
     select jsonb_build_object(
       'weekStart', week_start, 'checkedAt', prepared ->> 'checkedAt', 'count', jsonb_array_length(prepared -> 'sessions')
     ) into ready from trail_private.training_week_publications
       where owner = uid and client_id = p_client_id and prepared ->> 'athleteId' = athlete
+        and (p_week_start is null or week_start = p_week_start)
         and (published_at is null or prepared_at > published_at)
       order by week_start desc limit 1;
   end if;
   return jsonb_build_object('published', visible_week, 'prepared', ready);
 end;
+$$;
+
+create or replace function public.trail_training_week_read(p_client_id text, p_prepared boolean default false)
+returns jsonb language sql security invoker set search_path = '' as $$
+  select public.trail_training_week_read(p_client_id, p_prepared, null::date);
 $$;
 
 create or replace function public.trail_training_week_publish(p_client_id text, p_week_start date, p_checked_at timestamptz)
@@ -75,8 +82,10 @@ end;
 $$;
 
 revoke all on function public.trail_training_week_read(text, boolean) from public, anon, authenticated;
+revoke all on function public.trail_training_week_read(text, boolean, date) from public, anon, authenticated;
 revoke all on function public.trail_training_week_publish(text, date, timestamptz) from public, anon, authenticated;
 grant execute on function public.trail_training_week_read(text, boolean) to authenticated;
+grant execute on function public.trail_training_week_read(text, boolean, date) to authenticated;
 grant execute on function public.trail_training_week_publish(text, date, timestamptz) to authenticated;
 
 commit;

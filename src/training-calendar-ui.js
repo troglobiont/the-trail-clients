@@ -71,6 +71,10 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,sectio
       },'training-calendar-session'),
         text(formatDate(session.day)),el('strong',session.title),
         el('span','›','training-calendar-chevron'));
+      if(individualDots){
+        control.classList.add('training-calendar-session-marked');
+        if(session.kind)control.dataset.kind=session.kind;
+      }
       control.lastChild.setAttribute('aria-hidden','true');
       sessionControls.push([session,control]);
       list.append(control);
@@ -91,13 +95,18 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,sectio
 
   function athleteCalendar(client){
     const today=localDate(),weekday=dateObject(today).getUTCDay();
-    const weekStart=addDays(today,-((weekday+6)%7)),connected=Boolean(client.athlete?.trainingPeaksId);
-    const local=trainingAssignmentFor(state(),client);
-    let plan=local?.weekStart===weekStart?local:null,sessions=[],groupWeek=null,preferredDay,preferredId;
+    const currentWeek=addDays(today,-((weekday+6)%7)),connected=Boolean(client.athlete?.trainingPeaksId);
+    let weekStart=currentWeek,plan=null,sessions=[],groupWeek=null,preferredDay,preferredId,requestNumber=0;
     const notices=el('div',null,'stack athlete-calendar-notices'),content=el('div',null,'stack');
     notices.setAttribute('aria-live','polite');
+    const weekLabel=text(range({weekStart}));
+    weekLabel.setAttribute('aria-live','polite');
+    const previous=button('‹',()=>openWeek(addDays(weekStart,-7)),'subtle');
+    previous.setAttribute('aria-label','Предыдущая неделя');
+    const next=button('›',()=>openWeek(addDays(weekStart,7)),'subtle');
+    next.setAttribute('aria-label','Следующая неделя');
     const page=append(el('div',null,'stack-lg'),append(el('header',null,'stack'),el('h1','Календарь'),
-      text(range({weekStart}))),content,notices);
+      append(el('div',null,'training-calendar-week-nav'),previous,weekLabel,next)),content,notices);
 
     function draw(){
       const fromPlan=athletePlanSessions(state(),client.id,plan?.sessions||[],groupWeek);
@@ -109,14 +118,15 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,sectio
     }
 
     async function refresh(){
+      const requestedWeek=weekStart,request=++requestNumber;
       notices.replaceChildren(text('Загружаю тренировки недели…'));
       const hasGroup=connected&&Array.from({length:7},(_,i)=>addDays(weekStart,i))
         .some(day=>athleteScheduleKinds(state(),client.id,day).includes('group'));
       const [published,personal,group]=await Promise.allSettled([
-        connected?readWeek(client.id,false).then(value=>checkedPublication(value,client)):null,
-        readPersonalWeek(client.id,weekStart),hasGroup?readGroupWeek(weekStart):null
+        connected?readWeek(client.id,false,requestedWeek).then(value=>checkedPublication(value,client)):null,
+        readPersonalWeek(client.id,requestedWeek),hasGroup?readGroupWeek(requestedWeek):null
       ]);
-      if(!page.isConnected)return;
+      if(request!==requestNumber||!page.isConnected)return;
       if(published.status==='fulfilled'&&published.value?.weekStart===weekStart)plan=published.value;
       if(personal.status==='fulfilled')sessions=personal.value.sessions;
       if(group.status==='fulfilled')groupWeek=group.value;
@@ -129,8 +139,18 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,sectio
       draw();
     }
 
-    if(plan)draw();
-    void refresh();
+    function openWeek(start){
+      weekStart=start;
+      weekLabel.textContent=range({weekStart});
+      const saved=trainingAssignmentFor(state(),client,start);
+      plan=saved?.weekStart===start?saved:null;
+      sessions=[];groupWeek=null;preferredDay=null;preferredId=null;
+      if(plan)draw();
+      else content.replaceChildren();
+      void refresh();
+    }
+
+    openWeek(currentWeek);
     return page;
   }
 

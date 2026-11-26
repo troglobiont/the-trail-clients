@@ -93,10 +93,10 @@ const scheduleRoute='#todo/schedule';
 const trainingCalendarUI=createTrainingCalendarUI({state,el,append,text,button,row,section,formatDate,modal,navigate,message,save:fn=>commit(fn),
   readPersonalWeek:(clientId,weekStart)=>calendarUI.personalWeek(clientId,weekStart),
   readGroupWeek:day=>trainingWeekUI.onlineWeek(day),
-  readWeek:async(clientId,prepared)=>{
+  readWeek:async(clientId,prepared,weekStart)=>{
     await cloudReady;
     if(!cloud||cloud.state().status==='disconnected')return null;
-    return cloud.trainingWeek(clientId,prepared);
+    return cloud.trainingWeek(clientId,prepared,weekStart);
   },
   publishWeek:(clientId,week)=>cloud.publishTrainingWeek(clientId,week)
 });
