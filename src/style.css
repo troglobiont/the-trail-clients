@@ -420,6 +420,8 @@ button.athlete-row{position:relative;padding-inline-end:15px;color:var(--text);f
 .todo-periods{flex-wrap:nowrap;gap:5px}
 .todo-periods button{min-height:34px;padding:4px 9px;font-size:12px;white-space:nowrap}
 .todo-filter-panel .catalog-quick button[aria-pressed=true]:hover{background:var(--ink);color:var(--on-ink)}
+.calendar-heading{gap:4px 8px;margin-bottom:0}
+.calendar-heading .row{gap:2px}
 .calendar-day{margin:8px 0 0;font-size:14px;color:var(--muted)}
 .calendar-event{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start;padding:12px;text-align:left;color:var(--text);border-inline-start:3px solid #af8650}
 .calendar-event[data-kind=group]{border-inline-start-color:#688966}

@@ -5,7 +5,6 @@ import {createCalendarData} from './calendar-data.js';
 import {OWNER_COACH,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
 
 const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit'});
-const monthName = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE,month:'long'});
 const hasEnded = event => Date.parse(event.end) <= Date.now();
 
 export function isSchedulingTask(task) {
@@ -58,11 +57,14 @@ export function matchesScheduleKind(event, kind) {
   return true;
 }
 
-export function createCalendarUI({state, service, readCalendar, saveCalendar, roleContext=()=>({role:'superadmin'}), el, append, button, row, field, input, select, text, section, modal, commit, formatDate,
+export const CALENDAR_ARCHIVE_ROUTE = '#todo/schedule/past';
+
+export function createCalendarUI({state, service, readCalendar, saveCalendar, roleContext=()=>({role:'superadmin'}), el, append, button, row, field, input, select, text, modal, commit, formatDate,
     navigate, openClient, message, searchClients, scheduledSession, addScheduledTariff, groupProtocol}) {
   const dataSource = createCalendarData({read:readCalendar,saved:()=>state().settings.calendarCache,save:saveCalendar});
   const selectedClients = new Map();
   const aligning = new Set();
+  let archiveView;
   const load = dataSource.load;
   const timeRange = event => clock.format(new Date(event.start)) + '–' + clock.format(new Date(event.end));
   const eventLink = (event, label) => {
@@ -85,6 +87,9 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
   }
   const visible=(event,client,context)=>event.kind==='group'?previewGroupScheduleVisible(event,state(),context):
     previewScheduleVisible(event,client,Object.values(state().tasks).find(task=>task.calendarEvent?.id===event.id),context);
+  const scheduleEntries = (events,kind,context) => events.filter(event=>matchesScheduleKind(event,kind))
+    .map(event=>({event,client:resolveClient(event),day:localDate(new Date(event.start))}))
+    .filter(({event,client})=>visible(event,client,context));
 
   async function align(event, client) {
     if (!client || !event.canAlign || aligning.has(event.id)) return;
@@ -108,25 +113,10 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     const list = el('div', null, 'stack'), status = text(''), box = el('section', null, 'stack');
     status.setAttribute('role', 'status');
     const display = async data => {
-        const entries = data.events.filter(event=>matchesScheduleKind(event,kind))
-          .map(event=>({event,client:resolveClient(event)})).filter(({event,client})=>visible(event,client,context));
-        const upcoming = entries.filter(({event})=>!hasEnded(event));
-        const month = localDate().slice(0,7);
-        const past = entries.filter(({event})=>hasEnded(event) && localDate(new Date(event.start)).startsWith(month)).reverse();
-        const operations = accounting(state()).operations;
-        await Promise.all(past.filter(item=>item.event.kind!=='group').map(async item=>{
-          const operation = operations[(await sessionIds(item.event.id)).sessionId];
-          item.recorded = Boolean(operation && !operation.voided);
-        }));
+        const upcoming = scheduleEntries(data.events.filter(event=>!hasEnded(event)),kind,context);
         status.textContent = modeHint(data);
-        const monthLabel = monthName.format(new Date(month+'-15T12:00:00Z'));
-        const pastSection = section('Прошлые · '+monthLabel,'calendar-past-'+month,
-          past.length ? [
-            text('В расписании · '+past.length+'  /  Отмечено через расписание · '+past.filter(item=>item.recorded).length),
-            calendarEntries(past,true)
-          ] : [text('В этом месяце прошедших тренировок в расписании нет.')]);
         list.replaceChildren();
-        append(list,pastSection,upcoming.length ? calendarEntries(upcoming) :
+        append(list,upcoming.length ? calendarEntries(upcoming) :
           data.mode === 'live' && text(kind==='group'?'На ближайшие 30 дней групповых тренировок нет.':
             kind==='gym'?'На ближайшие 30 дней тренировок в зале нет.':'На ближайшие 30 дней тренировок нет.'));
         for (const {event,client} of context.role==='superadmin'&&data.mode==='live' ? upcoming : []) {
@@ -145,27 +135,79 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
         status.textContent = error.message;
       }
     };
-    append(box,append(el('div',null,'page-title'),el('h2','Тренировки'),button('Обновить',()=>update(true),'subtle')),status,list);
+    append(box,append(el('div',null,'page-title calendar-heading'),el('h2','Предстоящие'),row(
+      button('Прошлые',()=>navigate(CALENDAR_ARCHIVE_ROUTE),'subtle'),button('Обновить',()=>update(true),'subtle'))),status,list);
     void update(false);
     return box;
   }
 
-  function calendarEntries(entries, past = false) {
+  function archive(kind, month) {
+    const context = roleContext(), currentMonth = localDate().slice(0,7);
+    const archiveRoute = CALENDAR_ARCHIVE_ROUTE+'/'+month;
+    const page = el('section',null,'stack'), status = text(''), summary = text(''), list = el('div',null,'stack');
+    const monthPicker = input('month',month);
+    monthPicker.max = currentMonth;
+    monthPicker.addEventListener('change',()=>{
+      if (monthPicker.value && monthPicker.validity.valid) navigate(CALENDAR_ARCHIVE_ROUTE+'/'+monthPicker.value);
+    });
+    status.setAttribute('role','status');
+    if (archiveView?.month!==month || archiveView.kind!==kind) archiveView = {month,kind,limit:5};
+    const view = archiveView;
+    let entries = [], days = [];
+    const more = button('Показать ещё',()=>{
+      view.limit += 5;
+      showEntries();
+    });
+    more.hidden = true;
+    function showEntries() {
+      const visibleDays = new Set(days.slice(0,view.limit));
+      list.replaceChildren(entries.length ? calendarEntries(entries.filter(item=>visibleDays.has(item.day)),archiveRoute)
+        : text('За этот месяц прошедших тренировок нет.'));
+      more.hidden = days.length<=view.limit;
+    }
+    async function display(data) {
+      const past = data.events.filter(hasEnded).sort((a,b)=>Date.parse(b.start)-Date.parse(a.start));
+      const result = scheduleEntries(past,kind,context);
+      const operations = accounting(state()).operations;
+      await Promise.all(result.filter(item=>item.event.kind!=='group').map(async item=>{
+        const operation = operations[(await sessionIds(item.event.id)).sessionId];
+        item.recorded = Boolean(operation && !operation.voided);
+      }));
+      entries = result;
+      days = [...new Set(entries.map(item=>item.day))];
+      status.textContent = data.mode==='saved'?'Сохранено на устройстве · '+formatDate(data.asOf,true)+'.':'';
+      summary.textContent = entries.length ? 'В расписании · '+entries.length+' / Отмечено через расписание · '+entries.filter(item=>item.recorded).length : '';
+      showEntries();
+    }
+    async function update(force) {
+      const saved = dataSource.historySnapshot(month);
+      if (saved && !list.children.length) await display(saved);
+      status.textContent = 'Загружаю прошедшие тренировки…';
+      try { await display(await dataSource.loadHistory(month,force)); }
+      catch(error) { status.textContent = error.message; }
+    }
+    append(page,button('← К предстоящим',()=>navigate('#todo/schedule'),'back subtle'),
+      append(el('div',null,'page-title calendar-heading'),el('h2','Прошлые тренировки'),button('Обновить',()=>update(true),'subtle')),
+      field('Месяц',monthPicker),status,summary,list,more);
+    void update(false);
+    return page;
+  }
+
+  function calendarEntries(entries, archiveRoute) {
     const list = el('div',null,'stack');
     let previousDay;
-    for (const {event,client,recorded} of entries) {
-      const day = localDate(new Date(event.start));
+    for (const {event,client,day,recorded} of entries) {
       const group=event.kind==='group';
       if (day !== previousDay) list.append(el('h3',formatDate(day),'calendar-day'));
       previousDay = day;
       const title = group ? (event.location?'Групповая · '+event.location:'Групповая тренировка') : client?.name || calendarName(event);
-      const card = button('',()=>navigate('#todo/schedule/'+encodeURIComponent(event.id)),'panel calendar-event');
+      const card = button('',()=>navigate((archiveRoute||'#todo/schedule')+'/'+encodeURIComponent(event.id)),'panel calendar-event');
       card.dataset.kind = group?'group':'personal';
       list.append(append(card,
         text(timeRange(event),'calendar-time'),
         append(el('div'),el('strong',title),
           group?text(event.coachName):event.location&&text(event.location),
-          past&&!group&&el('span',recorded?'Проведена':'Без отметки','chip'))));
+          archiveRoute&&!group&&el('span',recorded?'Проведена':'Без отметки','chip'))));
     }
     return list;
   }
@@ -208,21 +250,22 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     },{onSaved:()=>{onSaved(updated);message('Тренировка обновлена в календаре');}});
   }
 
-  function cancelEvent(event) {
+  function cancelEvent(event, back) {
     modal('Отменить тренировку',form=>{
       append(form,text([formatDate(localDate(new Date(event.start))),timeRange(event)].join(' · ')),
         text('Встреча будет убрана из расписания и Google Календаря.'));
       return ()=>changeEvent(event,'cancel');
     },{saveLabel:'Отменить тренировку',saveClass:'danger',cancelLabel:'Назад',onSaved:()=>{
-      navigate('#todo/schedule');message('Тренировка отменена');
+      navigate(back);message('Тренировка отменена');
     }});
   }
 
-  function session(eventId) {
+  function session(eventId, month) {
     const context=roleContext();
     const restricted=context.role==='athlete'||context.role==='coach';
+    const back = month ? CALENDAR_ARCHIVE_ROUTE+'/'+month : '#todo/schedule';
     const content = el('section',null,'stack-lg');
-    const page = append(el('div',null,'stack-lg'),button('← К расписанию',()=>navigate('#todo/schedule'),'back subtle'),content);
+    const page = append(el('div',null,'stack-lg'),button(month?'← К прошлым тренировкам':'← К расписанию',()=>navigate(back),'back subtle'),content);
     const display = (event, ids, mode) => {
       const s = state(), date = localDate(new Date(event.start));
       if(event.kind==='group'){
@@ -284,7 +327,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
           eventLink(event,'Открыть в Google Календаре'),
           !recorded && mode==='live' && event.canEdit && row(
             button('Изменить',()=>editEvent(event,updated=>display(updated,ids,mode)),'subtle'),
-            button('Отменить тренировку',()=>cancelEvent(event),'subtle danger'))));
+            button('Отменить тренировку',()=>cancelEvent(event,back),'subtle danger'))));
       if (!client) return;
       const actions = el('section',null,'stack calendar-actions');
       append(actions,tariff && append(el('div',null,'row between'),el('h2',tariffLabel(tariff)),
@@ -304,11 +347,11 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
       if (actions.children.length) content.append(actions);
     };
     content.append(text('Загружаю тренировку…'));
-    const snapshot = dataSource.snapshot();
+    const snapshot = month ? dataSource.historySnapshot(month) : dataSource.snapshot();
     const savedEvent = snapshot?.events.find(item=>item.id===eventId);
     const identifiers = sessionIds(eventId);
     if (savedEvent && savedEvent.kind!=='group') void identifiers.then(ids=>display(savedEvent,ids,'saved'));
-    void Promise.all([load(),identifiers]).then(([data,ids])=>{
+    void Promise.all([month?dataSource.loadHistory(month):load(),identifiers]).then(([data,ids])=>{
       const event = data.events.find(item=>item.id===eventId);
       if (!event) throw Error('Тренировка не найдена в расписании');
       display(event,ids,data.mode);
@@ -373,5 +416,5 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
       !event.cancelled&&eventLink(event,'Календарь'));
   }
 
-  return {schedule, session, book, linked,preload:()=>dataSource.refresh().catch(()=>{})};
+  return {schedule, archive, session, book, linked,preload:()=>dataSource.refresh().catch(()=>{})};
 }

@@ -14,7 +14,7 @@ import {createCloudSync} from './cloud-sync.js';
 import {createClientDetailsUI} from './client-details-ui.js';
 import {birthdayGreeting,birthdayReminders,pingActivity,profileTelegramUsername,telegramLink,telegramReminders,GOAL_TYPES} from './client-details.js';
 import {cloudConfig} from './cloud-config.js';
-import {createCalendarUI,isSchedulingTask} from './calendar-ui.js';
+import {CALENDAR_ARCHIVE_ROUTE,createCalendarUI,isSchedulingTask} from './calendar-ui.js';
 import {createTrainingWeekUI,TRAINING_WEEK_ROUTE} from './training-week-ui.js';
 import {createTrainingCalendarUI} from './training-calendar-ui.js';
 import {todoPeriodEntries} from './todo-period.js';
@@ -104,7 +104,7 @@ const trainingWeekUI=createTrainingWeekUI({state,el,append,text,button,row,forma
     if(!cloud||cloud.state().status==='disconnected')return null;
     return cloud.groupWeek(day);
   }});
-const calendarUI=createCalendarUI({state,service,roleContext,el,append,button,row,field,input,select,text,section,modal,commit,formatDate,navigate,openClient,message,
+const calendarUI=createCalendarUI({state,service,roleContext,el,append,button,row,field,input,select,text,modal,commit,formatDate,navigate,openClient,message,
   readCalendar:async(from,to)=>{
     await cloudReady;
     if(!cloud)throw Error('Подключи облачную синхронизацию для расписания');
@@ -769,7 +769,7 @@ function todoTiles(entries,today){
   return list;
 }
 
-function renderTodo(filter='all'){
+function renderTodo(filter='all',archiveMonth){
   const page=el('div',null,'stack-lg');
   const athlete=isAthlete(ui.role),person=athlete?ownAthlete():null,coach=ui.role==='coach';
   const payments=days=>coach||athlete&&!person?[]:accountingUI.todoItems(days,person?{clientId:person.id}:undefined);
@@ -802,7 +802,7 @@ function renderTodo(filter='all'){
     if(showKinds)filterPanel.append(todoPeriods('Виды тренировок',kind,[['group','Группа'],['gym','Зал']],value=>{
       ui.scheduleKind=kind===value?null:value;
     }));
-    return append(page,calendarUI.schedule(kind));
+    return append(page,archiveMonth?calendarUI.archive(kind,archiveMonth):calendarUI.schedule(kind));
   }
   if(athlete&&!person)return append(page,text('Выбери карточку спортсмена в меню под логотипом.'));
   if(!Object.keys(state().clients).length&&!Object.keys(state().partners||{}).length)
@@ -1797,6 +1797,15 @@ function render(){
   else if(hash==='#todo/payments')root.append(renderTodo('payments'));
   else if(hash===scheduleRoute)root.append(renderTodo('schedule'));
   else if(weekRoute)root.append(trainingWeekUI.page(hash,{canImport:ui.role==='superadmin'}));
+  else if(hash===CALENDAR_ARCHIVE_ROUTE||hash.startsWith(CALENDAR_ARCHIVE_ROUTE+'/')){
+    const [requested,eventId,extra]=hash.slice(CALENDAR_ARCHIVE_ROUTE.length+1).split('/');
+    const today=C.localDate(),month=requested||today.slice(0,7);
+    if(extra||!C.validDate(month+'-01')||month>today.slice(0,7))navigate(CALENDAR_ARCHIVE_ROUTE);
+    else if(eventId){
+      try{root.append(calendarUI.session(decodeURIComponent(eventId),month));}
+      catch{navigate(CALENDAR_ARCHIVE_ROUTE+'/'+month);}
+    }else root.append(renderTodo('schedule',month));
+  }
   else if(hash.startsWith(scheduleRoute+'/')){
     try{root.append(calendarUI.session(decodeURIComponent(hash.slice(scheduleRoute.length+1))));}
     catch{navigate(scheduleRoute);}

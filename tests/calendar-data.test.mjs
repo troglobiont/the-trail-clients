@@ -52,6 +52,26 @@ test('concurrent loads share requests; expired snapshots are explicitly marked a
   await assert.rejects(createCalendarData(first.options).load(),/offline/u);
 });
 
+test('history loads only the chosen calendar month and keeps the saved upcoming schedule intact',async()=>{
+  const f=fixture(),old={...event,id:'october',start:'2026-10-31T22:45:00Z',end:'2026-10-31T22:55:00Z'};
+  const next={...event,id:'november',start:'2026-10-31T23:15:00Z',end:'2026-10-31T23:30:00Z'};
+  const data=createCalendarData({...f.options,read:async(from,to)=>{
+    const result=await f.options.read(from,to);
+    return from==='2026-10-01'?{...result,events:[old,next]}:result;
+  }});
+  await data.load();
+  assert.deepEqual((await data.loadHistory('2026-11')).events,[event]);
+  const [october,parallel]=await Promise.all([data.loadHistory('2026-10'),data.loadHistory('2026-10')]);
+  assert.deepEqual(october.events,[old]);
+  assert.deepEqual(october,parallel);
+  assert.deepEqual(f.requests,[['2026-11-19','2026-12-19'],['2026-11-01','2026-11-20'],['2026-10-01','2026-11-01']]);
+  assert.deepEqual(f.disk().events,[event]);
+  f.offline();
+  assert.equal((await data.loadHistory('2026-10',true)).mode,'saved');
+  await assert.rejects(data.loadHistory('2026-09'),/offline/u);
+  await assert.rejects(data.loadHistory('2026-12'),/Некорректный месяц/u);
+});
+
 test('cloud calendar uses Belgrade midnight across daylight-saving changes and rejects invalid ranges',()=>{
   assert.deepEqual(calendarRange({from:'2027-03-28',to:'2027-03-29'}),{timeMin:'2027-03-27T23:00:00.000Z',timeMax:'2027-03-28T22:00:00.000Z'});
   assert.deepEqual(calendarRange({from:'2026-10-25',to:'2026-10-26'}),{timeMin:'2026-10-24T22:00:00.000Z',timeMax:'2026-10-25T23:00:00.000Z'});
