@@ -89,7 +89,14 @@ const accountingUI=createAccountingUI({state,el,append,button,row,field,input,se
   openClient(clientId){ui.open.add(clientId+'-account');openClient(clientId);}
 });
 const scheduleRoute='#todo/schedule';
-const trainingCalendarUI=createTrainingCalendarUI({state,el,append,text,button,row,formatDate,modal,navigate,message,save:fn=>commit(fn)});
+const trainingCalendarUI=createTrainingCalendarUI({state,el,append,text,button,row,formatDate,modal,navigate,message,save:fn=>commit(fn),
+  readWeek:async(clientId,prepared)=>{
+    await cloudReady;
+    if(!cloud||cloud.state().status==='disconnected')return null;
+    return cloud.trainingWeek(clientId,prepared);
+  },
+  publishWeek:(clientId,week)=>cloud.publishTrainingWeek(clientId,week)
+});
 const trainingWeekUI=createTrainingWeekUI({state,el,append,text,button,row,formatDate,modal,navigate,message,
   save:fn=>commit(fn),weekPanel:trainingCalendarUI.weekPanel});
 const calendarUI=createCalendarUI({state,service,roleContext,el,append,button,row,field,input,select,text,section,modal,commit,formatDate,navigate,openClient,message,

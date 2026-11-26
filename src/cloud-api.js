@@ -19,7 +19,11 @@ export function createCloudAPI({ url, key, request }) {
         }catch{}
         garminError??=response.status===404?'Облачная интеграция Garmin ещё не настроена':'Не удалось обновить Garmin';
       }
-      const message = garminError||(path.startsWith('/functions/') ? 'Не удалось обновить облачное расписание' :
+      const trainingError=path.startsWith('/rest/v1/rpc/trail_training_week_')&&(
+        response.status===404?'Облачная публикация тренировок пока недоступна':
+        response.status===403?'Нет доступа к облачной неделе':
+        response.status===409?'Подготовленная неделя изменилась. Открой её ещё раз.':'Не удалось обратиться к облачной неделе');
+      const message = garminError||trainingError||(path.startsWith('/functions/') ? 'Не удалось обновить облачное расписание' :
         path.startsWith('/auth/') ? 'Не удалось войти. Проверь почту и пароль' :
         response.status === 403 ? 'Этот аккаунт ещё не подключён к базе The.Trail' : 'Облако не приняло изменения');
       throw Object.assign(Error(message), { status: response.status });
@@ -40,6 +44,14 @@ export function createCloudAPI({ url, key, request }) {
     calendar(range, token) { return post('/functions/v1/trail-calendar',range,token); },
     garmin(clientId, token) { return post('/functions/v1/trail-garmin',{clientId},token); },
     garminConnection(clientId, action, token) { return post('/functions/v1/trail-garmin-connect',{clientId,action},token); },
+    trainingWeek(clientId, prepared, token) {
+      return post('/rest/v1/rpc/trail_training_week_read',{p_client_id:clientId,p_prepared:prepared},token);
+    },
+    publishTrainingWeek(clientId, week, token) {
+      return post('/rest/v1/rpc/trail_training_week_publish',{
+        p_client_id:clientId,p_week_start:week.weekStart,p_checked_at:week.checkedAt
+      },token);
+    },
     write(flight, token) { return post('/rest/v1/rpc/trail_sync_write_v2', { p_revision: flight.revision, p_request: flight.id, p_changes: flight.changes }, token); }
   };
 }

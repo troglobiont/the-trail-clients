@@ -7,7 +7,7 @@ const dayFormat=new Intl.DateTimeFormat('ru-RU',{timeZone:TIMEZONE,weekday:'shor
 const dateFormat=new Intl.DateTimeFormat('ru-RU',{timeZone:TIMEZONE,weekday:'long',day:'numeric',month:'long'});
 const dateObject=day=>new Date(day+'T12:00:00Z');
 
-export function createTrainingCalendarUI({state,el,append,text,button,row,formatDate,modal,navigate,save,message}){
+export function createTrainingCalendarUI({state,el,append,text,button,row,formatDate,modal,navigate,save,message,readWeek,publishWeek}){
   const range=week=>formatDate(week.weekStart)+' — '+formatDate(addDays(week.weekStart,6))+' · '+week.weekStart.slice(0,4);
 
   function weekPanel(week,{preferredId,describe=session=>session.description,emptyDay=()=> 'Тренировка не назначена'}={}){
@@ -98,16 +98,48 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,format
   }
 
   function page(client,{calendar=false,canImport=false,back}={}){
-    const week=trainingAssignmentFor(state(),client);
-    const page=append(el('div',null,'stack-lg'),
+    const local=trainingAssignmentFor(state(),client);
+    const heading=text('');
+    const publication=el('div',null,'stack');
+    publication.setAttribute('aria-live','polite');
+    const content=el('div',null,'stack');
+    const out=append(el('div',null,'stack-lg'),
       back&&row(button('← К профилю',()=>navigate(back),'subtle')),
-      append(el('header',null,'stack'),el('h1',calendar?'Календарь':'Детали тренировок'),
-        text([calendar?'Мои тренировки':client?.name,week&&range(week)].filter(Boolean).join(' · '))),
-      week?weekPanel(week):text(canImport
-        ?'Личная тренировочная неделя пока не загружена. Выбери файл недели и нажми «Сохранить неделю».'
-        :'Личная тренировочная неделя пока не загружена. Её может загрузить суперадмин из карточки спортсмена.'),
-      canImport&&row(button(week?'Обновить неделю':'Загрузить неделю',()=>load(client),'subtle')));
-    return page;
+      append(el('header',null,'stack'),el('h1',calendar?'Календарь':'Детали тренировок'),heading),
+      publication,content,canImport&&row(button('Загрузить файл на устройство',()=>load(client),'subtle')));
+    function showWeek(week,loading=false){
+      heading.textContent=[calendar?'Мои тренировки':client?.name,week&&range(week)].filter(Boolean).join(' · ');
+      content.replaceChildren(week?weekPanel(week):text(loading
+        ?'Проверяю облачную неделю…':'Личная тренировочная неделя пока не опубликована.'));
+    }
+    async function refresh(){
+      try{
+        const remote=await readWeek(client.id,canImport);
+        if(!out.isConnected)return;
+        const published=remote?.published&&parseTrainingAssignment(JSON.stringify(remote.published));
+        if(published&&published.athleteId!==client.athlete.trainingPeaksId)throw Error('Привязка облачной недели изменилась.');
+        showWeek(published&&(!local||published.weekStart>=local.weekStart)?published:local);
+        publication.replaceChildren();
+        const ready=canImport&&remote?.prepared;
+        if(!ready)return;
+        publication.append(append(el('section',null,'panel stack'),
+          el('strong','Готова к публикации · '+range(ready)),text('Тренировок: '+ready.count),
+          row(button('Опубликовать неделю',async()=>{
+            await publishWeek(client.id,ready);
+            await refresh();
+            message('Неделя опубликована');
+          },'primary'))));
+      }catch(error){
+        if(!out.isConnected)return;
+        showWeek(local);
+        publication.replaceChildren(text(error.message,'warning-text small'),
+          row(button('Повторить',refresh,'subtle')));
+      }
+    }
+    const connected=Boolean(client?.athlete?.trainingPeaksId);
+    showWeek(local,connected);
+    if(connected)void refresh();
+    return out;
   }
   return {page,weekPanel};
 }
