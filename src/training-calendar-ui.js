@@ -18,7 +18,7 @@ export function athletePlanSessions(state,clientId,sessions,groupWeek){
 export function createTrainingCalendarUI({state,el,append,text,button,row,section,formatDate,modal,navigate,save,message,readWeek,publishWeek,readPersonalWeek,readGroupWeek}){
   const range=week=>formatDate(week.weekStart)+' — '+formatDate(addDays(week.weekStart,6))+' · '+week.weekStart.slice(0,4);
 
-  function weekPanel(week,{preferredId,preferredDay,weekList,groupDays=Boolean(weekList),onSelect,describe=session=>session.description,emptyDay=()=> 'Тренировка не назначена'}={}){
+  function weekPanel(week,{preferredId,preferredDay,weekList,individualDots=false,onSelect,describe=session=>session.description,emptyDay=()=> 'Тренировка не назначена'}={}){
     const today=localDate();
     const dates=Array.from({length:7},(_,index)=>addDays(week.weekStart,index));
     const dayBar=el('div',null,'training-calendar-days');
@@ -52,7 +52,7 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,sectio
       const workouts=week.sessions.filter(session=>session.day===day),first=workouts[0];
       const dots=el('span',null,'training-calendar-dots');
       dots.setAttribute('aria-hidden','true');
-      for(const workout of groupDays?workouts:workouts.slice(0,1)){
+      for(const workout of individualDots?workouts:workouts.slice(0,1)){
         const dot=el('span',null,'training-calendar-dot');
         if(workout.kind)dot.dataset.kind=workout.kind;
         dots.append(dot);
@@ -64,23 +64,16 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,sectio
       dayControls.push([day,control]);
       dayBar.append(control);
     }
-    let dayList=list,previousDay;
     for(const session of week.sessions){
-      if(groupDays&&session.day!==previousDay){
-        dayList=append(el('section',null,'training-calendar-day-group'),el('h3',dateFormat.format(dateObject(session.day)),'calendar-day'));
-        list.append(dayList);
-        previousDay=session.day;
-      }
       const control=append(button('',()=>{
         const selectedWorkout=show(session.day,session);
         if(weekList)selectedWorkout.scrollIntoView({block:'start'});
       },'training-calendar-session'),
-        !groupDays&&text(formatDate(session.day)),
-        append(el('span',null,'training-calendar-session-caption'),el('strong',session.title),session.subtitle&&el('small',session.subtitle,'muted')),
+        text(formatDate(session.day)),el('strong',session.title),
         el('span','›','training-calendar-chevron'));
       control.lastChild.setAttribute('aria-hidden','true');
       sessionControls.push([session,control]);
-      dayList.append(control);
+      list.append(control);
     }
     if(!week.sessions.length)list.append(text('На эту неделю нет тренировок.'));
     const initialDay=selected?.day||preferredDay||(dates.includes(today)?today:week.sessions[0]?.day||week.weekStart);
@@ -101,15 +94,15 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,sectio
     const weekStart=addDays(today,-((weekday+6)%7)),connected=Boolean(client.athlete?.trainingPeaksId);
     const local=trainingAssignmentFor(state(),client);
     let plan=local?.weekStart===weekStart?local:null,sessions=[],groupWeek=null,preferredDay,preferredId;
-    const notices=el('div',null,'stack'),content=el('div',null,'stack');
+    const notices=el('div',null,'stack athlete-calendar-notices'),content=el('div',null,'stack');
     notices.setAttribute('aria-live','polite');
     const page=append(el('div',null,'stack-lg'),append(el('header',null,'stack'),el('h1','Календарь'),
-      text('Мои тренировки · '+range({weekStart}))),notices,content);
+      text(range({weekStart}))),content,notices);
 
     function draw(){
       const fromPlan=athletePlanSessions(state(),client.id,plan?.sessions||[],groupWeek);
       const calendarSessions=[...fromPlan,...sessions].sort((a,b)=>a.day.localeCompare(b.day));
-      content.replaceChildren(weekPanel({weekStart,sessions:calendarSessions},{preferredId,preferredDay,
+      content.replaceChildren(weekPanel({weekStart,sessions:calendarSessions},{preferredId,preferredDay,individualDots:true,
         weekList:list=>section('Тренировки недели','athlete-week-list-'+client.id,[list]),
         emptyDay:()=> 'На этот день тренировки не назначены',
         onSelect:(day,id)=>{preferredDay=day;preferredId=id;}}));

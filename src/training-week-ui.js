@@ -152,7 +152,7 @@ export function createTrainingWeekUI({state, el, append, text, button, row, sect
       row(el('span', 'Редакция ' + week.revision, 'chip'), week !== active && el('span', 'Архив', 'chip')),
       week === active ? canImport && !online && button('Загрузить редакцию', importWeek) :
         button('К текущей редакции', () => navigate(TRAINING_WEEK_ROUTE), 'subtle')),
-      weekPanel(week,{preferredId:sessionId,describe:sessionDescription,groupDays:false,
+      weekPanel(week,{preferredId:sessionId,describe:sessionDescription,
         weekList:calendar?list=>section('Тренировки недели','coach-group-week-list',[list]):undefined,
         emptyDay:day=>week.restDays.includes(day)?'День отдыха':'Протокол не указан'}));
     if (canImport && !online) panel.append(append(el('details', null, 'fold'), el('summary', 'Источник и редакция'),
