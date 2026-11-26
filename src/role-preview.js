@@ -65,7 +65,7 @@ export function previewTrainingVisible(state,client,{role,athleteId,coachId=OWNE
 }
 
 export function previewRoute(hash,{role,athleteId}){
-  if(role!=='superadmin'&&(hash==='#settings'||hash==='#assistant'))return '#todo';
+  if(role!=='superadmin'&&hash==='#assistant')return '#todo';
   if(role==='accountant'&&hash==='#races')return '#todo';
   if(role==='coach'&&(hash==='#account'||hash==='#todo/payments'))return '#todo';
   if(hash==='#calendar'&&!['coach','athlete'].includes(role))return '#todo';

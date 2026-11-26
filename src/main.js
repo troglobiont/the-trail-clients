@@ -99,7 +99,7 @@ const trainingCalendarUI=createTrainingCalendarUI({state,el,append,text,button,r
   },
   publishWeek:(clientId,week)=>cloud.publishTrainingWeek(clientId,week)
 });
-const trainingWeekUI=createTrainingWeekUI({state,el,append,text,button,row,formatDate,modal,navigate,message,
+const trainingWeekUI=createTrainingWeekUI({state,el,append,text,button,row,section,formatDate,modal,navigate,message,
   save:fn=>commit(fn),weekPanel:trainingCalendarUI.weekPanel,
   readGroupWeek:async day=>{
     await cloudReady;
@@ -187,7 +187,7 @@ function bindHeaderControls(){
 function renderRoleSwitch(){
   const switcher=document.getElementById('role-switch'),menu=document.getElementById('role-menu');
   document.getElementById('current-role').textContent=ROLES[ui.role];
-  document.querySelector('.header-controls').hidden=ui.role!=='superadmin';
+  document.getElementById('sync-now').hidden=ui.role!=='superadmin';
   const choices=Object.entries(ROLES).map(([key,label])=>{
     const control=button(label,()=>{
       switcher.open=false;
@@ -771,10 +771,22 @@ function todoTiles(entries,today){
   return list;
 }
 
+function paymentReminderKey(person){
+  if(ui.role==='accountant')return 'accountant';
+  return isAthlete(ui.role)&&person?'athlete:'+person.id:null;
+}
+function paymentReminderDays(key){
+  const value=state().settings.rolePaymentReminderDays?.[key];
+  return Number.isInteger(value)&&value>=0&&value<=30?value:3;
+}
+
 function renderTodo(filter='all'){
   const page=el('div',null,'stack-lg');
   const athlete=isAthlete(ui.role),person=athlete?ownAthlete():null,coach=ui.role==='coach';
-  const payments=days=>coach||athlete&&!person?[]:accountingUI.todoItems(days,person?{clientId:person.id}:undefined);
+  const reminderKey=paymentReminderKey(person);
+  const payments=days=>coach||athlete&&!person?[]:accountingUI.todoItems(days,{
+    clientId:person?.id,reminderDays:reminderKey?paymentReminderDays(reminderKey):undefined
+  });
   const today=C.localDate(),days=ui.birthdayPeriod;
   const past=days<0;
   const birthdayEntries=(horizon,scope,from=today)=>birthdayReminders(state(),from,horizon,scope)
@@ -1711,7 +1723,24 @@ function appearancePanel() {
 function renderSettings(){
   const page=el('div',null,'stack-lg');
   const update=el('section',null,'stack settings-section');update.id='update-panel';
-  const appearance=appearancePanel();
+  const sections=append(el('div',null,'reference-sections settings-folds'),section('Оформление','settings-appearance',[appearancePanel()]));
+  append(page,el('h1','Настройки'),update,sections);
+  if(ui.role!=='superadmin'){
+    const key=paymentReminderKey(isAthlete(ui.role)?ownAthlete():null);
+    if(key){
+      const days=input('number',paymentReminderDays(key));days.min=0;days.max=30;
+      sections.append(section('Напоминания об оплате','settings-role-payment',[
+        field('За сколько дней до оплаты показывать напоминание в ToDo',days),text('0 — в день оплаты.'),
+        row(button('Сохранить напоминание',async()=>{
+          const value=Number(days.value);
+          if(days.value===''||!Number.isInteger(value)||value<0||value>30)throw Error('Укажи от 0 до 30 дней');
+          await commit(s=>{s.settings.rolePaymentReminderDays={...s.settings.rolePaymentReminderDays,[key]:value};});
+          message('Напоминание сохранено');
+        }))
+      ]));
+    }
+    return page;
+  }
   const data=append(el('div',null,'stack'),text(Object.keys(state().clients).length+' человек · '+Object.keys(state().records).length+' записей · версия базы '+state().schemaVersion),
     row(button('Импортировать базу',()=>importDatabase()),button('Экспортировать резервную копию',()=>backup())),
     text('Резервная копия содержит клиентские сведения. Ключи подключений в неё не входят. При обновлении интерфейса база сохраняется.'));
@@ -1744,16 +1773,14 @@ function renderSettings(){
     row(button('Открыть запись',()=>ui.pendingVoice.clientId===assistantKey?navigate('#assistant'):openClient(ui.pendingVoice.clientId)),button('Удалить аудиочерновик',async()=>{
       if(window.TrailNative?.native)await window.TrailNative.clearVoice();ui.pendingVoice=null;render();
     })));
-  return append(page,el('h1','Настройки'),update,
-    append(el('div',null,'reference-sections settings-folds'),
-      section('Оформление','settings-appearance',[appearance]),
-      section('Данные на устройстве','settings-device',[data]),
-      section('Синхронизация','settings-cloud',[cloudPanel]),
-      section('Задачи','settings-tasks',[taskDefaults]),
-      section('Напоминания об оплате','settings-accounting',[accountingUI.settingsPanel()]),
-      section('Агент и Telegram','settings-services',[services])));
+  append(sections,section('Данные на устройстве','settings-device',[data]),
+    section('Синхронизация','settings-cloud',[cloudPanel]),
+    section('Задачи','settings-tasks',[taskDefaults]),
+    section('Напоминания об оплате','settings-accounting',[accountingUI.settingsPanel()]),
+    section('Агент и Telegram','settings-services',[services]));
+  return page;
 }
-function renderUpdate(){const panel=document.getElementById('update-panel');if(!panel)return;panel.textContent='';const u=updater.state(),errors={save:'Не удалось сохранить базу перед обновлением. Повтори после освобождения места.', 'asset-id':'Не удалось прочитать ID архива обновления. Нужен исправленный APK.', 'rate-limit':'GitHub временно ограничил загрузку. Попробуй другую сеть или повтори позже.', forbidden:'GitHub отклонил загрузку. Проверь, открывается ли выпуск в браузере.',storage:'Недостаточно места для обновления. Освободи место и повтори.',timeout:'Сервер обновлений не ответил вовремя. Повтори загрузку.','download-timeout':'Android не закончил подготовку архива. Нажми «Обновить сейчас», чтобы продолжить.',apply:'Новая версия не открылась. Нажми «Обновить сейчас», чтобы повторить запуск.',tls:'Не удалось установить защищённое соединение с сервером обновлений.',native:'Обновление интерфейса доступно в установленном Android-приложении.',manifest:'Не удалось проверить сведения об обновлении. Текущая версия сохранена.','native-required':'Для этой версии нужен новый APK. Установи его поверх приложения.','github-auth':'GitHub отклонил запрос обновления. Проверь доступ к выпуску.','release-missing':'Готовый выпуск не найден или к нему временно нет доступа.',checksum:'Архив не прошёл проверку целостности. Текущая версия сохранена.',network:'Не удалось загрузить обновление. Проверь интернет и повтори.'},labels={idle:'Проверка по нажатию',checking:'Проверяю обновление…',current:'Установлена актуальная версия',available:'Доступна версия '+u.latest,downloading:u.step==='save'?'Сохраняю данные…':'Загружаю · '+Math.round(u.progress)+'%',applying:'Открываю новую версию…',error:errors[u.error]||'Обновление не выполнено'};append(panel,el('h2','Данные и обновления'),text('THE.TRAIL Clients · '+VERSION),text(labels[u.status],u.status==='error'?'danger-text small':'muted small'));if(u.status==='error')panel.append(text('Этап: '+({save:'сохранение базы',release:'проверка выпуска',compatibility:'совместимость APK',download:'получение архива',apply:'запуск обновления'}[u.step]||'проверка')+' · код '+u.error));const progress=el('progress');progress.max=100;progress.value=u.progress;progress.hidden=u.status!=='downloading'||u.step==='save';panel.append(progress);const update=button('Обновить сейчас',()=>updater.update(),'primary');update.disabled=['checking','downloading','applying'].includes(u.status);panel.append(update);panel.append(text('Обновление сохраняет базу и черновики. При неудачном запуске возвращается предыдущая рабочая версия. Новые системные возможности могут потребовать нового APK.'));}
+function renderUpdate(){const panel=document.getElementById('update-panel');if(!panel)return;panel.textContent='';const u=updater.state(),errors={save:'Не удалось сохранить базу перед обновлением. Повтори после освобождения места.', 'asset-id':'Не удалось прочитать ID архива обновления. Нужен исправленный APK.', 'rate-limit':'GitHub временно ограничил загрузку. Попробуй другую сеть или повтори позже.', forbidden:'GitHub отклонил загрузку. Проверь, открывается ли выпуск в браузере.',storage:'Недостаточно места для обновления. Освободи место и повтори.',timeout:'Сервер обновлений не ответил вовремя. Повтори загрузку.','download-timeout':'Android не закончил подготовку архива. Нажми «Обновить сейчас», чтобы продолжить.',apply:'Новая версия не открылась. Нажми «Обновить сейчас», чтобы повторить запуск.',tls:'Не удалось установить защищённое соединение с сервером обновлений.',native:'Обновление интерфейса доступно в установленном Android-приложении.',manifest:'Не удалось проверить сведения об обновлении. Текущая версия сохранена.','native-required':'Для этой версии нужен новый APK. Установи его поверх приложения.','github-auth':'GitHub отклонил запрос обновления. Проверь доступ к выпуску.','release-missing':'Готовый выпуск не найден или к нему временно нет доступа.',checksum:'Архив не прошёл проверку целостности. Текущая версия сохранена.',network:'Не удалось загрузить обновление. Проверь интернет и повтори.'},labels={idle:'Проверка по нажатию',checking:'Проверяю обновление…',current:'Установлена актуальная версия',available:'Доступна версия '+u.latest,downloading:u.step==='save'?'Сохраняю данные…':'Загружаю · '+Math.round(u.progress)+'%',applying:'Открываю новую версию…',error:errors[u.error]||'Обновление не выполнено'};append(panel,el('h2','Данные и обновления'),text('THE.TRAIL Clients · '+VERSION),text(labels[u.status],u.status==='error'?'danger-text small':'muted small'));if(u.status==='error'&&ui.role==='superadmin')panel.append(text('Этап: '+({save:'сохранение базы',release:'проверка выпуска',compatibility:'совместимость APK',download:'получение архива',apply:'запуск обновления'}[u.step]||'проверка')+' · код '+u.error));const progress=el('progress');progress.max=100;progress.value=u.progress;progress.hidden=u.status!=='downloading'||u.step==='save';panel.append(progress);const update=button('Обновить сейчас',()=>updater.update(),'primary');update.disabled=['checking','downloading','applying'].includes(u.status);panel.append(update);if(ui.role==='superadmin')panel.append(text('Обновление сохраняет базу и черновики. При неудачном запуске возвращается предыдущая рабочая версия. Новые системные возможности могут потребовать нового APK.'));}
 function render(){
   if(!store)return;
   checkGarminConnection=null;

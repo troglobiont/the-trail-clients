@@ -918,9 +918,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return group('По оплатам', ...list);
   }
 
-  function todoItems(days,{clientId}={}) {
+  function todoItems(days,{clientId,reminderDays}={}) {
     const date = today();
-    return A.paymentReminders(state(),date,days).filter(({due,service})=>(!clientId||service.clientId===clientId)
+    return A.paymentReminders(state(),date,days??reminderDays).filter(({due,service})=>(!clientId||service.clientId===clientId)
       &&(days===undefined||days<0||due>=date))
       .map(({service,month:period,due,remaining})=>({
       name:clientName(service.clientId), title:'Оплата · '+serviceTitle(service),

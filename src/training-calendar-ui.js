@@ -18,8 +18,7 @@ export function athletePlanSessions(state,clientId,sessions,groupWeek){
 export function createTrainingCalendarUI({state,el,append,text,button,row,section,formatDate,modal,navigate,save,message,readWeek,publishWeek,readPersonalWeek,readGroupWeek}){
   const range=week=>formatDate(week.weekStart)+' — '+formatDate(addDays(week.weekStart,6))+' · '+week.weekStart.slice(0,4);
 
-  function weekPanel(week,{preferredId,preferredDay,weekList,onSelect,describe=session=>session.description,emptyDay=()=> 'Тренировка не назначена'}={}){
-    const groupDays=Boolean(weekList);
+  function weekPanel(week,{preferredId,preferredDay,weekList,groupDays=Boolean(weekList),onSelect,describe=session=>session.description,emptyDay=()=> 'Тренировка не назначена'}={}){
     const today=localDate();
     const dates=Array.from({length:7},(_,index)=>addDays(week.weekStart,index));
     const dayBar=el('div',null,'training-calendar-days');
@@ -36,7 +35,7 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,sectio
       onSelect?.(day,session?.id);
       for(const [date,control] of dayControls)control.setAttribute('aria-pressed',String(date===day));
       for(const [item,control] of sessionControls)control.setAttribute('aria-pressed',String(item===session));
-      const workouts=groupDays?week.sessions.filter(item=>item.day===day):session?[session]:[];
+      const workouts=weekList?week.sessions.filter(item=>item.day===day):session?[session]:[];
       const sections=workouts.map(item=>{
         const description=describe(item);
         return append(el('section',null,'stack training-calendar-workout'),el('h2',item.title),
@@ -74,7 +73,7 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,sectio
       }
       const control=append(button('',()=>{
         const selectedWorkout=show(session.day,session);
-        if(groupDays)selectedWorkout.scrollIntoView({block:'start'});
+        if(weekList)selectedWorkout.scrollIntoView({block:'start'});
       },'training-calendar-session'),
         !groupDays&&text(formatDate(session.day)),
         append(el('span',null,'training-calendar-session-caption'),el('strong',session.title),session.subtitle&&el('small',session.subtitle,'muted')),
@@ -86,8 +85,8 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,sectio
     if(!week.sessions.length)list.append(text('На эту неделю нет тренировок.'));
     const initialDay=selected?.day||preferredDay||(dates.includes(today)?today:week.sessions[0]?.day||week.weekStart);
     show(initialDay,selected||week.sessions.find(session=>session.day===initialDay));
-    return append(el('div',null,'stack'),dayBar,groupDays?detail:append(el('div',null,'training-calendar-layout'),list,detail),
-      groupDays&&weekList(list));
+    return append(el('div',null,'stack'),dayBar,weekList?detail:append(el('div',null,'training-calendar-layout'),list,detail),
+      weekList&&weekList(list));
   }
 
   function checkedPublication(remote,client){

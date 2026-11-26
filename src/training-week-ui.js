@@ -12,7 +12,7 @@ const dayLabel = day => dayFormat.format(new Date(day + 'T12:00:00Z'));
 const revisionRoute = week => TRAINING_WEEK_ROUTE + '/' + week.revision;
 const cloudRoute = (day,id) => TRAINING_WEEK_ROUTE + '/cloud/' + day + (id ? '/' + id : '');
 
-export function createTrainingWeekUI({state, el, append, text, button, row, formatDate, modal, navigate, save, message, weekPanel, readGroupWeek}) {
+export function createTrainingWeekUI({state, el, append, text, button, row, section, formatDate, modal, navigate, save, message, weekPanel, readGroupWeek}) {
   const weekRange = week => formatDate(week.weekStart) + ' — ' + formatDate(addDays(week.weekStart, 6)) + ' · ' + week.weekStart.slice(0, 4);
   const sourceLabel = source => [source.planTitle, 'ID ' + source.planId].filter(Boolean).join(' · ');
   const sectionSchedule = () => button('← К расписанию', () => navigate('#todo/schedule'), 'subtle');
@@ -142,17 +142,18 @@ export function createTrainingWeekUI({state, el, append, text, button, row, form
     if (version && !week) return append(el('div', null, 'stack'), row(sectionSchedule()), text('Редакция недели не найдена.'));
     const panel = append(el('div', null, 'stack-lg'),
       append(el('div', null, 'stack'), !calendar && row(sectionSchedule()), el('h1', 'Неделя группы'),
-        week && text(week.group.name + ' · ' + weekRange(week))));
+        week && text(calendar?weekRange(week):week.group.name+' · '+weekRange(week))));
     if (!week) return append(panel, text('Утверждённая неделя группы пока не загружена.'),
       canImport && row(button('Загрузить неделю', importWeek, 'primary')));
     if (sessionId && !week.sessions.some(session => session.id === sessionId)) {
       panel.append(text('Тренировка в этой редакции не найдена.'));
     }
-    append(panel, append(el('div', null, 'row between'),
+    append(panel, !calendar&&append(el('div', null, 'row between'),
       row(el('span', 'Редакция ' + week.revision, 'chip'), week !== active && el('span', 'Архив', 'chip')),
       week === active ? canImport && !online && button('Загрузить редакцию', importWeek) :
         button('К текущей редакции', () => navigate(TRAINING_WEEK_ROUTE), 'subtle')),
-      weekPanel(week,{preferredId:sessionId,describe:sessionDescription,
+      weekPanel(week,{preferredId:sessionId,describe:sessionDescription,groupDays:false,
+        weekList:calendar?list=>section('Тренировки недели','coach-group-week-list',[list]):undefined,
         emptyDay:day=>week.restDays.includes(day)?'День отдыха':'Протокол не указан'}));
     if (canImport && !online) panel.append(append(el('details', null, 'fold'), el('summary', 'Источник и редакция'),
       append(el('div', null, 'fold-body'), provenance(week))));
