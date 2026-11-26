@@ -182,5 +182,5 @@ export function createTrainingWeekUI({state, el, append, text, button, row, form
     return out;
   }
 
-  return { page, groupProtocol };
+  return { page, groupProtocol, onlineWeek };
 }

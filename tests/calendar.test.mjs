@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {createClient, emptyState, linkCalendarTask} from '../src/core.js';
 import * as A from '../src/accounting.js';
 import {localDate} from '../src/model-utils.js';
-import {calendarClient, calendarPlace, isSchedulingTask, matchesScheduleKind, personalWeekMeetings, taskCalendarChoices} from '../src/calendar-ui.js';
+import {athleteScheduleEntries, athleteScheduleKinds, calendarClient, calendarPlace, isSchedulingTask, matchesScheduleKind, personalWeekMeetings, taskCalendarChoices} from '../src/calendar-ui.js';
+import {athletePlanSessions} from '../src/training-calendar-ui.js';
 import {calendarEvent} from '../server/calendar-edge.js';
 import {OWNER_COACH,previewGroupScheduleVisible} from '../src/role-preview.js';
 
@@ -87,6 +88,28 @@ test('the athlete week requires an unambiguous client and a personal tariff at t
   assert.deepEqual(personalWeekMeetings(s,second.id,events).map(item=>item.event.id),['outdoor']);
   second.aliases=['Иван Тестов'];
   assert.deepEqual(personalWeekMeetings(s,first.id,events).map(item=>item.event.id),['linked']);
+});
+
+test('the athlete schedule and plan classify only the group covered by the tariff', () => {
+  const state=emptyState(), athlete=createClient(state,{name:'Тестов Иван'}),
+    outdoor=createClient(state,{name:'Тестова Мария'}), coach=createClient(state,{name:'Тестов Алексей',role:'Тренер'});
+  const base={startsOn:'2026-11-01',endsOn:null,currency:'RSD',rate:400000,reminder:false};
+  A.saveService(state,{...base,clientId:athlete.id,kind:'belgrade',block:'belgrade',day:20,place:null,
+    pauses:[{from:'2026-11-29',until:null}]});
+  A.saveService(state,{...base,clientId:athlete.id,kind:'personal',block:'personal',day:null,place:'Зал'});
+  A.saveService(state,{...base,clientId:outdoor.id,kind:'personal',block:'personal',day:null,place:'Улица'});
+  const saturday='2026-11-28',sunday='2026-11-29';
+  const meeting=(id,coachName,day)=>({id,kind:'group',coachName,location:'Калемегдан',title:'Группа',start:day+'T09:00:00+01:00'});
+  const events=[meeting('ours','Сергей',saturday),meeting('other','Алексей',saturday),meeting('paused','Сергей',sunday)];
+  assert.deepEqual(athleteScheduleKinds(state,athlete.id,saturday),['group','gym']);
+  assert.deepEqual(athleteScheduleKinds(state,outdoor.id,saturday),['outside']);
+  assert.deepEqual(athleteScheduleEntries(state,athlete.id,events).map(({event})=>event.id),['ours']);
+  assert.deepEqual(athleteScheduleEntries(state,outdoor.id,events),[]);
+  athlete.coachId=coach.id;
+  assert.deepEqual(athleteScheduleEntries(state,athlete.id,events).map(({event})=>event.id),['other']);
+  const plan=[{day:saturday,title:'Бег'},{day:saturday,title:'ОФП'},{day:saturday,title:'Индивидуальный план'},{day:sunday,title:'Бег'}];
+  const group={sessions:plan.filter(session=>session.title!=='Индивидуальный план')};
+  assert.deepEqual(athletePlanSessions(state,athlete.id,plan,group).map(slot=>slot.kind||null),['group','group',null,null]);
 });
 
 test('completing a calendar session uses advance once and can record a separate actual payment', () => {

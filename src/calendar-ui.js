@@ -2,7 +2,7 @@ import {addDays, localDate, TIMEZONE} from './model-utils.js';
 import {linkCalendarTask, normalizeSearch} from './core.js';
 import {accounting, activeService, clientServices, money, serviceBalance, tariffLabel} from './accounting.js';
 import {createCalendarData} from './calendar-data.js';
-import {OWNER_COACH,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
+import {assignedCoach,OWNER_COACH,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
 
 const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit'});
 const monthFormat = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, month:'long', year:'numeric'});
@@ -53,10 +53,20 @@ export function calendarPlace(location) {
   return null;
 }
 
+export const TRAINING_KIND_LABELS = {group:'Группа',gym:'Зал',outside:'Улица'};
+const personalKind = place => place==='Зал'?'gym':place==='Улица'?'outside':null;
+const calendarKind = event => event.kind==='group'?'group':personalKind(calendarPlace(event.location));
+
 export function matchesScheduleKind(event, kind) {
-  if (kind === 'group') return event.kind === 'group';
-  if (kind === 'gym') return event.kind !== 'group' && calendarPlace(event.location) === 'Зал';
-  return true;
+  return !kind || calendarKind(event)===kind;
+}
+
+export function athleteScheduleKinds(state, clientId, day) {
+  const client = state.clients[clientId];
+  if (client?.role!=='Клиент' || client.mergedInto) return [];
+  const kinds = new Set(clientServices(state,clientId).filter(service=>activeService(service,day))
+    .map(service=>service.kind==='belgrade'?'group':service.kind==='personal'?personalKind(service.place):null));
+  return Object.keys(TRAINING_KIND_LABELS).filter(kind=>kinds.has(kind));
 }
 
 export function personalWeekMeetings(state, clientId, events) {
@@ -86,6 +96,23 @@ export function personalWeekMeetings(state, clientId, events) {
     });
 }
 
+export function athleteScheduleEntries(state, clientId, events) {
+  const client = state.clients[clientId];
+  if (client?.role!=='Клиент' || client.mergedInto) return [];
+  const groupTariffs = clientServices(state,clientId).filter(service=>service.kind==='belgrade');
+  const coach = {role:'coach',coachId:assignedCoach(state,client)};
+  const own = new Map(personalWeekMeetings(state,clientId,events).map(entry=>[entry.event.id,entry]));
+  return events.flatMap(event=>{
+    if (event.kind!=='group') {
+      const meeting = own.get(event.id);
+      return meeting ? [{event,client,day:meeting.day}] : [];
+    }
+    const day = localDate(new Date(event.start));
+    return groupTariffs.some(tariff=>activeService(tariff,day)) && previewGroupScheduleVisible(event,state,coach)
+      ? [{event,day}] : [];
+  });
+}
+
 export const CALENDAR_ARCHIVE_ROUTE = '#todo/schedule/past';
 export const CALENDAR_ARCHIVE_SECTION = 'calendar-past';
 export const CALENDAR_UPCOMING_SECTION = 'calendar-upcoming';
@@ -102,7 +129,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     if (!clientServices(state(),clientId).some(service=>service.kind==='personal')) return {sessions:[]};
     const data = await dataSource.loadWeek(weekStart);
     const sessions = personalWeekMeetings(state(),clientId,data.events).map(({event,day,place})=>({
-      id:'calendar:'+event.id, day, title:'Персональная · '+place,
+      id:'calendar:'+event.id, day, kind:personalKind(place), title:'Персональная · '+place,
       subtitle:[timeRange(event),event.location].filter(Boolean).join(' · ')
     }));
     return {sessions, saved:data.mode==='saved'};
@@ -127,9 +154,12 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
   }
   const visible=(event,client,context)=>event.kind==='group'?previewGroupScheduleVisible(event,state(),context):
     previewScheduleVisible(event,client,Object.values(state().tasks).find(task=>task.calendarEvent?.id===event.id),context);
-  const scheduleEntries = (events,kind,context) => events.filter(event=>matchesScheduleKind(event,kind))
-    .map(event=>({event,client:resolveClient(event),day:localDate(new Date(event.start))}))
-    .filter(({event,client})=>visible(event,client,context));
+  function scheduleEntries(events, kind, context) {
+    const candidates = events.filter(event=>matchesScheduleKind(event,kind));
+    if (context.role==='athlete') return athleteScheduleEntries(state(),context.athleteId,candidates);
+    return candidates.map(event=>({event,client:resolveClient(event),day:localDate(new Date(event.start))}))
+      .filter(({event,client})=>visible(event,client,context));
+  }
 
   async function align(event, client) {
     if (!client || !event.canAlign || aligning.has(event.id)) return;
@@ -159,9 +189,9 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
         status.textContent = modeHint(data);
         archive.display(data);
         list.replaceChildren();
+        const empty = {group:'групповых тренировок',gym:'тренировок в зале',outside:'тренировок на улице'};
         append(list,upcoming.length ? calendarEntries(upcoming) :
-          data.mode === 'live' && text(kind==='group'?'На ближайшие 30 дней групповых тренировок нет.':
-            kind==='gym'?'На ближайшие 30 дней тренировок в зале нет.':'На ближайшие 30 дней тренировок нет.'));
+          data.mode === 'live' && text('На ближайшие 30 дней '+(empty[kind] || 'тренировок')+' нет.'));
         for (const {event,client} of context.role==='superadmin'&&data.mode==='live' ? upcoming : []) {
           if (!list.isConnected) break;
           try { await align(event,client); }
@@ -242,15 +272,18 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
 
   function calendarEntries(entries, past = false) {
     const list = el('div',null,'stack');
+    const athlete = roleContext().role==='athlete';
     let previousDay;
     for (const {event,client,day,recorded} of entries) {
       const group=event.kind==='group';
       if (day !== previousDay) list.append(el('h3',formatDate(day),'calendar-day'));
       previousDay = day;
-      const title = group ? (event.location?'Групповая · '+event.location:'Групповая тренировка') : client?.name || calendarName(event);
+      const kind = calendarKind(event);
+      const title = group ? (event.location?'Групповая · '+event.location:'Групповая тренировка') :
+        athlete?'Персональная · '+TRAINING_KIND_LABELS[kind]:client?.name || calendarName(event);
       const route = past ? CALENDAR_ARCHIVE_ROUTE+'/'+day.slice(0,7) : '#todo/schedule';
       const card = button('',()=>navigate(route+'/'+encodeURIComponent(event.id)),'panel calendar-event');
-      card.dataset.kind = group?'group':'personal';
+      if (kind) card.dataset.kind = kind;
       list.append(append(card,
         text(timeRange(event),'calendar-time'),
         append(el('div'),el('strong',title),
@@ -314,28 +347,32 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
 
   function session(eventId, month) {
     const context=roleContext();
-    const restricted=context.role==='athlete'||context.role==='coach';
+    const athlete=context.role==='athlete', restricted=athlete||context.role==='coach';
     const back = month ? CALENDAR_ARCHIVE_ROUTE : '#todo/schedule';
     const content = el('section',null,'stack-lg');
     const page = append(el('div',null,'stack-lg'),button(month?'← К прошлым тренировкам':'← К расписанию',()=>navigate(back),'back subtle'),content);
     const display = (event, ids, mode) => {
       const s = state(), date = localDate(new Date(event.start));
+      if (athlete && !athleteScheduleEntries(s,context.athleteId,[event]).length) {
+        content.replaceChildren(text('Тренировка недоступна в этом режиме.'));
+        return;
+      }
       if(event.kind==='group'){
-        if(!visible(event,null,context)){
+        if(!athlete&&!visible(event,null,context)){
           content.replaceChildren(text('Тренировка недоступна в этом режиме.'));
           return;
         }
         content.replaceChildren(el('h1','Групповая тренировка'),append(el('section',null,'panel stack calendar-detail'),
           event.location&&el('h2',event.location),text('Тренер · '+event.coachName),
           text([formatDate(date),timeRange(event)].join(' · '),'calendar-time'),
-          eventLink(event,'Открыть в Google Календаре')),groupProtocol(date));
+          !athlete&&eventLink(event,'Открыть в Google Календаре')),...(athlete?[]:[groupProtocol(date)]));
         return;
       }
       const {services,operations} = accounting(s);
       const operation = operations[ids.sessionId];
       const recorded = operation && !operation.voided;
       const existingClientId = operation && services[operation.serviceId]?.clientId;
-      const client = resolveClient(event,restricted?null:existingClientId);
+      const client = athlete?s.clients[context.athleteId]:resolveClient(event,restricted?null:existingClientId);
       if(!visible(event,client,context)){
         content.replaceChildren(text('Тренировка недоступна в этом режиме.'));
         return;

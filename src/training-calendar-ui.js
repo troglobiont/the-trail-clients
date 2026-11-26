@@ -1,4 +1,6 @@
 import {addDays,localDate,TIMEZONE} from './model-utils.js';
+import {normalizeSearch} from './core.js';
+import {athleteScheduleKinds} from './calendar-ui.js';
 import {
   applyTrainingAssignment,ASSIGNMENT_MAX_BYTES,parseTrainingAssignment,previewTrainingAssignment,trainingAssignmentFor
 } from './training-assignment.js';
@@ -7,10 +9,17 @@ const dayFormat=new Intl.DateTimeFormat('ru-RU',{timeZone:TIMEZONE,weekday:'shor
 const dateFormat=new Intl.DateTimeFormat('ru-RU',{timeZone:TIMEZONE,weekday:'long',day:'numeric',month:'long'});
 const dateObject=day=>new Date(day+'T12:00:00Z');
 
-export function createTrainingCalendarUI({state,el,append,text,button,row,formatDate,modal,navigate,save,message,readWeek,publishWeek,readPersonalWeek}){
+export function athletePlanSessions(state,clientId,sessions,groupWeek){
+  const matching=new Set((groupWeek?.sessions||[]).map(session=>session.day+'|'+normalizeSearch(session.title)));
+  return sessions.map(session=>matching.has(session.day+'|'+normalizeSearch(session.title))
+    && athleteScheduleKinds(state,clientId,session.day).includes('group')?{...session,kind:'group'}:session);
+}
+
+export function createTrainingCalendarUI({state,el,append,text,button,row,section,formatDate,modal,navigate,save,message,readWeek,publishWeek,readPersonalWeek,readGroupWeek}){
   const range=week=>formatDate(week.weekStart)+' — '+formatDate(addDays(week.weekStart,6))+' · '+week.weekStart.slice(0,4);
 
-  function weekPanel(week,{preferredId,preferredDay,groupDays=false,onSelect,describe=session=>session.description,emptyDay=()=> 'Тренировка не назначена'}={}){
+  function weekPanel(week,{preferredId,preferredDay,weekList,onSelect,describe=session=>session.description,emptyDay=()=> 'Тренировка не назначена'}={}){
+    const groupDays=Boolean(weekList);
     const today=localDate();
     const dates=Array.from({length:7},(_,index)=>addDays(week.weekStart,index));
     const dayBar=el('div',null,'training-calendar-days');
@@ -27,21 +36,31 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,format
       onSelect?.(day,session?.id);
       for(const [date,control] of dayControls)control.setAttribute('aria-pressed',String(date===day));
       for(const [item,control] of sessionControls)control.setAttribute('aria-pressed',String(item===session));
-      const description=session&&describe(session);
+      const workouts=groupDays?week.sessions.filter(item=>item.day===day):session?[session]:[];
+      const sections=workouts.map(item=>{
+        const description=describe(item);
+        return append(el('section',null,'stack training-calendar-workout'),el('h2',item.title),
+          item.subtitle&&text(item.subtitle),description&&el('p',description,'training-calendar-description'));
+      });
       detail.replaceChildren(
         text(dateFormat.format(dateObject(day))+(day===today?' · Сегодня':'')),
-        el('h2',session?.title||emptyDay(day)),
-        ...(session?.subtitle?[text(session.subtitle)]:[]),
-        ...(description?[el('p',description,'training-calendar-description')]:[])
+        ...(sections.length?sections:[el('h2',emptyDay(day))])
       );
+      return sections[workouts.indexOf(session)]||detail;
     }
 
     for(const day of dates){
-      const first=week.sessions.find(session=>session.day===day);
+      const workouts=week.sessions.filter(session=>session.day===day),first=workouts[0];
+      const dots=el('span',null,'training-calendar-dots');
+      dots.setAttribute('aria-hidden','true');
+      for(const workout of groupDays?workouts:workouts.slice(0,1)){
+        const dot=el('span',null,'training-calendar-dot');
+        if(workout.kind)dot.dataset.kind=workout.kind;
+        dots.append(dot);
+      }
       const control=append(button('',()=>show(day,first),'training-calendar-date'),
-        el('span',dayFormat.format(dateObject(day))),el('strong',String(Number(day.slice(-2)))),
-        el('span',first?'•':'\u00a0','training-calendar-dot'));
-      control.setAttribute('aria-label',dateFormat.format(dateObject(day))+(day===today?', сегодня':'')+(first?', есть тренировка':''));
+        el('span',dayFormat.format(dateObject(day))),el('strong',String(Number(day.slice(-2)))),dots);
+      control.setAttribute('aria-label',dateFormat.format(dateObject(day))+(day===today?', сегодня':'')+(first?', тренировок: '+workouts.length:''));
       if(day===today)control.setAttribute('aria-current','date');
       dayControls.push([day,control]);
       dayBar.append(control);
@@ -53,7 +72,10 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,format
         list.append(dayList);
         previousDay=session.day;
       }
-      const control=append(button('',()=>show(session.day,session),'training-calendar-session'),
+      const control=append(button('',()=>{
+        const selectedWorkout=show(session.day,session);
+        if(groupDays)selectedWorkout.scrollIntoView({block:'start'});
+      },'training-calendar-session'),
         !groupDays&&text(formatDate(session.day)),
         append(el('span',null,'training-calendar-session-caption'),el('strong',session.title),session.subtitle&&el('small',session.subtitle,'muted')),
         el('span','›','training-calendar-chevron'));
@@ -64,7 +86,8 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,format
     if(!week.sessions.length)list.append(text('На эту неделю нет тренировок.'));
     const initialDay=selected?.day||preferredDay||(dates.includes(today)?today:week.sessions[0]?.day||week.weekStart);
     show(initialDay,selected||week.sessions.find(session=>session.day===initialDay));
-    return append(el('div',null,'stack'),dayBar,append(el('div',null,'training-calendar-layout'),list,detail));
+    return append(el('div',null,'stack'),dayBar,groupDays?detail:append(el('div',null,'training-calendar-layout'),list,detail),
+      groupDays&&weekList(list));
   }
 
   function checkedPublication(remote,client){
@@ -78,27 +101,33 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,format
     const today=localDate(),weekday=dateObject(today).getUTCDay();
     const weekStart=addDays(today,-((weekday+6)%7)),connected=Boolean(client.athlete?.trainingPeaksId);
     const local=trainingAssignmentFor(state(),client);
-    let plan=local?.weekStart===weekStart?local:null,sessions=[],preferredDay,preferredId;
+    let plan=local?.weekStart===weekStart?local:null,sessions=[],groupWeek=null,preferredDay,preferredId;
     const notices=el('div',null,'stack'),content=el('div',null,'stack');
     notices.setAttribute('aria-live','polite');
     const page=append(el('div',null,'stack-lg'),append(el('header',null,'stack'),el('h1','Календарь'),
       text('Мои тренировки · '+range({weekStart}))),notices,content);
 
     function draw(){
-      const calendarSessions=[...(plan?.sessions||[]),...sessions].sort((a,b)=>a.day.localeCompare(b.day));
-      content.replaceChildren(weekPanel({weekStart,sessions:calendarSessions},{groupDays:true,preferredId,preferredDay,
+      const fromPlan=athletePlanSessions(state(),client.id,plan?.sessions||[],groupWeek);
+      const calendarSessions=[...fromPlan,...sessions].sort((a,b)=>a.day.localeCompare(b.day));
+      content.replaceChildren(weekPanel({weekStart,sessions:calendarSessions},{preferredId,preferredDay,
+        weekList:list=>section('Тренировки недели','athlete-week-list-'+client.id,[list]),
+        emptyDay:()=> 'На этот день тренировки не назначены',
         onSelect:(day,id)=>{preferredDay=day;preferredId=id;}}));
     }
 
     async function refresh(){
       notices.replaceChildren(text('Загружаю тренировки недели…'));
-      const [published,personal]=await Promise.allSettled([
+      const hasGroup=connected&&Array.from({length:7},(_,i)=>addDays(weekStart,i))
+        .some(day=>athleteScheduleKinds(state(),client.id,day).includes('group'));
+      const [published,personal,group]=await Promise.allSettled([
         connected?readWeek(client.id,false).then(value=>checkedPublication(value,client)):null,
-        readPersonalWeek(client.id,weekStart)
+        readPersonalWeek(client.id,weekStart),hasGroup?readGroupWeek(weekStart):null
       ]);
       if(!page.isConnected)return;
       if(published.status==='fulfilled'&&published.value?.weekStart===weekStart)plan=published.value;
       if(personal.status==='fulfilled')sessions=personal.value.sessions;
+      if(group.status==='fulfilled')groupWeek=group.value;
       notices.replaceChildren();
       append(notices,published.status==='rejected'?text('Не удалось обновить план недели.','warning-text small'):
         !plan&&text('План на эту неделю пока не опубликован.'),

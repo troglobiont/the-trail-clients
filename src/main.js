@@ -14,7 +14,7 @@ import {createCloudSync} from './cloud-sync.js';
 import {createClientDetailsUI} from './client-details-ui.js';
 import {birthdayGreeting,birthdayReminders,pingActivity,profileTelegramUsername,telegramLink,telegramReminders,GOAL_TYPES} from './client-details.js';
 import {cloudConfig} from './cloud-config.js';
-import {CALENDAR_ARCHIVE_ROUTE,CALENDAR_ARCHIVE_SECTION,CALENDAR_UPCOMING_SECTION,createCalendarUI,isSchedulingTask} from './calendar-ui.js';
+import {athleteScheduleKinds,CALENDAR_ARCHIVE_ROUTE,CALENDAR_ARCHIVE_SECTION,CALENDAR_UPCOMING_SECTION,createCalendarUI,isSchedulingTask,TRAINING_KIND_LABELS} from './calendar-ui.js';
 import {createTrainingWeekUI,TRAINING_WEEK_ROUTE} from './training-week-ui.js';
 import {createTrainingCalendarUI} from './training-calendar-ui.js';
 import {todoPeriodEntries} from './todo-period.js';
@@ -41,7 +41,7 @@ const paymentFilters = [['all','Оплаты'],['paid','Оплачено'],['pen
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
   packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7),paymentStatus:'all'});
 const ui={role:'superadmin',previewCoachId:OWNER_COACH,previewAthleteId:null,filters:defaultFilters(),catalogScope:'active',pauseFilter:null,catalogLimit:CATALOG_PAGE_SIZE,
-  contactOrder:false, recentlyCompleted:new Set(), birthdayPeriod:7, paymentPeriod:-1,taskPeriod:null,scheduleKind:null,returnTo:'#clients',open:new Set([CALENDAR_UPCOMING_SECTION]),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
+  contactOrder:false, recentlyCompleted:new Set(), birthdayPeriod:7, paymentPeriod:-1,taskPeriod:null,scheduleKind:null,athleteScheduleKinds:new Map(),returnTo:'#clients',open:new Set([CALENDAR_UPCOMING_SECTION]),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
 const state=()=>store.state();
 const ownAthlete=()=>previewAthlete(state(),ui.previewAthleteId);
 const roleContext=()=>({role:ui.role,coachId:ui.previewCoachId,athleteId:isAthlete(ui.role)?ownAthlete()?.id:null});
@@ -89,8 +89,9 @@ const accountingUI=createAccountingUI({state,el,append,button,row,field,input,se
   openClient(clientId){ui.open.add(clientId+'-account');openClient(clientId);}
 });
 const scheduleRoute='#todo/schedule';
-const trainingCalendarUI=createTrainingCalendarUI({state,el,append,text,button,row,formatDate,modal,navigate,message,save:fn=>commit(fn),
+const trainingCalendarUI=createTrainingCalendarUI({state,el,append,text,button,row,section,formatDate,modal,navigate,message,save:fn=>commit(fn),
   readPersonalWeek:(clientId,weekStart)=>calendarUI.personalWeek(clientId,weekStart),
+  readGroupWeek:day=>trainingWeekUI.onlineWeek(day),
   readWeek:async(clientId,prepared)=>{
     await cloudReady;
     if(!cloud||cloud.state().status==='disconnected')return null;
@@ -799,9 +800,12 @@ function renderTodo(filter='all'){
   const filterPanel=append(el('div',null,'todo-filter-panel'),filters);
   page.append(filterPanel);
   if(filter==='schedule'){
-    const showKinds=canReadGroupWeek(),kind=showKinds?ui.scheduleKind:null;
-    if(showKinds)filterPanel.append(todoPeriods('Виды тренировок',kind,[['group','Группа'],['gym','Зал']],value=>{
-      ui.scheduleKind=kind===value?null:value;
+    const kinds=person?athleteScheduleKinds(state(),person.id,today):canReadGroupWeek()?['group','gym']:[];
+    const selected=person?ui.athleteScheduleKinds.get(person.id):ui.scheduleKind;
+    const kind=kinds.includes(selected)?selected:null;
+    if(kinds.length)filterPanel.append(todoPeriods('Виды тренировок',kind,kinds.map(value=>[value,TRAINING_KIND_LABELS[value]]),value=>{
+      const next=kind===value?null:value;
+      if(person)ui.athleteScheduleKinds.set(person.id,next);else ui.scheduleKind=next;
     }));
     return append(page,calendarUI.schedule(kind));
   }
