@@ -441,7 +441,11 @@ button.athlete-row{position:relative;padding-inline-end:15px;color:var(--text);f
 .training-calendar-date[aria-current=date] strong{text-decoration:underline;text-underline-offset:3px}
 .training-calendar-layout{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:12px;align-items:start}
 .training-calendar-list{gap:6px}
+.training-calendar-day-group{display:grid;gap:6px;min-width:0}
+.training-calendar-day-group .calendar-day{margin-bottom:2px}
 .training-calendar-session{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;text-align:left;min-width:0;padding:10px}
+.training-calendar-day-group .training-calendar-session{grid-template-columns:minmax(0,1fr) auto}
+.training-calendar-session-caption{display:grid;gap:2px;min-width:0}
 .training-calendar-session strong{overflow-wrap:anywhere}
 .training-calendar-chevron{color:var(--ink)}
 .training-calendar-date[aria-pressed=true],.training-calendar-session[aria-pressed=true]{background:var(--soft);border-color:var(--ink)}

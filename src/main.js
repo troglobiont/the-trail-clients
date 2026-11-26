@@ -90,6 +90,7 @@ const accountingUI=createAccountingUI({state,el,append,button,row,field,input,se
 });
 const scheduleRoute='#todo/schedule';
 const trainingCalendarUI=createTrainingCalendarUI({state,el,append,text,button,row,formatDate,modal,navigate,message,save:fn=>commit(fn),
+  readPersonalWeek:(clientId,weekStart)=>calendarUI.personalWeek(clientId,weekStart),
   readWeek:async(clientId,prepared)=>{
     await cloudReady;
     if(!cloud||cloud.state().status==='disconnected')return null;

@@ -21,7 +21,7 @@ export function taskCalendarChoices(events, clients, task, tasks) {
 
 const calendarName = event => event.title.split('·')[1]?.trim() || event.title;
 
-export function calendarClient(event, clients, linkedId) {
+export function calendarClient(event, clients, linkedId, {allowFirstName=true}={}) {
   if(event.kind==='group')return;
   const available = client => client && !client.mergedInto && (!client.role || client.role === 'Клиент');
   if (linkedId || event.clientId) {
@@ -32,7 +32,7 @@ export function calendarClient(event, clients, linkedId) {
   const words = name => name.trim().split(/\s+/u).map(normalizeSearch).filter(Boolean);
   const signature = parts => [...parts].sort().join(' ');
   const person = words(calendarName(event)), target = signature(person);
-  if (!person.length) return;
+  if (!person.length || person.length===1&&!allowFirstName) return;
   const matches = Object.values(clients).filter(client => available(client) && [client.name,...(client.aliases || [])].some(name => {
     const parts = words(name);
     return person.length > 1 ? signature(parts) === target : parts.includes(person[0]);
@@ -59,6 +59,33 @@ export function matchesScheduleKind(event, kind) {
   return true;
 }
 
+export function personalWeekMeetings(state, clientId, events) {
+  const client = state.clients[clientId];
+  if (client?.role!=='Клиент' || client.mergedInto) return [];
+  const tariffs = clientServices(state,clientId).filter(service=>service.kind==='personal');
+  if (!tariffs.length) return [];
+  const links = new Map();
+  for (const task of Object.values(state.tasks)) {
+    if (!task.calendarEvent?.id || task.calendarEvent.cancelled) continue;
+    const eventId = task.calendarEvent.id;
+    if (!links.has(eventId)) links.set(eventId,[]);
+    links.get(eventId).push(task.clientId);
+  }
+  return [...new Map(events.map(event=>[event.id,event])).values()]
+    .filter(event=>event.kind!=='group')
+    .sort((a,b)=>Date.parse(a.start)-Date.parse(b.start))
+    .flatMap(event=>{
+      const day = localDate(new Date(event.start)), place = calendarPlace(event.location);
+      if (!place || !tariffs.some(tariff=>tariff.place===place&&activeService(tariff,day))) return [];
+      const ids = [...(links.get(event.id) || [])];
+      if (event.clientId) ids.push(event.clientId);
+      const named = calendarClient({...event,clientId:null},state.clients,undefined,{allowFirstName:false});
+      const matches = ids.length ? (!named || named.id===clientId)
+        && ids.every(id=>id&&calendarClient(event,state.clients,id)?.id===clientId) : named?.id===clientId;
+      return matches ? [{event,day,place}] : [];
+    });
+}
+
 export const CALENDAR_ARCHIVE_ROUTE = '#todo/schedule/past';
 export const CALENDAR_ARCHIVE_SECTION = 'calendar-past';
 export const CALENDAR_UPCOMING_SECTION = 'calendar-upcoming';
@@ -71,6 +98,15 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
   let archiveView;
   const load = dataSource.load;
   const timeRange = event => clock.format(new Date(event.start)) + '–' + clock.format(new Date(event.end));
+  async function personalWeek(clientId, weekStart) {
+    if (!clientServices(state(),clientId).some(service=>service.kind==='personal')) return {sessions:[]};
+    const data = await dataSource.loadWeek(weekStart);
+    const sessions = personalWeekMeetings(state(),clientId,data.events).map(({event,day,place})=>({
+      id:'calendar:'+event.id, day, title:'Персональная · '+place,
+      subtitle:[timeRange(event),event.location].filter(Boolean).join(' · ')
+    }));
+    return {sessions, saved:data.mode==='saved'};
+  }
   const eventLink = (event, label) => {
     if (!/^https:\/\/calendar\.google\.com\/calendar\/event\?eid=[A-Za-z0-9_-]+$/u.test(event.url||'')) return null;
     const link = el('a', label, 'calendar-link');
@@ -432,5 +468,5 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
       !event.cancelled&&eventLink(event,'Календарь'));
   }
 
-  return {schedule, session, book, linked,preload:()=>dataSource.refresh().catch(()=>{})};
+  return {schedule, session, book, linked, personalWeek,preload:()=>dataSource.refresh().catch(()=>{})};
 }

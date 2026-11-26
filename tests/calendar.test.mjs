@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createClient, emptyState, linkCalendarTask} from '../src/core.js';
 import * as A from '../src/accounting.js';
 import {localDate} from '../src/model-utils.js';
-import {calendarClient, calendarPlace, isSchedulingTask, matchesScheduleKind, taskCalendarChoices} from '../src/calendar-ui.js';
+import {calendarClient, calendarPlace, isSchedulingTask, matchesScheduleKind, personalWeekMeetings, taskCalendarChoices} from '../src/calendar-ui.js';
 import {calendarEvent} from '../server/calendar-edge.js';
 import {OWNER_COACH,previewGroupScheduleVisible} from '../src/role-preview.js';
 
@@ -65,6 +65,28 @@ test('schedule filters keep group meetings separate from personal gym and outdoo
   assert.deepEqual(events.filter(event=>matchesScheduleKind(event,null)),events);
   assert.deepEqual(events.filter(event=>matchesScheduleKind(event,'group')),[group]);
   assert.deepEqual(events.filter(event=>matchesScheduleKind(event,'gym')),[gym]);
+});
+
+test('the athlete week requires an unambiguous client and a personal tariff at the venue on that date', () => {
+  const s = emptyState(), first = createClient(s,{name:'Тестов Иван'}), second = createClient(s,{name:'Тестова Мария'});
+  const day = '2026-11-28';
+  for (const [client,place] of [[first,'Зал'],[second,'Улица']]) {
+    A.saveService(s,{clientId:client.id,kind:'personal',block:'personal',place,currency:'RSD',rate:400000,
+      startsOn:'2026-11-01',endsOn:null,day:null,reminder:false});
+  }
+  const meeting=(id,name,location,date=day)=>({id,title:'Персональная · '+name+' · Сергей',location,
+    start:date+'T11:45:00+01:00',end:date+'T12:45:00+01:00'});
+  const gym=meeting('gym','Иван Тестов','Mega Gym'), outdoor=meeting('outdoor','Тестова Мария','Парк «Галерея»');
+  const linked=meeting('linked','Иван','Mega Gym'), conflict={...meeting('conflict','Иван','Mega Gym'),clientId:second.id};
+  s.tasks={one:{clientId:first.id,calendarEvent:{id:linked.id}},two:{clientId:first.id,calendarEvent:{id:conflict.id}}};
+  const events=[gym,gym,outdoor,linked,conflict,meeting('only-first-name','Иван','Mega Gym'),
+    meeting('wrong-place','Тестов Иван','Калемегдан'),meeting('before-tariff','Тестов Иван','Mega Gym','2026-10-31'),
+    {...meeting('conflicting-name','Тестова Мария','Mega Gym'),clientId:first.id},
+    {...gym,id:'group',kind:'group'}];
+  assert.deepEqual(personalWeekMeetings(s,first.id,events).map(item=>item.event.id),['gym','linked']);
+  assert.deepEqual(personalWeekMeetings(s,second.id,events).map(item=>item.event.id),['outdoor']);
+  second.aliases=['Иван Тестов'];
+  assert.deepEqual(personalWeekMeetings(s,first.id,events).map(item=>item.event.id),['linked']);
 });
 
 test('completing a calendar session uses advance once and can record a separate actual payment', () => {

@@ -72,6 +72,22 @@ test('history loads only the chosen calendar month and keeps the saved upcoming 
   await assert.rejects(data.loadHistory('2026-12'),/Некорректный месяц/u);
 });
 
+test('athlete week reuses the schedule cache and reads both sides of a month boundary',async()=>{
+  const f=fixture(), data=createCalendarData(f.options);
+  await data.load();
+  assert.deepEqual((await data.loadWeek('2026-11-16')).events,[event]);
+  assert.equal(f.requests.length,2);
+  f.offline();
+  const reopened=createCalendarData(f.options);
+  assert.equal((await reopened.loadWeek('2026-11-16')).mode,'saved');
+
+  const crossMonth=fixture(), monday={...event,start:'2026-11-30T11:00:00+01:00',end:'2026-11-30T12:00:00+01:00'};
+  const december=createCalendarData({...crossMonth.options,now:()=>Date.parse('2026-12-02T08:00:00Z'),
+    read:async(from,to)=>({...await crossMonth.options.read(from,to),events:[event,monday]})});
+  assert.deepEqual((await december.loadWeek('2026-11-30')).events,[monday]);
+  assert.deepEqual(crossMonth.requests,[['2026-11-30','2026-12-07']]);
+});
+
 test('cloud calendar uses Belgrade midnight across daylight-saving changes and rejects invalid ranges',()=>{
   assert.deepEqual(calendarRange({from:'2027-03-28',to:'2027-03-29'}),{timeMin:'2027-03-27T23:00:00.000Z',timeMax:'2027-03-28T22:00:00.000Z'});
   assert.deepEqual(calendarRange({from:'2026-10-25',to:'2026-10-26'}),{timeMin:'2026-10-24T22:00:00.000Z',timeMax:'2026-10-25T23:00:00.000Z'});

@@ -20,7 +20,7 @@ export function createCalendarData({read,saved,save,now=Date.now}) {
     const next = addDays(from,32).slice(0,7)+'-01';
     return {from,to:next<=today?next:addDays(today,1)};
   }
-  function historySlice(value, {from,to}) {
+  function rangeSlice(value, {from,to}) {
     if (!value || value.from>from || value.to<to) return null;
     const events = value.events.filter(event=>{
       const day = localDate(new Date(event.start));
@@ -30,13 +30,13 @@ export function createCalendarData({read,saved,save,now=Date.now}) {
   }
   function historySnapshot(month) {
     const range = historyRange(month);
-    const value = historySlice(archives.get(range.from),range) || historySlice(current(),range);
+    const value = rangeSlice(archives.get(range.from),range) || rangeSlice(current(),range);
     return value && {...value,mode:'saved'};
   }
   async function loadHistory(month, force=false) {
     const range = historyRange(month);
     const {from,to} = range;
-    const recent = historySlice(archives.get(from),range) || historySlice(cached,range);
+    const recent = rangeSlice(archives.get(from),range) || rangeSlice(cached,range);
     if (!force && recent && now()-Date.parse(recent.asOf)<60000) return recent;
     const key = from+'|'+to;
     if (!archiveLoads.has(key)) archiveLoads.set(key,(async()=>{
@@ -45,7 +45,7 @@ export function createCalendarData({read,saved,save,now=Date.now}) {
       const value = {...result,from,to,asOf:new Date(now()).toISOString()};
       if (!valid(value)) throw Error('Не удалось прочитать расписание');
       archives.set(from,value);
-      return historySlice(value,range);
+      return rangeSlice(value,range);
     })().finally(()=>archiveLoads.delete(key)));
     try { return await archiveLoads.get(key); }
     catch(error) {
@@ -72,12 +72,34 @@ export function createCalendarData({read,saved,save,now=Date.now}) {
     })().finally(()=>{loading=null;});
     return loading;
   };
-  return {snapshot,refresh,historySnapshot,loadHistory,invalidate(){cached=null;archives.clear();},async load(force=false){
+  async function load(force=false) {
     try { return await refresh(force); }
     catch(error) {
       const value = snapshot();
       if (!value) throw error;
       return {...value,refreshError:error.message};
     }
-  }};
+  }
+  async function loadWeek(from) {
+    const range = {from,to:addDays(from,7)};
+    const recent = rangeSlice(cached,range);
+    if (recent && now()-Date.parse(recent.asOf)<60000) return recent;
+    const today = localDate(new Date(now()));
+    if (from>=today.slice(0,7)+'-01' && range.to<=addDays(today,30)) {
+      const week = rangeSlice(await load(),range);
+      if (week) return week;
+    }
+    try {
+      const result = await read(range.from,range.to);
+      if (result.mode!=='live') throw Error('Google Календарь ещё не подключён');
+      const value = {...result,...range,asOf:new Date(now()).toISOString()};
+      if (!valid(value)) throw Error('Не удалось прочитать расписание');
+      return rangeSlice(value,range);
+    } catch(error) {
+      const week = rangeSlice(snapshot(),range);
+      if (week) return week;
+      throw error;
+    }
+  }
+  return {snapshot,refresh,historySnapshot,loadHistory,load,loadWeek,invalidate(){cached=null;archives.clear();}};
 }
