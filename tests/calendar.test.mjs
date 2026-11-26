@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createClient, emptyState, linkCalendarTask} from '../src/core.js';
 import * as A from '../src/accounting.js';
 import {localDate} from '../src/model-utils.js';
-import {calendarClient, calendarPlace, isSchedulingTask, taskCalendarChoices} from '../src/calendar-ui.js';
+import {calendarClient, calendarPlace, isSchedulingTask, matchesScheduleKind, taskCalendarChoices} from '../src/calendar-ui.js';
 import {calendarEvent} from '../server/calendar-edge.js';
 import {OWNER_COACH,previewGroupScheduleVisible} from '../src/role-preview.js';
 
@@ -54,6 +54,17 @@ test('the abbreviated title for an outdoor session resolves to the client and ou
   assert.equal(calendarClient(event,{c1:client}),client);
   assert.equal(calendarPlace(event.location),'Улица');
   assert.equal(calendarPlace('Mega Gym'),'Зал');
+});
+
+test('schedule filters keep group meetings separate from personal gym and outdoor sessions', () => {
+  const group = {kind:'group', location:'Mega Gym'};
+  const gym = {location:'Mega Gym'};
+  const outdoor = {location:'Калемегдан'};
+  const unknown = {location:''};
+  const events = [group,gym,outdoor,unknown];
+  assert.deepEqual(events.filter(event=>matchesScheduleKind(event,null)),events);
+  assert.deepEqual(events.filter(event=>matchesScheduleKind(event,'group')),[group]);
+  assert.deepEqual(events.filter(event=>matchesScheduleKind(event,'gym')),[gym]);
 });
 
 test('completing a calendar session uses advance once and can record a separate actual payment', () => {

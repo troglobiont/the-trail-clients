@@ -421,7 +421,9 @@ button.athlete-row{position:relative;padding-inline-end:15px;color:var(--text);f
 .todo-periods button{min-height:34px;padding:4px 9px;font-size:12px;white-space:nowrap}
 .todo-filter-panel .catalog-quick button[aria-pressed=true]:hover{background:var(--ink);color:var(--on-ink)}
 .calendar-day{margin:8px 0 0;font-size:14px;color:var(--muted)}
-.calendar-event{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start;padding:12px;text-align:left;color:var(--text)}
+.calendar-event{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;align-items:start;padding:12px;text-align:left;color:var(--text);border-inline-start:3px solid #af8650}
+.calendar-event[data-kind=group]{border-inline-start-color:#688966}
+.calendar-event strong{overflow-wrap:anywhere}
 .calendar-time{font-variant-numeric:tabular-nums;font-size:14px;white-space:nowrap}
 .training-protocol{margin:0}
 .training-protocol dt{font-weight:650}

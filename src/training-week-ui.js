@@ -10,35 +10,12 @@ const dayFormat = new Intl.DateTimeFormat('ru-RU', {
 });
 const dayLabel = day => dayFormat.format(new Date(day + 'T12:00:00Z'));
 const revisionRoute = week => TRAINING_WEEK_ROUTE + '/' + week.revision;
-const noProtocol = 'Утверждённого протокола на сегодня нет.';
 const cloudRoute = (day,id) => TRAINING_WEEK_ROUTE + '/cloud/' + day + (id ? '/' + id : '');
 
 export function createTrainingWeekUI({state, el, append, text, button, row, formatDate, modal, navigate, save, message, weekPanel, readGroupWeek}) {
   const weekRange = week => formatDate(week.weekStart) + ' — ' + formatDate(addDays(week.weekStart, 6)) + ' · ' + week.weekStart.slice(0, 4);
   const sourceLabel = source => [source.planTitle, 'ID ' + source.planId].filter(Boolean).join(' · ');
   const sectionSchedule = () => button('← К расписанию', () => navigate('#todo/schedule'), 'subtle');
-  const sessionRoute = (week, session) => revisionRoute(week) + '/' + session.id;
-
-  function sessionSummary(week, session, cloud=false) {
-    return append(button('', () => navigate(cloud ? cloudRoute(session.day,session.id) : sessionRoute(week, session)), 'task-tile'),
-      el('strong', session.title, 'task-title'));
-  }
-
-  function scheduleSummary(week, cloud=false) {
-    if (!week) {
-      return append(el('section', null, 'panel stack'),
-        row(button('Неделя группы', () => navigate(TRAINING_WEEK_ROUTE)), text('Неделя ещё не загружена.')));
-    }
-    const today = trainingWeekDays(week).find(day => day.today);
-    return append(el('section', null, 'panel stack'),
-      append(el('div', null, 'row between'),
-        el('h2', 'Сегодня · ' + week.group.name),
-        button('Неделя группы', () => navigate(TRAINING_WEEK_ROUTE), 'subtle')),
-      today?.sessions.length
-        ? append(el('div', null, 'stack'), ...today.sessions.map(session => sessionSummary(week, session, cloud)))
-        : text(today?.rest ? 'День отдыха' : noProtocol),
-      !today && text('Сохранённая неделя · ' + weekRange(week)));
-  }
 
   function protocol(session) {
     return append(el('dl', null, 'training-protocol'),
@@ -62,14 +39,6 @@ export function createTrainingWeekUI({state, el, append, text, button, row, form
   async function onlineWeek(day){
     const value=await readGroupWeek(day);
     return value ? parseTrainingWeek(JSON.stringify(value)) : null;
-  }
-
-  function scheduleEntry(){
-    const box=append(el('div'),scheduleSummary(trainingWeekRevisions(state()).at(-1)));
-    void onlineWeek(localDate()).then(week=>{
-      if(week&&box.isConnected)box.replaceChildren(scheduleSummary(week,true));
-    }).catch(()=>{});
-    return box;
   }
 
   function groupProtocol(day){
@@ -213,5 +182,5 @@ export function createTrainingWeekUI({state, el, append, text, button, row, form
     return out;
   }
 
-  return { scheduleEntry, page, groupProtocol };
+  return { page, groupProtocol };
 }

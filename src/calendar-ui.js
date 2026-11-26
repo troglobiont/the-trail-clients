@@ -52,6 +52,12 @@ export function calendarPlace(location) {
   return null;
 }
 
+export function matchesScheduleKind(event, kind) {
+  if (kind === 'group') return event.kind === 'group';
+  if (kind === 'gym') return event.kind !== 'group' && calendarPlace(event.location) === 'Зал';
+  return true;
+}
+
 export function createCalendarUI({state, service, readCalendar, saveCalendar, roleContext=()=>({role:'superadmin'}), el, append, button, row, field, input, select, text, section, modal, commit, formatDate,
     navigate, openClient, message, searchClients, scheduledSession, addScheduledTariff, groupProtocol}) {
   const dataSource = createCalendarData({read:readCalendar,saved:()=>state().settings.calendarCache,save:saveCalendar});
@@ -97,12 +103,13 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     }
   }
 
-  function schedule() {
+  function schedule(kind) {
     const context=roleContext();
     const list = el('div', null, 'stack'), status = text(''), box = el('section', null, 'stack');
     status.setAttribute('role', 'status');
     const display = async data => {
-        const entries = data.events.map(event=>({event,client:resolveClient(event)})).filter(({event,client})=>visible(event,client,context));
+        const entries = data.events.filter(event=>matchesScheduleKind(event,kind))
+          .map(event=>({event,client:resolveClient(event)})).filter(({event,client})=>visible(event,client,context));
         const upcoming = entries.filter(({event})=>!hasEnded(event));
         const month = localDate().slice(0,7);
         const past = entries.filter(({event})=>hasEnded(event) && localDate(new Date(event.start)).startsWith(month)).reverse();
@@ -120,7 +127,8 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
           ] : [text('В этом месяце прошедших тренировок в расписании нет.')]);
         list.replaceChildren();
         append(list,pastSection,upcoming.length ? calendarEntries(upcoming) :
-          data.mode === 'live' && text('На ближайшие 30 дней тренировок нет.'));
+          data.mode === 'live' && text(kind==='group'?'На ближайшие 30 дней групповых тренировок нет.':
+            kind==='gym'?'На ближайшие 30 дней тренировок в зале нет.':'На ближайшие 30 дней тренировок нет.'));
         for (const {event,client} of context.role==='superadmin'&&data.mode==='live' ? upcoming : []) {
           if (!list.isConnected) break;
           try { await align(event,client); }
@@ -150,9 +158,12 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
       const group=event.kind==='group';
       if (day !== previousDay) list.append(el('h3',formatDate(day),'calendar-day'));
       previousDay = day;
-      list.append(append(button('',()=>navigate('#todo/schedule/'+encodeURIComponent(event.id)),'panel calendar-event'),
+      const title = group ? (event.location?'Групповая · '+event.location:'Групповая тренировка') : client?.name || calendarName(event);
+      const card = button('',()=>navigate('#todo/schedule/'+encodeURIComponent(event.id)),'panel calendar-event');
+      card.dataset.kind = group?'group':'personal';
+      list.append(append(card,
         text(timeRange(event),'calendar-time'),
-        append(el('div'),el('strong',group?'Групповая · '+event.location:client?.name || calendarName(event)),
+        append(el('div'),el('strong',title),
           group?text(event.coachName):event.location&&text(event.location),
           past&&!group&&el('span',recorded?'Проведена':'Без отметки','chip'))));
     }

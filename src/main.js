@@ -41,7 +41,7 @@ const paymentFilters = [['all','Оплаты'],['paid','Оплачено'],['pen
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
   packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7),paymentStatus:'all'});
 const ui={role:'superadmin',previewCoachId:OWNER_COACH,previewAthleteId:null,filters:defaultFilters(),catalogScope:'active',pauseFilter:null,catalogLimit:CATALOG_PAGE_SIZE,
-  contactOrder:false, recentlyCompleted:new Set(), birthdayPeriod:7, paymentPeriod:-1,taskPeriod:null,returnTo:'#clients',open:new Set(),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
+  contactOrder:false, recentlyCompleted:new Set(), birthdayPeriod:7, paymentPeriod:-1,taskPeriod:null,scheduleKind:null,returnTo:'#clients',open:new Set(),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
 const state=()=>store.state();
 const ownAthlete=()=>previewAthlete(state(),ui.previewAthleteId);
 const roleContext=()=>({role:ui.role,coachId:ui.previewCoachId,athleteId:isAthlete(ui.role)?ownAthlete()?.id:null});
@@ -797,7 +797,13 @@ function renderTodo(filter='all'){
   }
   const filterPanel=append(el('div',null,'todo-filter-panel'),filters);
   page.append(filterPanel);
-  if(filter==='schedule')return append(page,canReadGroupWeek()&&trainingWeekUI.scheduleEntry(),calendarUI.schedule());
+  if(filter==='schedule'){
+    const showKinds=canReadGroupWeek(),kind=showKinds?ui.scheduleKind:null;
+    if(showKinds)filterPanel.append(todoPeriods('Виды тренировок',kind,[['group','Группа'],['gym','Зал']],value=>{
+      ui.scheduleKind=kind===value?null:value;
+    }));
+    return append(page,calendarUI.schedule(kind));
+  }
   if(athlete&&!person)return append(page,text('Выбери карточку спортсмена в меню под логотипом.'));
   if(!Object.keys(state().clients).length&&!Object.keys(state().partners||{}).length)
     return append(page,hasFinance(ui.role)?emptyDatabase():text('Задач пока нет.'));
