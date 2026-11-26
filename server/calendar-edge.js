@@ -29,15 +29,20 @@ export function calendarRange({from,to}) {
   return {timeMin:midnight(from),timeMax:midnight(to)};
 }
 
-export function calendarEvent(raw,calendar) {
+export function calendarEvent(raw,calendar,includeGroups=false) {
   const title = raw.summary?.trim() || '';
-  if (raw.status==='cancelled' || !/^персональная\s*·[^·]+·\s*сергей$/iu.test(title)
-      || !raw.id || !Number.isFinite(Date.parse(raw.start?.dateTime)) || !Number.isFinite(Date.parse(raw.end?.dateTime))) return null;
+  const group = includeGroups && title.match(/^группа\s*·\s*([^·]+?)\s*·\s*([^·]+)$/iu);
+  if (raw.status==='cancelled' || !raw.id || !Number.isFinite(Date.parse(raw.start?.dateTime))
+      || !Number.isFinite(Date.parse(raw.end?.dateTime))) return null;
+  if (!group && !/^персональная\s*·[^·]+·\s*сергей$/iu.test(title)) return null;
   const eid = base64url(encoder.encode(raw.id+' '+calendar));
+  const url='https://calendar.google.com/calendar/event?eid='+eid;
+  if (group) return {id:raw.id,title,start:raw.start.dateTime,end:raw.end.dateTime,location:raw.location||group[1].trim(),
+    kind:'group',coachName:group[2].trim(),url};
   return {id:raw.id,title,start:raw.start.dateTime,end:raw.end.dateTime,location:raw.location||'',
     clientId:raw.extendedProperties?.private?.trailClientId || null,
     canEdit:Boolean(raw.etag && !raw.recurrence),canAlign:!Boolean(raw.attendees?.length || raw.recurringEventId || raw.recurrence),
-    url:'https://calendar.google.com/calendar/event?eid='+eid};
+    url};
 }
 
 export function createCalendarHandler({env,fetch:request=fetch,now=Date.now}) {
@@ -78,12 +83,14 @@ export function createCalendarHandler({env,fetch:request=fetch,now=Date.now}) {
       if (access.status===401) return reply(401,{error:'Войди в аккаунт приложения'});
       if (!access.ok) return reply(access.status===403?403:503,{error:'Не удалось проверить доступ к расписанию'});
       if (await access.json()!==true) return reply(403,{error:'Нет доступа к расписанию The.Trail'});
-      let range;
+      let range,includeGroups;
       try {
         if (Number(request.headers.get('Content-Length'))>2000) throw Error();
         const body = await request.text();
         if (body.length>2000) throw Error();
-        range = calendarRange(JSON.parse(body));
+        const input=JSON.parse(body);
+        range=calendarRange(input);
+        includeGroups=input.includeGroups===true;
       } catch { return reply(400,{error:'Проверь даты расписания'}); }
       const settings = env('TRAIL_GOOGLE_CALENDAR');
       if (!settings) return reply(503,{error:'Облачное расписание ещё не подключено'});
@@ -98,7 +105,7 @@ export function createCalendarHandler({env,fetch:request=fetch,now=Date.now}) {
           {headers:{Authorization:'Bearer '+await googleToken(account)}});
         if (!response.ok) { if (response.status===401) token=null; throw Error('Не удалось обновить Google Календарь'); }
         const data = await response.json();
-        events.push(...(data.items||[]).map(raw=>calendarEvent(raw,calendarId)).filter(Boolean));
+        events.push(...(data.items||[]).map(raw=>calendarEvent(raw,calendarId,includeGroups)).filter(Boolean));
         page = data.nextPageToken;
         if (!page) return reply(200,{mode:'live',source:'cloud',asOf:new Date(now()).toISOString(),events});
       }

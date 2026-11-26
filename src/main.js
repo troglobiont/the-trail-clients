@@ -45,7 +45,7 @@ const ui={role:'superadmin',previewCoachId:OWNER_COACH,previewAthleteId:null,fil
 const state=()=>store.state();
 const ownAthlete=()=>previewAthlete(state(),ui.previewAthleteId);
 const roleContext=()=>({role:ui.role,coachId:ui.previewCoachId,athleteId:isAthlete(ui.role)?ownAthlete()?.id:null});
-const canReadGroupWeek=()=>ui.role==='superadmin'||ui.role==='coach'&&ui.previewCoachId===OWNER_COACH;
+const canReadGroupWeek=()=>['superadmin','coach'].includes(ui.role);
 const visibleTask=task=>previewTaskVisible(task,roleContext());
 const hasAthleteCard=client=>client?.role==='Клиент'||Boolean(client?.athlete);
 function el(tag,text,className){const node=document.createElement(tag);if(text!==undefined&&text!==null)node.textContent=text;if(className)node.className=className;return node;}
@@ -98,16 +98,21 @@ const trainingCalendarUI=createTrainingCalendarUI({state,el,append,text,button,r
   publishWeek:(clientId,week)=>cloud.publishTrainingWeek(clientId,week)
 });
 const trainingWeekUI=createTrainingWeekUI({state,el,append,text,button,row,formatDate,modal,navigate,message,
-  save:fn=>commit(fn),weekPanel:trainingCalendarUI.weekPanel});
+  save:fn=>commit(fn),weekPanel:trainingCalendarUI.weekPanel,
+  readGroupWeek:async day=>{
+    await cloudReady;
+    if(!cloud||cloud.state().status==='disconnected')return null;
+    return cloud.groupWeek(day);
+  }});
 const calendarUI=createCalendarUI({state,service,roleContext,el,append,button,row,field,input,select,text,section,modal,commit,formatDate,navigate,openClient,message,
   readCalendar:async(from,to)=>{
     await cloudReady;
     if(!cloud)throw Error('Подключи облачную синхронизацию для расписания');
-    return cloud.calendar({from,to});
+    return cloud.calendar({from,to,includeGroups:true});
   },
   saveCalendar:value=>store.mutate(s=>{s.settings.calendarCache=value;},{trackCloud:false}),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
-  scheduledSession:accountingUI.scheduledSession,addScheduledTariff:accountingUI.addScheduledTariff});
+  scheduledSession:accountingUI.scheduledSession,addScheduledTariff:accountingUI.addScheduledTariff,groupProtocol:trainingWeekUI.groupProtocol});
 const partnersUI=createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message,
   openList:()=>{ui.open.add('admin-partners');navigate('#admin');}});
 const adminUI=createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,render,formatDate,partnersUI});

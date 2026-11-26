@@ -2,7 +2,7 @@ import {localDate, TIMEZONE} from './model-utils.js';
 import {linkCalendarTask, normalizeSearch} from './core.js';
 import {accounting, activeService, clientServices, money, serviceBalance, tariffLabel} from './accounting.js';
 import {createCalendarData} from './calendar-data.js';
-import {OWNER_COACH,previewScheduleVisible} from './role-preview.js';
+import {OWNER_COACH,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
 
 const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit'});
 const monthName = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE,month:'long'});
@@ -21,6 +21,7 @@ export function taskCalendarChoices(events, clients, task, tasks) {
 const calendarName = event => event.title.split('·')[1]?.trim() || event.title;
 
 export function calendarClient(event, clients, linkedId) {
+  if(event.kind==='group')return;
   const available = client => client && !client.mergedInto && (!client.role || client.role === 'Клиент');
   if (linkedId || event.clientId) {
     const direct = clients[linkedId || event.clientId];
@@ -52,7 +53,7 @@ export function calendarPlace(location) {
 }
 
 export function createCalendarUI({state, service, readCalendar, saveCalendar, roleContext=()=>({role:'superadmin'}), el, append, button, row, field, input, select, text, section, modal, commit, formatDate,
-    navigate, openClient, message, searchClients, scheduledSession, addScheduledTariff}) {
+    navigate, openClient, message, searchClients, scheduledSession, addScheduledTariff, groupProtocol}) {
   const dataSource = createCalendarData({read:readCalendar,saved:()=>state().settings.calendarCache,save:saveCalendar});
   const selectedClients = new Map();
   const aligning = new Set();
@@ -76,8 +77,8 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     const task = Object.values(s.tasks).find(item=>item.calendarEvent?.id===event.id);
     return calendarClient(event,s.clients,clientId || selectedClients.get(event.id) || event.clientId || task?.clientId);
   }
-  const visible=(event,client,context)=>previewScheduleVisible(event,client,
-    Object.values(state().tasks).find(task=>task.calendarEvent?.id===event.id),context);
+  const visible=(event,client,context)=>event.kind==='group'?previewGroupScheduleVisible(event,state(),context):
+    previewScheduleVisible(event,client,Object.values(state().tasks).find(task=>task.calendarEvent?.id===event.id),context);
 
   async function align(event, client) {
     if (!client || !event.canAlign || aligning.has(event.id)) return;
@@ -106,7 +107,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
         const month = localDate().slice(0,7);
         const past = entries.filter(({event})=>hasEnded(event) && localDate(new Date(event.start)).startsWith(month)).reverse();
         const operations = accounting(state()).operations;
-        await Promise.all(past.map(async item=>{
+        await Promise.all(past.filter(item=>item.event.kind!=='group').map(async item=>{
           const operation = operations[(await sessionIds(item.event.id)).sessionId];
           item.recorded = Boolean(operation && !operation.voided);
         }));
@@ -119,7 +120,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
           ] : [text('В этом месяце прошедших тренировок в расписании нет.')]);
         list.replaceChildren();
         append(list,pastSection,upcoming.length ? calendarEntries(upcoming) :
-          data.mode === 'live' && text('На ближайшие 30 дней персональных тренировок нет.'));
+          data.mode === 'live' && text('На ближайшие 30 дней тренировок нет.'));
         for (const {event,client} of context.role==='superadmin'&&data.mode==='live' ? upcoming : []) {
           if (!list.isConnected) break;
           try { await align(event,client); }
@@ -136,7 +137,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
         status.textContent = error.message;
       }
     };
-    append(box,append(el('div',null,'page-title'),el('h2','Персональные тренировки'),button('Обновить',()=>update(true),'subtle')),status,list);
+    append(box,append(el('div',null,'page-title'),el('h2','Тренировки'),button('Обновить',()=>update(true),'subtle')),status,list);
     void update(false);
     return box;
   }
@@ -146,12 +147,14 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     let previousDay;
     for (const {event,client,recorded} of entries) {
       const day = localDate(new Date(event.start));
+      const group=event.kind==='group';
       if (day !== previousDay) list.append(el('h3',formatDate(day),'calendar-day'));
       previousDay = day;
       list.append(append(button('',()=>navigate('#todo/schedule/'+encodeURIComponent(event.id)),'panel calendar-event'),
         text(timeRange(event),'calendar-time'),
-        append(el('div'),el('strong',client?.name || calendarName(event)),event.location&&text(event.location),
-          past&&el('span',recorded?'Проведена':'Без отметки','chip'))));
+        append(el('div'),el('strong',group?'Групповая · '+event.location:client?.name || calendarName(event)),
+          group?text(event.coachName):event.location&&text(event.location),
+          past&&!group&&el('span',recorded?'Проведена':'Без отметки','chip'))));
     }
     return list;
   }
@@ -211,6 +214,17 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     const page = append(el('div',null,'stack-lg'),button('← К расписанию',()=>navigate('#todo/schedule'),'back subtle'),content);
     const display = (event, ids, mode) => {
       const s = state(), date = localDate(new Date(event.start));
+      if(event.kind==='group'){
+        if(!visible(event,null,context)){
+          content.replaceChildren(text('Тренировка недоступна в этом режиме.'));
+          return;
+        }
+        content.replaceChildren(el('h1','Групповая тренировка'),append(el('section',null,'panel stack calendar-detail'),
+          event.location&&el('h2',event.location),text('Тренер · '+event.coachName),
+          text([formatDate(date),timeRange(event)].join(' · '),'calendar-time'),
+          eventLink(event,'Открыть в Google Календаре')),groupProtocol(date));
+        return;
+      }
       const {services,operations} = accounting(s);
       const operation = operations[ids.sessionId];
       const recorded = operation && !operation.voided;
@@ -282,7 +296,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     const snapshot = dataSource.snapshot();
     const savedEvent = snapshot?.events.find(item=>item.id===eventId);
     const identifiers = sessionIds(eventId);
-    if (savedEvent) void identifiers.then(ids=>display(savedEvent,ids,'saved'));
+    if (savedEvent && savedEvent.kind!=='group') void identifiers.then(ids=>display(savedEvent,ids,'saved'));
     void Promise.all([load(),identifiers]).then(([data,ids])=>{
       const event = data.events.find(item=>item.id===eventId);
       if (!event) throw Error('Тренировка не найдена в расписании');

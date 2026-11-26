@@ -47,6 +47,17 @@ export function previewScheduleVisible(event,client,task,{role,athleteId,coachId
   return true;
 }
 
+export function previewGroupScheduleVisible(event,state,{role,coachId=OWNER_COACH}){
+  if(role==='superadmin')return true;
+  if(role!=='coach')return false;
+  const name=normalizeSearch(event.coachName);
+  if(!name)return false;
+  if(name===normalizeSearch('Сергей')||ownerNames.has(name))return coachId===OWNER_COACH;
+  const matches=previewCoaches(state).filter(([id,label])=>id!==OWNER_COACH
+    &&(normalizeSearch(label)===name||label.split(/\s+/u).some(part=>normalizeSearch(part)===name)));
+  return matches.length===1&&matches[0][0]===coachId;
+}
+
 export function previewTrainingVisible(state,client,{role,athleteId,coachId=OWNER_COACH}){
   if(!available(client))return false;
   return role==='superadmin'||role==='athlete'&&client.id===athleteId

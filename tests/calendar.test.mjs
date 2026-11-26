@@ -4,6 +4,26 @@ import {createClient, emptyState, linkCalendarTask} from '../src/core.js';
 import * as A from '../src/accounting.js';
 import {localDate} from '../src/model-utils.js';
 import {calendarClient, calendarPlace, isSchedulingTask, taskCalendarChoices} from '../src/calendar-ui.js';
+import {calendarEvent} from '../server/calendar-edge.js';
+import {OWNER_COACH,previewGroupScheduleVisible} from '../src/role-preview.js';
+
+test('the opt-in calendar feed keeps groups separate from clients and scopes group meetings to the assigned coach',()=>{
+  const dateTime='2026-11-26T19:00:00+01:00';
+  const raw={id:'group-event',summary:'Группа · Калемегдан · Алексей',start:{dateTime},end:{dateTime:'2026-11-26T20:00:00+01:00'}};
+  assert.equal(calendarEvent(raw,'calendar'),null);
+  assert.equal(calendarEvent({...raw,status:'cancelled'},'calendar',true),null);
+  const event=calendarEvent(raw,'calendar',true);
+  assert.equal(event.kind,'group');
+  assert.equal(event.location,'Калемегдан');
+  const s=emptyState(),coach=createClient(s,{name:'Соболев Алексей',role:'Тренер'});
+  assert(previewGroupScheduleVisible(event,s,{role:'superadmin'}));
+  assert(previewGroupScheduleVisible(event,s,{role:'coach',coachId:coach.id}));
+  assert(!previewGroupScheduleVisible(event,s,{role:'coach',coachId:OWNER_COACH}));
+  assert(!previewGroupScheduleVisible(event,s,{role:'athlete'}));
+  assert.equal(calendarClient(event,s.clients,coach.id),undefined);
+  const personal={...raw,summary:'Персональная · Тестовый клиент · Сергей'};
+  assert.deepEqual(calendarEvent(personal,'calendar',true),calendarEvent(personal,'calendar'));
+});
 
 test('finding a session by a unique first name does not associate an ambiguous first name', () => {
   const task = {id:'task-1',clientId:'c1',title:'Согласовать день недели и время тренировки'};

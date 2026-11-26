@@ -1,4 +1,4 @@
-import { addDays, localDate, TIMEZONE } from './model-utils.js';
+import { addDays, localDate, TIMEZONE, validDate } from './model-utils.js';
 import {
   PROTOCOL_FIELDS, TRAINING_WEEK_MAX_BYTES, applyTrainingWeek, parseTrainingWeek,
   previewTrainingWeek, trainingWeekDays, trainingWeekRevisions
@@ -11,20 +11,20 @@ const dayFormat = new Intl.DateTimeFormat('ru-RU', {
 const dayLabel = day => dayFormat.format(new Date(day + 'T12:00:00Z'));
 const revisionRoute = week => TRAINING_WEEK_ROUTE + '/' + week.revision;
 const noProtocol = 'Утверждённого протокола на сегодня нет.';
+const cloudRoute = (day,id) => TRAINING_WEEK_ROUTE + '/cloud/' + day + (id ? '/' + id : '');
 
-export function createTrainingWeekUI({state, el, append, text, button, row, formatDate, modal, navigate, save, message, weekPanel}) {
+export function createTrainingWeekUI({state, el, append, text, button, row, formatDate, modal, navigate, save, message, weekPanel, readGroupWeek}) {
   const weekRange = week => formatDate(week.weekStart) + ' — ' + formatDate(addDays(week.weekStart, 6)) + ' · ' + week.weekStart.slice(0, 4);
   const sourceLabel = source => [source.planTitle, 'ID ' + source.planId].filter(Boolean).join(' · ');
   const sectionSchedule = () => button('← К расписанию', () => navigate('#todo/schedule'), 'subtle');
   const sessionRoute = (week, session) => revisionRoute(week) + '/' + session.id;
 
-  function sessionSummary(week, session) {
-    return append(button('', () => navigate(sessionRoute(week, session)), 'task-tile'),
+  function sessionSummary(week, session, cloud=false) {
+    return append(button('', () => navigate(cloud ? cloudRoute(session.day,session.id) : sessionRoute(week, session)), 'task-tile'),
       el('strong', session.title, 'task-title'));
   }
 
-  function scheduleEntry() {
-    const week = trainingWeekRevisions(state()).at(-1);
+  function scheduleSummary(week, cloud=false) {
     if (!week) {
       return append(el('section', null, 'panel stack'),
         row(button('Неделя группы', () => navigate(TRAINING_WEEK_ROUTE)), text('Неделя ещё не загружена.')));
@@ -35,7 +35,7 @@ export function createTrainingWeekUI({state, el, append, text, button, row, form
         el('h2', 'Сегодня · ' + week.group.name),
         button('Неделя группы', () => navigate(TRAINING_WEEK_ROUTE), 'subtle')),
       today?.sessions.length
-        ? append(el('div', null, 'stack'), ...today.sessions.map(session => sessionSummary(week, session)))
+        ? append(el('div', null, 'stack'), ...today.sessions.map(session => sessionSummary(week, session, cloud)))
         : text(today?.rest ? 'День отдыха' : noProtocol),
       !today && text('Сохранённая неделя · ' + weekRange(week)));
   }
@@ -57,6 +57,38 @@ export function createTrainingWeekUI({state, el, append, text, button, row, form
       ...PROTOCOL_FIELDS.flatMap(([key,label]) => session[key] ? [label + '\n' + session[key]] : []),
       ...session.variants.map(variant => variant.label + '\n' + variant.protocol)
     ].join('\n\n');
+  }
+
+  async function onlineWeek(day){
+    const value=await readGroupWeek(day);
+    return value ? parseTrainingWeek(JSON.stringify(value)) : null;
+  }
+
+  function scheduleEntry(){
+    const box=append(el('div'),scheduleSummary(trainingWeekRevisions(state()).at(-1)));
+    void onlineWeek(localDate()).then(week=>{
+      if(week&&box.isConnected)box.replaceChildren(scheduleSummary(week,true));
+    }).catch(()=>{});
+    return box;
+  }
+
+  function groupProtocol(day){
+    const out=append(el('section',null,'panel stack'),el('h2','Протокол группы'),text('Загружаю протокол…'));
+    function render(week){
+      const sessions=week?.sessions.filter(session=>session.day===day)??[];
+      out.replaceChildren(el('h2','Протокол группы'),
+        ...sessions.map(session=>append(el('article',null,'stack'),el('h3',session.title),
+          el('p',sessionDescription(session),'training-calendar-description'))),
+        ...(sessions.length?[]:[text('На эту дату протокол ещё не опубликован.')]),
+        row(button('Неделя группы',()=>navigate(cloudRoute(day,sessions[0]?.id)),'subtle')));
+    }
+    async function refresh(){
+      try{render(await onlineWeek(day));}
+      catch{out.replaceChildren(el('h2','Протокол группы'),text('Не удалось загрузить протокол.'),
+        row(button('Повторить',refresh,'subtle')));}
+    }
+    void refresh();
+    return out;
   }
 
   function provenance(week) {
@@ -133,11 +165,11 @@ export function createTrainingWeekUI({state, el, append, text, button, row, form
     }, {saveLabel: 'Применить редакцию'});
   }
 
-  function page(route,{canImport=true,calendar=false}={}) {
+  function weekPage(route,{canImport=true,calendar=false}={},online=null) {
     const history = trainingWeekRevisions(state());
-    const active = history.at(-1);
+    const active = online || history.at(-1);
     const [, version, sessionId] = route.slice(TRAINING_WEEK_ROUTE.length).split('/');
-    const week = version ? history.find(entry => String(entry.revision) === version) : active;
+    const week = online || (version ? history.find(entry => String(entry.revision) === version) : active);
     if (version && !week) return append(el('div', null, 'stack'), row(sectionSchedule()), text('Редакция недели не найдена.'));
     const panel = append(el('div', null, 'stack-lg'),
       append(el('div', null, 'stack'), !calendar && row(sectionSchedule()), el('h1', 'Неделя группы'),
@@ -149,13 +181,13 @@ export function createTrainingWeekUI({state, el, append, text, button, row, form
     }
     append(panel, append(el('div', null, 'row between'),
       row(el('span', 'Редакция ' + week.revision, 'chip'), week !== active && el('span', 'Архив', 'chip')),
-      week === active ? canImport && button('Загрузить редакцию', importWeek) :
+      week === active ? canImport && !online && button('Загрузить редакцию', importWeek) :
         button('К текущей редакции', () => navigate(TRAINING_WEEK_ROUTE), 'subtle')),
       weekPanel(week,{preferredId:sessionId,describe:sessionDescription,
         emptyDay:day=>week.restDays.includes(day)?'День отдыха':'Протокол не указан'}));
-    if (canImport) panel.append(append(el('details', null, 'fold'), el('summary', 'Источник и редакция'),
+    if (canImport && !online) panel.append(append(el('details', null, 'fold'), el('summary', 'Источник и редакция'),
       append(el('div', null, 'fold-body'), provenance(week))));
-    if (canImport && week === active && history.length > 1) {
+    if (canImport && !online && week === active && history.length > 1) {
       panel.append(append(el('details', null, 'fold'), el('summary', 'Предыдущие редакции'),
         append(el('div', null, 'fold-body stack'), ...history.slice(0, -1).reverse().map(entry =>
           row(button('Редакция ' + entry.revision + ' · ' + formatDate(entry.approvedAt, true),
@@ -164,5 +196,22 @@ export function createTrainingWeekUI({state, el, append, text, button, row, form
     return panel;
   }
 
-  return { scheduleEntry, page };
+  function page(route,options){
+    const [,kind,day,id]=route.slice(TRAINING_WEEK_ROUTE.length).split('/');
+    if(kind && kind!=='cloud')return weekPage(route,options);
+    const selected=kind==='cloud'&&validDate(day)?day:localDate();
+    const out=el('div',null,'stack');
+    const waiting=kind==='cloud'?text('Загружаю неделю группы…'):weekPage(route,options);
+    out.append(waiting);
+    void onlineWeek(selected).then(week=>{
+      if(!out.isConnected)return;
+      if(week)out.replaceChildren(weekPage(id ? revisionRoute(week)+'/'+id : TRAINING_WEEK_ROUTE,options,week));
+      else if(kind==='cloud')out.replaceChildren(sectionSchedule(),el('h1','Неделя группы'),text('Неделя для '+formatDate(selected)+' пока не опубликована.'));
+    }).catch(()=>{
+      if(kind==='cloud'&&out.isConnected)out.replaceChildren(sectionSchedule(),text('Не удалось загрузить неделю группы.'));
+    });
+    return out;
+  }
+
+  return { scheduleEntry, page, groupProtocol };
 }
