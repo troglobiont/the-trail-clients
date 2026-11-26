@@ -5,6 +5,7 @@ import { validateCloudState } from './cloud-state.js';
 import { raceById, raceCatalog, raceDefinition, raceGoal, sameRace, setProfile, setTraining } from './client-details.js';
 import {validatePartners} from './partners.js';
 import {validateTeam} from './team.js';
+import {COACH_CASH,GROUP_COMPLETION,validateCoachAccounting} from './coach-accounting.js';
 import {validateAthletes} from './athlete.js';
 import {validateSportLog} from './sport-log.js';
 import {goalProposal} from './goal-record.js';
@@ -46,6 +47,7 @@ export function validateState(s){
   validateCloudState(s);
   validatePartners(s);
   validateTeam(s);
+  validateCoachAccounting(s);
   validateAthletes(s);
   if(s.settings.trainingWeek!==undefined)s.settings.trainingWeek=validateStoredTrainingWeek(s);
   if(s.settings.trainingAssignments!==undefined)s.settings.trainingAssignments=validateTrainingAssignments(s.settings.trainingAssignments);
@@ -344,4 +346,25 @@ export function exportState(s){
   return JSON.stringify({format:'the-trail-clients-backup',schemaVersion:SCHEMA,exportedAt:stamp(),
     state:{...backup,settings:backupSettings}},null,2);
 }
-export function mergeState(current,incoming){validateState(incoming);const next=clone(current);for(const name of ['clients','goals','tasks','records'])for(const [key,value] of Object.entries(incoming[name]))if(!next[name][key])next[name][key]=clone(value);for(const name of ['partners','partnerTasks'])for(const [key,value] of Object.entries(incoming[name]||{})){next[name]??={};if(!next[name][key])next[name][key]=clone(value);}const events=new Set(next.events.map(e=>e.id));for(const e of incoming.events)if(!events.has(e.id)){next.events.push(clone(e));events.add(e.id);}next.events.sort((a,b)=>a.at.localeCompare(b.at));mergeAccounting(next,incoming);if(!next.ledger&&incoming.ledger)next.ledger=clone(incoming.ledger);return validateState(next);}
+export function mergeState(current,incoming){
+  validateState(incoming);
+  const next=clone(current);
+  for(const name of ['clients','goals','tasks','records'])
+    for(const [key,value] of Object.entries(incoming[name]))if(!next[name][key])next[name][key]=clone(value);
+  for(const name of ['partners','partnerTasks']){
+    next[name]??={};
+    for(const [key,value] of Object.entries(incoming[name]||{}))if(!next[name][key])next[name][key]=clone(value);
+  }
+  const events=new Map(next.events.map(e=>[e.id,e]));
+  for(const event of incoming.events){
+    const previous=events.get(event.id);
+    const coachEntry=previous?.type===event.type&&[COACH_CASH,GROUP_COMPLETION].includes(event.type);
+    const newer=coachEntry&&Date.parse(event.updatedAt)>Date.parse(previous.updatedAt);
+    if(!previous||coachEntry&&event.type===COACH_CASH&&event.status==='approved'&&previous.status!=='approved'||
+      newer&&previous.status!=='approved')events.set(event.id,clone(event));
+  }
+  next.events=[...events.values()].sort((a,b)=>a.at.localeCompare(b.at));
+  mergeAccounting(next,incoming);
+  if(!next.ledger&&incoming.ledger)next.ledger=clone(incoming.ledger);
+  return validateState(next);
+}

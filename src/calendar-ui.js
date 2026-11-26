@@ -2,7 +2,8 @@ import {addDays, localDate, TIMEZONE} from './model-utils.js';
 import {linkCalendarTask, normalizeSearch} from './core.js';
 import {accounting, activeService, clientServices, money, serviceBalance, tariffLabel} from './accounting.js';
 import {createCalendarData} from './calendar-data.js';
-import {assignedCoach,OWNER_COACH,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
+import {assignedCoach,coachContact,groupCoach,OWNER_COACH,previewCoaches,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
+import {GROUP_COMPLETION,groupCompletion,groupEventReference,saveGroupCompletion} from './coach-accounting.js';
 
 const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit'});
 const monthFormat = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, month:'long', year:'numeric'});
@@ -273,12 +274,16 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
   function calendarEntries(entries, past = false) {
     const list = el('div',null,'stack');
     const athlete = roleContext().role==='athlete';
+    const completed=new Map(state().events.filter(e=>e.type===GROUP_COMPLETION).map(e=>[e.calendarRef,e]));
     let previousDay;
     for (const {event,client,day,recorded} of entries) {
       const group=event.kind==='group';
       if (day !== previousDay) list.append(el('h3',formatDate(day),'calendar-day'));
       previousDay = day;
       const kind = calendarKind(event);
+      const completion=group&&completed.get(groupEventReference(event));
+      const responsible=group&&(state().clients[completion?.clientId]?.name||
+        coachContact(state(),groupCoach(event,state()))?.name||event.coachName||'требует уточнения');
       const title = group ? (event.location?'Групповая · '+event.location:'Групповая тренировка') :
         athlete?'Персональная · '+TRAINING_KIND_LABELS[kind]:client?.name || calendarName(event);
       const route = past ? CALENDAR_ARCHIVE_ROUTE+'/'+day.slice(0,7) : '#todo/schedule';
@@ -287,8 +292,8 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
       list.append(append(card,
         text(timeRange(event),'calendar-time'),
         append(el('div'),el('strong',title),
-          group?text(event.coachName):event.location&&text(event.location),
-          past&&!group&&el('span',recorded?'Проведена':'Без отметки','chip'))));
+          group?text('Ответственный · '+responsible):event.location&&text(event.location),
+          past&&el('span',group&&completion?.voided?'Не проведена':(group?completion:recorded)?'Проведена':'Без отметки','chip'))));
     }
     return list;
   }
@@ -351,7 +356,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     const back = month ? CALENDAR_ARCHIVE_ROUTE : '#todo/schedule';
     const content = el('section',null,'stack-lg');
     const page = append(el('div',null,'stack-lg'),button(month?'← К прошлым тренировкам':'← К расписанию',()=>navigate(back),'back subtle'),content);
-    const display = (event, ids, mode) => {
+    const display = async (event, ids, mode) => {
       const s = state(), date = localDate(new Date(event.start));
       if (athlete && !athleteScheduleEntries(s,context.athleteId,[event]).length) {
         content.replaceChildren(text('Тренировка недоступна в этом режиме.'));
@@ -362,10 +367,39 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
           content.replaceChildren(text('Тренировка недоступна в этом режиме.'));
           return;
         }
+        const hash=await sessionIds('group:'+groupEventReference(event));
+        if(!content.isConnected)return;
+        const entry=groupCompletion(state(),hash.sessionId);
+        const matched=groupCoach(event,state()),expectedCoach=matched&&coachContact(state(),matched);
+        const actual=state().clients[entry?.clientId]||expectedCoach;
+        const complete=(memberId,voided=false)=>commit(draft=>{
+          const currentContext=roleContext();
+          const actor=coachContact(draft,currentContext.coachId)?.id;
+          if(currentContext.role==='coach'&&coachContact(draft,groupCoach(event,draft))?.id!==actor)
+            throw Error('Тренировка закреплена за другим тренером');
+          return saveGroupCompletion(draft,hash.sessionId,event,memberId,{...currentContext,coachId:actor},voided);
+        });
+        const correct=()=>modal(entry&&!entry.voided?'Исправить проведение':'Подтвердить проведение',form=>{
+          const choices=previewCoaches(state()).map(([id,name])=>[coachContact(state(),id)?.id,name]).filter(([id])=>id);
+          const choice=select([['','Выбери тренера'],...choices],actual?.id||'');
+          form.append(field('Кто провёл тренировку',choice));
+          return ()=>complete(choice.value);
+        });
+        const canManage=roleContext().role==='superadmin';
+        const canComplete=mode==='live'&&hasEnded(event);
+        const actions=canComplete&&!athlete&&append(el('div',null,'row'),
+          !entry&&expectedCoach&&button('Провёл',()=>complete(expectedCoach.id),'primary'),
+          canManage&&(!expectedCoach||entry)&&button(entry&&!entry.voided?'Исправить проведение':'Подтвердить проведение',correct,'subtle'),
+          canManage&&entry&&!entry.voided&&button('Снять отметку',()=>modal('Снять отметку о проведении',form=>{
+            form.append(text('Начисление за это занятие будет снято.'));
+            return ()=>complete(entry.clientId,true);
+          },{saveLabel:'Снять отметку'}),'subtle'));
         content.replaceChildren(el('h1','Групповая тренировка'),append(el('section',null,'panel stack calendar-detail'),
-          event.location&&el('h2',event.location),text('Тренер · '+event.coachName),
+          event.location&&el('h2',event.location),text('Ответственный · '+(actual?.name||event.coachName||'требует уточнения')),
+          entry&&el('span',entry.voided?'Не проведена':'Проведена','chip'),
+          !athlete&&entry&&expectedCoach?.id!==actual?.id&&text('В Google Календаре · '+event.coachName),
           text([formatDate(date),timeRange(event)].join(' · '),'calendar-time'),
-          !athlete&&eventLink(event,'Открыть в Google Календаре')),...(athlete?[]:[groupProtocol(date)]));
+          !athlete&&eventLink(event,'Открыть в Google Календаре'),actions?.children?.length&&actions),...(athlete?[]:[groupProtocol(date)]));
         return;
       }
       const {services,operations} = accounting(s);
@@ -443,7 +477,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     void Promise.all([month?dataSource.loadHistory(month):load(),identifiers]).then(([data,ids])=>{
       const event = data.events.find(item=>item.id===eventId);
       if (!event) throw Error('Тренировка не найдена в расписании');
-      display(event,ids,data.mode);
+      return display(event,ids,data.mode);
     }).catch(error=>content.replaceChildren(text(error.message)));
     return page;
   }

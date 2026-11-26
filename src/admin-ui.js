@@ -1,11 +1,12 @@
-import {teamMembers,teamRole,teamEntries,teamSummary,saveTeamEntry,saveTeamNotes,saveTeamVisibility,sharesTeamProfile,TEAM_ENTRY_KINDS} from './team.js';
+import {teamMembers,teamRole,teamEntries,teamSummary,saveTeamEntry,saveTeamNotes,saveTeamVisibility,saveTeamGroupRate,sharesTeamProfile,TEAM_ENTRY_KINDS} from './team.js';
 import {amountMinor,money,CURRENCIES} from './accounting.js';
-import {localDate,validDate} from './model-utils.js';
-import {isOwnerPerson} from './role-preview.js';
+import {addDays,localDate,validDate} from './model-utils.js';
+import {coachContact,isOwnerPerson} from './role-preview.js';
+import {GROUP_RATE} from './coach-accounting.js';
 
 const duration=minutes=>[Math.floor(minutes/60)?Math.floor(minutes/60)+' ч':'',minutes%60?minutes%60+' мин':''].filter(Boolean).join(' ')||'0 ч';
-export function createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,addCoach,render,formatDate,partnersUI}){
-  let month=localDate().slice(0,7);
+export function createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,addCoach,render,formatDate,partnersUI,cashPanel}){
+  let month=localDate().slice(0,7),coachMonth=month,weekDay=localDate();
   const adminBack=()=>navigate('#admin');
   function page({athlete=false,person}={}){
     const canManageTeam=ui.role==='superadmin';
@@ -20,7 +21,8 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
     if(!members.length)list.append(text('Команда пока не добавлена.'));
     const team=section('Команда','admin-team',[canManageTeam&&row(button('+ Добавить тренера',addCoach,'subtle')),list]);
     const partners=section('Партнёры','admin-partners',[partnersUI.page({embedded:true,readOnly:athlete})]);
-    return append(el('div',null,'stack-lg admin-page'),el('h1',athlete?'Ещё':'Админ'),partners,team,
+    return append(el('div',null,'stack-lg admin-page'),el('h1',athlete?'Ещё':'Админ'),
+      ui.role==='coach'&&row(button('Мой учёт',()=>navigate('#admin/my-account'),'subtle')),partners,team,
       athlete&&isOwnerPerson(person)&&section('Интеграции','preview-athlete-integrations',[
         button('Источники данных',()=>openClient(person.id,'sources'),'subtle')
       ]));
@@ -63,6 +65,71 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
       };
     });
   }
+  function editRate(member){
+    modal('Ставка за групповую',form=>{
+      const rate=input('text',String((member.teamAdmin?.groupRate??GROUP_RATE)/100));rate.inputMode='decimal';
+      append(form,field('Ставка, RSD за тренировку',rate),text('Новая ставка применяется к следующим отметкам о проведении.'));
+      return ()=>commit(s=>saveTeamGroupRate(s,member.id,amountMinor(rate.value)));
+    });
+  }
+  function monthTotals(member,period,entries,manage=false){
+    const summary=teamSummary(state(),member.id,period);
+    const totals=append(el('section',null,'panel stack team-summary'),el('h2','За месяц'));
+    if(teamRole(member)==='Тренер'){
+      const group=entries.filter(e=>e.group);
+      totals.append(row(el('strong',String(group.length)),text('Групповых проведено')),
+        row(text('Начислено за групповые'),el('strong',money(group.reduce((sum,e)=>sum+e.amount,0),'RSD'))));
+    }
+    if(!summary.entries&&!Object.keys(summary.currencies).length)totals.append(text('За этот месяц записей нет.'));
+    else {
+      totals.append(row(el('strong',duration(summary.minutes)),text('Учтённое время')));
+      if(summary.unpricedWork)totals.append(text('Есть работа без указанного начисления.'));
+      for(const currency of CURRENCIES){
+        const sums=summary.currencies[currency];if(!sums)continue;
+        const block=el('div',null,'stack team-currency');
+        const lines=[['Начислено',sums.accrued],['Выплачено',sums.paid]];
+        if(manage)lines.push(['Расходы',sums.expenses]);
+        for(const [label,value] of lines)
+          block.append(append(el('div',null,'row between'),text(label),el('strong',money(value,currency),'money-amount')));
+        block.append(append(el('div',null,'row between'),text(sums.balance>=0?'К выплате':'Выплачено авансом'),el('strong',money(Math.abs(sums.balance),currency),'money-amount')));
+        totals.append(block);
+      }
+      totals.append(text('К выплате — по внесённым начислениям и выплатам на конец выбранного месяца.'));
+    }
+    return totals;
+  }
+  function groupRows(entries){
+    const list=el('div',null,'stack');
+    for(const entry of entries){
+      list.append(append(el('div',null,'row between'),text([formatDate(entry.day),entry.note].filter(Boolean).join(' · ')),
+        el('strong',money(entry.amount,entry.currency),'money-amount')));
+    }
+    return list;
+  }
+  function myAccount(){
+    if(ui.role!=='coach')return page();
+    const member=coachContact(state(),ui.previewCoachId);
+    const shell=append(el('div',null,'stack-lg team-card'),button('← Админ',adminBack,'back subtle'),el('h1','Мой учёт'));
+    if(!member)return append(shell,text('Профиль тренера пока недоступен.'));
+    const monthInput=input('month',coachMonth);monthInput.className='team-month';
+    monthInput.addEventListener('change',()=>{if(validDate(monthInput.value+'-01')){coachMonth=monthInput.value;render();}});
+    const dateInput=input('date',weekDay);
+    dateInput.addEventListener('change',()=>{if(validDate(dateInput.value)){weekDay=dateInput.value;render();}});
+    const weekday=new Date(weekDay+'T12:00:00Z').getUTCDay();
+    const from=addDays(weekDay,-((weekday+6)%7)),to=addDays(from,6);
+    const entries=teamEntries(state(),member.id),completed=entries.filter(e=>e.group);
+    const weekly=completed.filter(e=>e.day>=from&&e.day<=to);
+    const monthly=entries.filter(e=>e.day.startsWith(coachMonth+'-'));
+    const monthlyGroups=monthly.filter(e=>e.group);
+    return append(shell,el('strong',member.name),text('Ставка за групповую · '+money(member.teamAdmin?.groupRate??GROUP_RATE,'RSD')),
+      append(el('section',null,'panel stack'),el('h2','За неделю'),field('День нужной недели',dateInput),
+        text(formatDate(from)+' – '+formatDate(to)),
+        append(el('div',null,'row between'),text('Проведено · '+weekly.length),el('strong',money(weekly.reduce((sum,e)=>sum+e.amount,0),'RSD'))),
+        weekly.length&&groupRows(weekly)),
+      field('Месяц учёта',monthInput),monthTotals(member,coachMonth,monthly),
+      monthlyGroups.length&&section('Даты проведённых тренировок','coach-month-groups-'+member.id,[groupRows(monthlyGroups)]),
+      cashPanel());
+  }
   function card(memberId){
     if(ui.role!=='superadmin')return page();
     const member=teamMembers(state()).find(c=>c.id===memberId);
@@ -79,36 +146,23 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
         text(visible?'Виден тренеру, бухгалтеру и спортсмену.':'Виден только суперадмину.'),row(visibility)),
       button('Карточка человека',()=>openClient(member.id),'subtle'),
       row(picker,button('+ Запись',()=>editEntry(member),'primary')));
-    const summary=teamSummary(state(),member.id,month),entries=teamEntries(state(),member.id,month);
-    const totals=append(el('section',null,'panel stack team-summary'),el('h2','За месяц'));
-    if(!summary.entries&&!Object.keys(summary.currencies).length)totals.append(text('Записей пока нет. Часы и расчёты появятся после ввода.'));
-    else {
-      totals.append(row(el('strong',duration(summary.minutes)),text('Учтённое время')));
-      if(summary.unpricedWork)totals.append(text('Есть работа без указанного начисления.'));
-      for(const currency of CURRENCIES){
-        const sums=summary.currencies[currency];if(!sums)continue;
-        const block=el('div',null,'stack team-currency');
-        for(const [label,value] of [['Начислено',sums.accrued],['Выплачено',sums.paid],['Расходы',sums.expenses]])
-          block.append(append(el('div',null,'row between'),text(label),el('strong',money(value,currency),'money-amount')));
-        block.append(append(el('div',null,'row between'),text(sums.balance>=0?'К выплате':'Выплачено авансом'),el('strong',money(Math.abs(sums.balance),currency),'money-amount')));
-        totals.append(block);
-      }
-      totals.append(text('К выплате — по внесённым начислениям и выплатам на конец выбранного месяца.'));
-    }
-    page.append(totals);
+    if(teamRole(member)==='Тренер')page.append(row(text('Ставка за групповую · '+money(member.teamAdmin?.groupRate??GROUP_RATE,'RSD')),
+      button('Изменить ставку',()=>editRate(member),'subtle')));
+    const entries=teamEntries(state(),member.id,month);
+    page.append(monthTotals(member,month,entries,true));
     const history=append(el('section',null,'stack'),el('h2','История'));
     if(!entries.length)history.append(text('За этот месяц записей нет.'));
     for(const entry of entries){
-      const item=append(button('',()=>editEntry(member,entry),'team-entry'),
-        append(el('div',null,'row between'),el('strong',TEAM_ENTRY_KINDS[entry.kind]),text(formatDate(entry.day))),
+      const item=append(entry.group?el('div',null,'team-entry'):button('',()=>editEntry(member,entry),'team-entry'),
+        append(el('div',null,'row between'),el('strong',entry.group?'Групповая тренировка':TEAM_ENTRY_KINDS[entry.kind]),text(formatDate(entry.day))),
         append(el('div',null,'row between'),entry.minutes&&text(duration(entry.minutes)),
           entry.amount!==null&&el('strong',money(entry.amount,entry.currency),'money-amount')),entry.note&&text(entry.note));
-      item.setAttribute('aria-label',[TEAM_ENTRY_KINDS[entry.kind],formatDate(entry.day),entry.note].filter(Boolean).join(' · '));
+      item.setAttribute('aria-label',[entry.group?'Групповая тренировка':TEAM_ENTRY_KINDS[entry.kind],formatDate(entry.day),entry.note].filter(Boolean).join(' · '));
       history.append(item);
     }
     page.append(history,section('Договорённости','team-notes-'+member.id,[text(member.teamAdmin?.notes||'Зона ответственности, ставки и условия пока не записаны.'),
       button('Изменить',()=>editNotes(member),'subtle')]));
     return page;
   }
-  return {page,card};
+  return {page,card,myAccount};
 }

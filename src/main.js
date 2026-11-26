@@ -22,6 +22,8 @@ import {createPartnersUI} from './partners-ui.js';
 import {partnerTasks} from './partners.js';
 import {syncIndicatorState,cloudIcon,settingsWheel} from './sync-indicator.js';
 import {createAdminUI} from './admin-ui.js';
+import {COACH_CASH,GROUP_COMPLETION} from './coach-accounting.js';
+import {createCoachAccountingUI} from './coach-accounting-ui.js';
 import {isTeamMember,sharesTeamProfile,teamRole} from './team.js';
 import {createAthleteUI} from './athlete-ui.js';
 import {createSportLogUI} from './sport-log-ui.js';
@@ -118,7 +120,11 @@ const calendarUI=createCalendarUI({state,service,roleContext,el,append,button,ro
   scheduledSession:accountingUI.scheduledSession,addScheduledTariff:accountingUI.addScheduledTariff,groupProtocol:trainingWeekUI.groupProtocol});
 const partnersUI=createPartnersUI({state,el,append,button,row,text,field,input,select,section,modal,commit,navigate,formatDate,message,
   openList:()=>{ui.open.add('admin-partners');navigate('#admin');}});
-const adminUI=createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,render,formatDate,partnersUI,
+const coachAccountingUI=createCoachAccountingUI({state,
+  context:()=>({...roleContext(),coachId:coachContact(state(),ui.previewCoachId)?.id,actorId:coachContact(state(),OWNER_COACH)?.id}),
+  el,append,text,button,row,field,input,select,modal,commit,message,formatDate,
+  searchClients:query=>C.filterClients(state(),{query,role:'Клиент'})});
+const adminUI=createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,render,formatDate,partnersUI,cashPanel:coachAccountingUI.own,
   addCoach:()=>editClient(null,'Тренер')});
 const logUI=createSportLogUI({el,append,button,row,text,section,modal,commit,input,select,field,navigate,formatDate,garminData});
 const athleteUI=createAthleteUI({ui,el,append,button,text,section,navigate,logUI,garminData,
@@ -771,7 +777,7 @@ function todoTiles(entries,today){
   const list=el('div',null,'stack');
   for(const item of entries){
     const b=button('',item.open,item.birthday?'task-tile birthday-tile':'task-tile');
-    const due=item.due===today?'Сегодня':item.due?formatDate(item.due):'Без срока';
+    const due=item.review?'На проверке':item.due===today?'Сегодня':item.due?formatDate(item.due):'Без срока';
     const overdue=item.payment&&item.due&&item.due<today;
     if(overdue)b.classList.add('task-tile-overdue');
     const title=item.birthday
@@ -854,13 +860,15 @@ function renderTodo(filter='all'){
       ]));
     return page;
   }
+  const reviews=coachAccountingUI.queue();
+  const reviewQueue=reviews.length&&append(el('section',null,'stack'),el('h2','Сверка наличных'),todoTiles(reviews,today));
   if(filter==='payments'){
     const period=athlete?ui.athletePaymentPeriod??7:ui.paymentPeriod;
     const entries=payments(period);
     filterPanel.append(todoPeriods('Период оплаты',period,[[7,'7 дней'],[30,'30 дней'],[-1,'Долги','Неоплаченные счета с прошедшим сроком']],value=>{
       if(athlete)ui.athletePaymentPeriod=value;else ui.paymentPeriod=value;
     }));
-    return append(page,entries.length?todoTiles(entries,today):text(period<0?'Просроченных оплат нет.':'Нет предстоящих оплат на ближайшие '+period+' дней.'));
+    return append(page,reviewQueue,entries.length?todoTiles(entries,today):text(period<0?'Просроченных оплат нет.':'Нет предстоящих оплат на ближайшие '+period+' дней.'));
   }
   const period=ui.taskPeriod;
   filterPanel.append(todoPeriods('Период задач',period,[[7,'7 дней'],[30,'30 дней'],[-1,'Проср.','Задачи с прошедшим сроком']],value=>{
@@ -874,6 +882,7 @@ function renderTodo(filter='all'){
     next:'Задача партнёра',open:()=>navigate('#partners/'+task.partnerId+'/task/'+task.id)}));
   const entries=todoPeriodEntries([...tasks,...partnerEntries,...payments(period??undefined),...birthdays,...telegram],period,today)
     .sort((a,b)=>(a.due||'9999').localeCompare(b.due||'9999'));
+  if(reviewQueue)page.append(reviewQueue);
   page.append(entries.length?todoTiles(entries,today):text(period===null?'Открытых задач в этом разделе нет.':
     period===-1?'Просроченных задач нет.':'Нет задач на ближайшие '+period+' дней.'));
   return page;
@@ -1037,7 +1046,7 @@ function renderHistory(c) {
     'feature-created','feature-edited','feature-archived','feature-restored']);
   const coachEvents=new Set([...athleteEvents,'record-created','pause-contact-completed','contact','telegram-opened','telegram-linked','telegram-unlinked']);
   const related=Object.values(state().tasks).filter(task=>task.clientId===c.id);
-  const events=state().events.filter(e=>e.clientId===c.id).slice().reverse()
+  const events=state().events.filter(e=>e.clientId===c.id&&![GROUP_COMPLETION,COACH_CASH].includes(e.type)).slice().reverse()
     .filter(e=>{
       const task=state().tasks[e.entityId],record=state().records[e.entityId];
       if(e.type==='task-closed'&&task?.phase==='done'||e.type==='feature-archived'&&features.get(e.entityId)?.active===false)return false;
@@ -1144,7 +1153,7 @@ function renderClient(clientId,targetType,targetId){
   if(tasks.length)page.append(append(el('section',null,'panel action-panel'),el('h2',athlete?'Задачи от тренера':'Действия по клиенту','block-heading'),...tasks.map(task)));
   if(!sport)page.append(renderFeatures(c));
   if(c.role==='Клиент'&&hasFinance(ui.role))page.append(accountingUI.clientPanel(c));
-  if(c.role==='Клиент'&&coach)page.append(button('Принять оплату',()=>accountingUI.coachReceipt(c.id),'primary account-main-action'));
+  if(c.role==='Клиент'&&coach)page.append(button('Принять оплату',()=>coachAccountingUI.submit(c.id),'primary account-main-action'));
   const reference=el('div',null,'reference-sections');
   const telegram=athlete?contactCoach(c):section('Сообщения в Telegram',c.id+'-telegram',[telegramPanel(c)]);
   telegram.id='telegram-client-panel';telegram.tabIndex=-1;
@@ -1869,6 +1878,7 @@ function render(){
     :text('Выбери карточку спортсмена в меню под логотипом.')):accountingUI.page());
   else if(hash==='#races')root.append(detailsUI.races(athlete?{participantId:person?.id||null}:undefined));
   else if(hash==='#admin')root.append(adminUI.page({athlete,person}));
+  else if(hash==='#admin/my-account')root.append(adminUI.myAccount());
   else if(hash.startsWith('#admin/team/'))root.append(adminUI.card(hash.split('/')[2]));
   else if(hash==='#partners'){ui.open.add('admin-partners');root.append(adminUI.page({athlete,person}));}
   else if(hash.startsWith('#partners/')){const [,id,,taskId]=hash.split('/');root.append(partnersUI.card(id,taskId,{readOnly:athlete}));}

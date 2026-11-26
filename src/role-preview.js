@@ -49,15 +49,18 @@ export function previewScheduleVisible(event,client,task,{role,athleteId,coachId
   return true;
 }
 
-export function previewGroupScheduleVisible(event,state,{role,coachId=OWNER_COACH}){
-  if(role==='superadmin')return true;
-  if(role!=='coach')return false;
+export function groupCoach(event,state){
   const name=normalizeSearch(event.coachName);
-  if(!name)return false;
-  if(name===normalizeSearch('Сергей')||ownerNames.has(name))return coachId===OWNER_COACH;
-  const matches=previewCoaches(state).filter(([id,label])=>id!==OWNER_COACH
-    &&(normalizeSearch(label)===name||label.split(/\s+/u).some(part=>normalizeSearch(part)===name)));
-  return matches.length===1&&matches[0][0]===coachId;
+  if(!name)return null;
+  const candidates=previewCoaches(state);
+  const exact=candidates.filter(([,label])=>normalizeSearch(label)===name||
+    normalizeSearch(label.split(/\s+/u).reverse().join(' '))===name);
+  const matches=exact.length?exact:candidates.filter(([,label])=>label.split(/\s+/u).some(part=>normalizeSearch(part)===name));
+  return matches.length===1?matches[0][0]:null;
+}
+
+export function previewGroupScheduleVisible(event,state,{role,coachId=OWNER_COACH}){
+  return role==='superadmin'||role==='coach'&&groupCoach(event,state)===coachId;
 }
 
 export function previewTrainingVisible(state,client,{role,athleteId,coachId=OWNER_COACH}){
@@ -68,6 +71,7 @@ export function previewTrainingVisible(state,client,{role,athleteId,coachId=OWNE
 
 export function previewRoute(hash,{role,athleteId}){
   if(role!=='superadmin'&&hash==='#assistant')return '#todo';
+  if(role!=='coach'&&hash==='#admin/my-account')return '#admin';
   if(role!=='superadmin'&&hash.startsWith('#admin/team/'))return '#admin';
   if(role==='accountant'&&hash==='#races')return '#todo';
   if(role==='coach'&&(hash==='#account'||hash==='#todo/payments'))return '#todo';

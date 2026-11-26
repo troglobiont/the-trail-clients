@@ -1,5 +1,6 @@
 import {id,validDate} from './model-utils.js';
 import {CURRENCIES} from './accounting.js';
+import {GROUP_COMPLETION} from './coach-accounting.js';
 
 export const TEAM_ENTRY_KINDS={work:'Работа',accrual:'Начисление',payout:'Выплата',expense:'Расход'};
 const key=value=>typeof value==='string'&&/^[-a-zA-Z0-9_]{1,180}$/.test(value)&&!['__proto__','constructor','prototype'].includes(value);
@@ -32,7 +33,8 @@ export function validateTeam(state){
     const admin=member.teamAdmin;if(admin===undefined)continue;
     // Keep the business history when a person's directory role is later changed.
     if(!object(admin)||!note(admin.notes)||!object(admin.entries)||Object.keys(admin.entries).length>10000
-      ||admin.role!==undefined&&admin.role!=='Тренер'||admin.visible!==undefined&&typeof admin.visible!=='boolean')
+      ||admin.role!==undefined&&admin.role!=='Тренер'||admin.visible!==undefined&&typeof admin.visible!=='boolean'
+      ||admin.groupRate!==undefined&&!money(admin.groupRate))
       throw Error('Некорректные данные команды');
     for(const [k,entry] of Object.entries(admin.entries))checkEntry(entry,k);
   }
@@ -47,6 +49,11 @@ export function saveTeamNotes(state,memberId,notes){
   if(!note(notes))throw Error('Заметка не должна превышать 2000 символов');
   member.teamAdmin={...member.teamAdmin,notes:notes.trim(),entries:member.teamAdmin?.entries||{}};
 }
+export function saveTeamGroupRate(state,memberId,groupRate){
+  const member=memberFor(state,memberId);
+  if(!money(groupRate))throw Error('Укажи ставку за тренировку');
+  member.teamAdmin={notes:'',entries:{},...member.teamAdmin,groupRate};
+}
 export function saveTeamEntry(state,memberId,values){
   const member=memberFor(state,memberId),admin=member.teamAdmin||{notes:'',entries:{}};
   const old=values.id&&key(values.id)&&Object.hasOwn(admin.entries,values.id)?admin.entries[values.id]:null;
@@ -60,7 +67,10 @@ export function saveTeamEntry(state,memberId,values){
   return next;
 }
 export function teamEntries(state,memberId,month=null){
-  return Object.values(memberFor(state,memberId).teamAdmin?.entries||{})
+  const manual=Object.values(memberFor(state,memberId).teamAdmin?.entries||{});
+  const calendar=state.events.filter(e=>e.type===GROUP_COMPLETION&&e.clientId===memberId&&!e.voided)
+    .map(e=>({...e,kind:'work',createdAt:e.at,group:true}));
+  return [...manual,...calendar]
     .filter(e=>!month||e.day.slice(0,7)===month)
     .sort((a,b)=>b.day.localeCompare(a.day)||b.createdAt.localeCompare(a.createdAt)||a.id.localeCompare(b.id));
 }

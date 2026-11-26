@@ -265,41 +265,6 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     },{onSaved:fromAccount ? () => quickClientPicker(confirmation) : selection?.onSaved});
   }
 
-  function coachReceipt(clientId){
-    const options=quickOptions(clientId,activeServices().filter(service=>service.clientId===clientId),new Map());
-    modal('Принять оплату',form=>{
-      append(form,text(clientName(clientId),'task-title'));
-      if(!options.length){
-        form.append(text('Для этого клиента нет доступной услуги. Обратись к бухгалтеру.'));
-        return ()=>{throw Error('Нет доступной услуги для оплаты');};
-      }
-      let chosen=options[0].service;
-      const amount=moneyInput(),date=dateInput(),period=input('month',today().slice(0,7));
-      const amountLabel=el('span');
-      const periodField=field('Оплаченный месяц',period);
-      const update=()=>{
-        amountLabel.textContent='Получено, '+chosen.currency;
-        periodField.hidden=!isMonthly(chosen);
-      };
-      append(form,tariffButtons(options.map(({service})=>[service.id,serviceTitle(service)]),chosen.id,value=>{
-        chosen=options.find(({service})=>service.id===value).service;
-        update();return value;
-      },'Услуга'),append(el('label'),amountLabel,amount),field('Дата получения',date),periodField);
-      update();
-      return async()=>{
-        const received=A.amountMinor(amount.value),actualDate=recordedDate(date);
-        await commit(s=>{
-          const service=A.accounting(s).services[chosen.id];
-          if(!service||service.clientId!==clientId||service.currency!==chosen.currency||service.oneOff||!A.activeService(service,actualDate))
-            throw Error('Услуга на эту дату недоступна. Обратись к бухгалтеру');
-          A.saveOperation(s,{kind:'payment',date:actualDate,amount:received,currency:service.currency,payer:'',note:'',
-            allocations:[{serviceId:service.id,month:isMonthly(service)?period.value:null,part:received,credit:received}]});
-        });
-        message('Оплата записана');
-      };
-    },{saveLabel:options.length?'Сохранить':null});
-  }
-
   function scheduledSession(clientId, scheduled, services) {
     quickEntry(clientId,null,false,{scheduled,tariffs:services.map(service=>({service}))});
   }
@@ -1390,6 +1355,6 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       })));
   }
 
-  return { page, clientPanel, coachReceipt, remindersPanel, todoItems, settingsPanel, quickEntry, quickOptions, assistantVisit, activeClientIds, resumeClient,
+  return { page, clientPanel, remindersPanel, todoItems, settingsPanel, quickEntry, quickOptions, assistantVisit, activeClientIds, resumeClient,
     scheduledSession, addScheduledTariff:(clientId,scheduled)=>editService(clientId,undefined,{scheduled}) };
 }
