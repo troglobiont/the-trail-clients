@@ -14,7 +14,7 @@ import {createCloudSync} from './cloud-sync.js';
 import {createClientDetailsUI} from './client-details-ui.js';
 import {birthdayGreeting,birthdayReminders,pingActivity,profileTelegramUsername,telegramLink,telegramReminders,GOAL_TYPES} from './client-details.js';
 import {cloudConfig} from './cloud-config.js';
-import {CALENDAR_ARCHIVE_ROUTE,CALENDAR_ARCHIVE_SECTION,createCalendarUI,isSchedulingTask} from './calendar-ui.js';
+import {CALENDAR_ARCHIVE_ROUTE,CALENDAR_ARCHIVE_SECTION,CALENDAR_UPCOMING_SECTION,createCalendarUI,isSchedulingTask} from './calendar-ui.js';
 import {createTrainingWeekUI,TRAINING_WEEK_ROUTE} from './training-week-ui.js';
 import {createTrainingCalendarUI} from './training-calendar-ui.js';
 import {todoPeriodEntries} from './todo-period.js';
@@ -41,7 +41,7 @@ const paymentFilters = [['all','Оплаты'],['paid','Оплачено'],['pen
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
   packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7),paymentStatus:'all'});
 const ui={role:'superadmin',previewCoachId:OWNER_COACH,previewAthleteId:null,filters:defaultFilters(),catalogScope:'active',pauseFilter:null,catalogLimit:CATALOG_PAGE_SIZE,
-  contactOrder:false, recentlyCompleted:new Set(), birthdayPeriod:7, paymentPeriod:-1,taskPeriod:null,scheduleKind:null,returnTo:'#clients',open:new Set(),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
+  contactOrder:false, recentlyCompleted:new Set(), birthdayPeriod:7, paymentPeriod:-1,taskPeriod:null,scheduleKind:null,returnTo:'#clients',open:new Set([CALENDAR_UPCOMING_SECTION]),drafts:{},birthdayDrafts:new Map(),sendAck:{},recordResults:{},busy:new Set(),update:{status:'idle'}};
 const state=()=>store.state();
 const ownAthlete=()=>previewAthlete(state(),ui.previewAthleteId);
 const roleContext=()=>({role:ui.role,coachId:ui.previewCoachId,athleteId:isAthlete(ui.role)?ownAthlete()?.id:null});

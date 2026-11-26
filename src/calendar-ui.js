@@ -61,6 +61,7 @@ export function matchesScheduleKind(event, kind) {
 
 export const CALENDAR_ARCHIVE_ROUTE = '#todo/schedule/past';
 export const CALENDAR_ARCHIVE_SECTION = 'calendar-past';
+export const CALENDAR_UPCOMING_SECTION = 'calendar-upcoming';
 
 export function createCalendarUI({state, service, readCalendar, saveCalendar, roleContext=()=>({role:'superadmin'}), el, append, button, row, field, input, select, text, section, modal, commit, formatDate,
     navigate, openClient, message, searchClients, scheduledSession, addScheduledTariff, groupProtocol}) {
@@ -113,8 +114,9 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
 
   function schedule(kind) {
     const context=roleContext();
-    const list = el('div', null, 'stack'), status = text(''), box = el('section', null, 'stack');
+    const list = el('div', null, 'stack'), status = text('','muted small calendar-load-status'), box = el('section', null, 'stack');
     const archive = pastSchedule(kind,context);
+    const upcomingSection = section('Ближайшие тренировки',CALENDAR_UPCOMING_SECTION,[list]);
     status.setAttribute('role', 'status');
     const display = async data => {
         const upcoming = scheduleEntries(data.events.filter(event=>!hasEnded(event)),kind,context);
@@ -141,7 +143,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
       }
     };
     append(box,append(el('div',null,'page-title calendar-heading'),el('h2','Тренировки'),
-      button('Обновить',()=>update(true),'subtle')),status,archive.fold,archive.nextLabel,list);
+      button('Обновить',()=>update(true),'subtle')),status,append(el('div'),archive.fold,upcomingSection));
     void update(false);
     return box;
   }
@@ -152,7 +154,6 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     if (archiveView?.key!==key) archiveView = {key,limit:historyPageSize,months:new Map()};
     const view = archiveView;
     const status = text('','muted small calendar-history-status'), list = el('div',null,'stack');
-    const nextLabel = el('h3','Ближайшие','calendar-next-label muted small');
     status.setAttribute('role','status');
     let current, entries = [], rendering = 0;
     const more = button('Показать ещё',async()=>{
@@ -178,9 +179,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
     },'subtle');
     more.hidden = true;
     const fold = section('Прошлые тренировки',CALENDAR_ARCHIVE_SECTION,[list,status,more]);
-    fold.classList.add('calendar-history');
     async function draw() {
-      nextLabel.hidden = !fold.open;
       if (!fold.open || !current) return;
       const run = ++rendering;
       const past = [...view.months.values()].flatMap(data=>data.events);
@@ -200,9 +199,8 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
       more.textContent = 'Показать ещё'+(remaining?' · '+remaining:'');
       more.hidden = false;
     }
-    nextLabel.hidden = !fold.open;
     fold.addEventListener('toggle',()=>void draw());
-    return {fold,nextLabel,display(data){current=data;void draw();}};
+    return {fold,display(data){current=data;void draw();}};
   }
 
   function calendarEntries(entries, past = false) {
