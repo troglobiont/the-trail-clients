@@ -7,6 +7,7 @@ import {validatePartners} from './partners.js';
 import {validateTeam} from './team.js';
 import {COACH_CASH,isGroupRecord,validateCoachAccounting} from './coach-accounting.js';
 import {validateAthletes} from './athlete.js';
+import {validateSportProfiles} from './sport-profiles.js';
 import {validateSportLog} from './sport-log.js';
 import {goalProposal} from './goal-record.js';
 import {validateStoredTrainingWeek} from './training-week.js';
@@ -49,6 +50,7 @@ export function validateState(s){
   validateTeam(s);
   validateCoachAccounting(s);
   validateAthletes(s);
+  validateSportProfiles(s);
   if(s.settings.trainingWeek!==undefined)s.settings.trainingWeek=validateStoredTrainingWeek(s);
   if(s.settings.trainingAssignments!==undefined)s.settings.trainingAssignments=validateTrainingAssignments(s.settings.trainingAssignments);
   for(const client of Object.values(s.clients))if(client.sportLog!==undefined)validateSportLog(client.sportLog);

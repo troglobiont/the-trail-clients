@@ -1,9 +1,10 @@
 import * as C from './core.js';
 import {inlineSelect} from './inline-select.js';
 import {bodyMass} from './body-mass.js';
+import {SPORT_SERVICES,SPORT_PROFILE_TYPES,removeSportProfile,saveSportProfile,sportProfileUrl} from './sport-profiles.js';
 import { GOAL_TYPES, RACE_STAGES, REQUIRED_PROFILE_FIELDS, goalType, instagramProfileLink, normalizeClientCity, profileTelegramUsername, raceById, raceCatalog, raceCategory, raceParticipants, telegramLink, telegramPeer } from './client-details.js';
 
-export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard,openAthleteEntry}) {
+export function createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard,openAthleteEntry,canManageSportProfiles}) {
   const trainingFields = [
     ['height','Рост, см',30,300,.1],['weight','Вес, кг',10,500,.1],['maxHr','Максимальный пульс',30,250,1],
     ['restHr','Пульс в покое',20,160,1],['lthr','Рабочий LTHR',30,250,1]
@@ -75,14 +76,74 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
       };
     });
   }
+  function sportProfileEditor(client,entry){
+    modal(entry?'Спортивный профиль':'+ Спортивный профиль',form=>{
+      const service=select([['','Выбери сервис'],...Object.entries(SPORT_SERVICES)],entry?.service??'');
+      const type=select(Object.entries(SPORT_PROFILE_TYPES),entry?.type??'profile');
+      const value=input('text',entry?.url??entry?.username??'');value.maxLength=400;
+      const checked=input('date',entry?.checkedOn??C.localDate());checked.max=C.localDate();
+      const source=input('text',entry?.source??'','Например, ссылка от спортсмена');source.maxLength=200;
+      const title=el('span'),valueField=append(el('label'),title,value);
+      const update=()=>{
+        title.textContent=type.value==='username'?'Имя пользователя':'Прямая ссылка';
+        value.placeholder=type.value==='username'?'Имя пользователя':'https://…';
+        value.inputMode=type.value==='username'?'text':'url';
+      };
+      type.addEventListener('change',update);update();
+      append(form,field('Сервис',service),field('Тип',type),valueField,field('Источник',source),field('Дата проверки',checked));
+      if(entry)form.append(row(button('Убрать из карточки',()=>modal('Убрать спортивный профиль?',confirm=>{
+        confirm.append(text(SPORT_SERVICES[entry.service]+' · '+(entry.url??entry.username)));
+        return ()=>commit(s=>{
+          if(!canManageSportProfiles(s,s.clients[client.id]))throw Error('Недостаточно прав для изменения');
+          return removeSportProfile(s,client.id,entry.id);
+        });
+      },{saveLabel:'Убрать'}),'subtle')));
+      return ()=>commit(s=>{
+        if(!canManageSportProfiles(s,s.clients[client.id]))throw Error('Недостаточно прав для изменения');
+        return saveSportProfile(s,client.id,{service:service.value,type:type.value,
+          ...(type.value==='username'?{username:value.value}:{url:value.value}),source:source.value,checkedOn:checked.value},entry?.id);
+      });
+    });
+  }
+  function manageSportProfiles(client){
+    const current=state().clients[client.id];
+    if(!canManageSportProfiles(state(),current))return;
+    modal('Спортивные профили',form=>{
+      for(const entry of current.sportProfiles??[]){
+        const label=SPORT_SERVICES[entry.service]+' · '+(entry.username??SPORT_PROFILE_TYPES[entry.type]);
+        const item=append(button('',()=>sportProfileEditor(current,entry),'team-entry'),el('strong',label),
+          text([entry.source,entry.checkedOn.split('-').reverse().join('.')].join(' · ')));
+        form.append(item);
+      }
+      form.append(row(button('+ Добавить профиль',()=>sportProfileEditor(current),'subtle')));
+    },{saveLabel:null});
+  }
+  function contactLinks(c,items){
+    const canManage=canManageSportProfiles(state(),c);
+    const profiles=canManage?(c.sportProfiles??[]).map(entry=>{
+      const label=SPORT_SERVICES[entry.service];
+      const url=sportProfileUrl(entry.service,entry.type,entry.url);
+      const value=url?socialLink(entry.type==='coach'?'Открыть карточку':'Открыть профиль',url,label):el('span',entry.username);
+      if(!url&&!entry.username)return null;
+      return append(el('div',null,'detail-line'),text(label),value);
+    }):[];
+    if(!items.length&&!profiles.length&&!canManage)return null;
+    return append(el('div',null,'stack'),(items.length||profiles.length)&&el('h3','Ссылки'),...items,...profiles,
+      canManage&&row(button('Спортивные профили',()=>manageSportProfiles(c),'subtle')));
+  }
   function profile(c,{coach=false}={}) {
     const data=c.profile||{};
+    const links=[];
     const items=profileFields.filter(([key])=>!coach||['phone','telegram'].includes(key)).map(([key,label])=>{
+      const contactItem=item=>{
+        if(key==='telegram'||key==='instagram'){links.push(item);return null;}
+        return item;
+      };
       if(key==='telegram'){
         const username=profileTelegramUsername(c);
         const href=telegramLink({username});
         const bound=telegramPeer(c.telegram?.peerId);
-        if(!href&&bound) return append(el('div',null,'detail-line'),text(label),button('Открыть переписку',()=>openTelegram(c),'subtle'));
+        if(!href&&bound) return contactItem(append(el('div',null,'detail-line'),text(label),button('Открыть переписку',()=>openTelegram(c),'subtle')));
         if(href){
           const account=socialLink('@'+username,href,'Telegram');
           if(bound&&window.TrailNative?.openTelegram)account.addEventListener('click',event=>{
@@ -90,7 +151,7 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
             event.preventDefault();
             openTelegram(c,href).catch(()=>window.location.assign(href));
           });
-          return append(el('div',null,'detail-line'),text(label),account);
+          return contactItem(append(el('div',null,'detail-line'),text(label),account));
         }
       }
       const value=key==='city'?normalizeClientCity(data.city)
@@ -100,10 +161,10 @@ export function createClientDetailsUI({state,ui,el,append,button,row,field,input
         :key==='email'?'mailto:'+value:key==='instagram'?instagramProfileLink(value):null;
       const account=href && key==='instagram' ? socialLink('@'+href.split('/').at(-2),href,'Instagram')
         : href ? link(value,href) : el('div',value);
-      return append(el('div',null,'detail-line'),text(label),account);
+      return contactItem(append(el('div',null,'detail-line'),text(label),account));
     }).filter(Boolean);
     if(data.birthday)items.push(append(el('div',null,'detail-line'),text('День рождения'),el('div',formatDate('2000-'+data.birthday.slice(-5))+(!coach&&data.birthday.length===10?' '+data.birthday.slice(0,4):''))));
-    return [...(items.length?items:[text('Контактные данные пока не внесены')]),!coach&&button('Изменить данные',()=>editProfile(c),'subtle')].filter(Boolean);
+    return [...(items.length||links.length?items:[text('Контактные данные пока не внесены')]),contactLinks(c,links),!coach&&button('Изменить данные',()=>editProfile(c),'subtle')].filter(Boolean);
   }
   function editTraining(c) {
     modal('Тренировочные данные',form=>{

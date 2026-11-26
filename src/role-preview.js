@@ -69,6 +69,10 @@ export function previewTrainingVisible(state,client,{role,athleteId,coachId=OWNE
     ||role==='coach'&&assignedCoach(state,client)===coachId;
 }
 
+export function sportProfilesVisible(state,client,{role,coachId=OWNER_COACH}){
+  return available(client)&&(role==='superadmin'||role==='coach'&&assignedCoach(state,client)===coachId);
+}
+
 export function previewRoute(hash,{role,athleteId}){
   if(role!=='superadmin'&&hash==='#assistant')return '#todo';
   if(role!=='coach'&&hash==='#admin/my-account')return '#admin';

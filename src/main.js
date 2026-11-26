@@ -31,7 +31,7 @@ import {inlineSelect} from './inline-select.js';
 import {goalProposal} from './goal-record.js';
 import {garminSnapshot,mergeGarminSnapshot} from './garmin-data.js';
 import {assignedCoach,coachContact,hasFinance,isAthlete,isOwnerPerson,isPaymentText,OWNER_COACH,previewAthlete,
-  previewAthletes,previewCoaches,previewRoute,previewTaskVisible,previewTrainingVisible,ROLES} from './role-preview.js';
+  previewAthletes,previewCoaches,previewRoute,previewTaskVisible,previewTrainingVisible,sportProfilesVisible,ROLES} from './role-preview.js';
 const VERSION=__APP_VERSION__;
 const root=document.getElementById('app'),notice=document.getElementById('notice'),dialog=document.getElementById('editor');
 let store,updater,cloud,cloudReady,noticeTimer,draftTimer,localSaves=0,localSaveError=false,headerBound=false;
@@ -84,6 +84,7 @@ function section(title,key,children){const d=el('details',null,'fold'),summary=e
 function navigate(hash){location.hash=hash;}
 function openClient(clientId,type,target){ui.returnTo=location.hash.startsWith('#client/')?ui.returnTo:location.hash||'#todo';navigate('#client/'+clientId+(type?'/'+type+(target?'/'+target:''):''));}
 const detailsUI=createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard,
+  canManageSportProfiles:(s,c)=>sportProfilesVisible(s,c,roleContext()),
   openAthleteEntry:(c,id)=>athleteUI.openEntry(c,id)});
 const accountingUI=createAccountingUI({state,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,navigate,message,importLedger:()=>importDatabase(true),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
