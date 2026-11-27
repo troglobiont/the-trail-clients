@@ -963,7 +963,7 @@ export function monthlyCharge(state, service, month, today = localDate()) {
   return chargeFor(monthlyCredits(state, today), service, month);
 }
 
-export function monthlyPaymentRegister(state, month, today = localDate()) {
+export function monthlyPaymentRegister(state, month, today = localDate(), tariff = 'all') {
   const credits = monthlyCredits(state,today);
   const people = new Map();
   const movements = new Map();
@@ -971,7 +971,8 @@ export function monthlyPaymentRegister(state, month, today = localDate()) {
   const expected = {}, covered = {}, remaining = {};
   for (const service of Object.values(accounting(state).services)) {
     const client = state.clients[service.clientId];
-    if (service.kind === 'personal' || client?.role !== 'Клиент' || client.mergedInto) continue;
+    if (service.kind === 'personal' || client?.role !== 'Клиент' || client.mergedInto
+        || tariff !== 'all' && tariffKey(service) !== tariff) continue;
     const charge = chargeFor(credits,service,month);
     if (!charge) continue;
     if (!movements.has(client.id)) movements.set(client.id,clientMovements(state,client.id));

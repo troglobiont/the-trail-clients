@@ -269,6 +269,8 @@ button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opa
 .account-register-row>summary .payment-indicator{padding-inline-end:4px;font-size:.8rem;font-weight:600}
 .account-register-detail{padding-inline-start:10px;border-inline-start:2px solid var(--line)}
 .account-register-detail>button.subtle{margin-top:5px}
+.account-summary-fold[open]>.fold-body{margin:0 0 10px 7px;padding:6px 10px 8px 12px;min-width:0;border-inline-start:2px solid var(--line);border-radius:0 9px 9px 0;background:var(--soft)}
+.account-trainer-line+.account-trainer-line{border-top:1px solid var(--line)}
 button.account-move-date{padding-inline:0}
 .payment-indicator::before{content:"";display:inline-block;width:.5em;height:.5em;margin-inline-end:.45em;border-radius:50%;background:var(--payment-color,var(--muted));vertical-align:.14em}
 .payment-paid{--payment-color:#357951}

@@ -1,6 +1,6 @@
 import {id,validDate} from './model-utils.js';
 import {CURRENCIES} from './accounting.js';
-import {GROUP_REPORT,groupRecords} from './coach-accounting.js';
+import {countsGroupAccrual,groupRecords} from './coach-accounting.js';
 
 export const TEAM_ENTRY_KINDS={work:'Работа',accrual:'Начисление',payout:'Выплата',expense:'Расход'};
 export const TEAM_PARTICIPATION={regular:'Постоянный',guest:'Приглашённый'};
@@ -83,7 +83,7 @@ export function saveTeamEntry(state,memberId,values){
 export function teamEntries(state,memberId,month=null){
   const manual=Object.values(memberFor(state,memberId).teamAdmin?.entries||{});
   const calendar=groupRecords(state).filter(e=>e.clientId===memberId&&!e.voided)
-    .map(e=>({...e,kind:'work',createdAt:e.at,group:true,historical:e.type===GROUP_REPORT}));
+    .map(e=>({...e,kind:'work',createdAt:e.at,group:true,historical:!countsGroupAccrual(e)}));
   return [...manual,...calendar]
     .filter(e=>!month||e.day.slice(0,7)===month)
     .sort((a,b)=>b.day.localeCompare(a.day)||b.createdAt.localeCompare(a.createdAt)||a.id.localeCompare(b.id));
@@ -111,7 +111,7 @@ export function teamMonthFinance(state, month, externalExpenses) {
   const cash = [], review = [];
   const trainerFor = member => {
     if (!trainers.has(member.id)) trainers.set(member.id,{
-      member, groups:0, minutes:0, historic:0, accrued:{}, unpriced:0
+      member, groups:0, minutes:0, historic:0, accrued:{}, paid:{}, unpriced:0
     });
     return trainers.get(member.id);
   };
@@ -125,8 +125,8 @@ export function teamMonthFinance(state, month, externalExpenses) {
     const trainer = trainerFor(member);
     trainer.groups++;
     trainer.minutes += entry.minutes || 0;
-    if (entry.type === GROUP_REPORT) trainer.historic++;
-    else addAccrued(trainer,entry);
+    if (countsGroupAccrual(entry)) addAccrued(trainer,entry);
+    else trainer.historic++;
   }
   const words = string => (string||'').toLowerCase().replace(/ё/g,'е').match(/[\p{L}\p{N}]+/gu) || [];
   for (const member of Object.values(state.clients)) {
@@ -138,6 +138,10 @@ export function teamMonthFinance(state, month, externalExpenses) {
         trainer.minutes += entry.minutes || 0;
         addAccrued(trainer,entry);
         continue;
+      }
+      if (entry.kind === 'payout') {
+        const {paid} = trainerFor(member);
+        paid[entry.currency] = (paid[entry.currency] ?? 0) + entry.amount;
       }
       const possibleOverlap = externalExpenses.some(({date,operation,row})=>{
         if (operation) return date === entry.day && operation.currency === entry.currency && operation.amount === entry.amount;

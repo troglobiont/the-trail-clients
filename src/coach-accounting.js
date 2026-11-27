@@ -19,6 +19,7 @@ const trainer=person=>person&&!person.mergedInto&&
 export const assignableGroupCoach=person=>Boolean(trainer(person)&&person.teamAdmin?.participation!=='guest');
 
 export const isGroupRecord=entry=>entry?.type===GROUP_COMPLETION||entry?.type===GROUP_REPORT;
+export const countsGroupAccrual=entry=>entry.type===GROUP_COMPLETION||entry.type===GROUP_REPORT&&entry.payConfirmed===true;
 export const groupCompletion=(state,eventKey,calendarRef)=>
   state.events.find(e=>e.type===GROUP_REPORT&&calendarRef&&e.calendarRef===calendarRef)
   ?? state.events.find(e=>isGroupRecord(e)&&e.id===eventKey);
@@ -176,6 +177,7 @@ export function validateCoachAccounting(state){
       const hasCalendarRef=Boolean(e.calendarRef)&&note(e.calendarRef,1000);
       if(!validDate(e.day)||!amount(e.amount)||e.currency!=='RSD'||typeof e.voided!=='boolean'||!note(e.note,180)
         ||!(hasDuration||report&&e.minutes===null)||!(hasCalendarRef||report&&e.calendarRef===null)
+        ||e.payConfirmed!==undefined&&(!report||typeof e.payConfirmed!=='boolean'||e.payConfirmed&&(!hasDuration||!hasCalendarRef))
         ||report&&(!e.source||!note(e.source,180)))
         throw Error('Некорректная отметка о групповой тренировке');
     }else if(!Object.hasOwn(CASH_STATUS,e.status)||!state.clients[e.payerClientId]||

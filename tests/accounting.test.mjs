@@ -56,6 +56,9 @@ test('the monthly register uses applied payments, excludes pauses and keeps earl
   assert.deepEqual(register.expected,{RSD:1600000,EUR:8000});
   assert.deepEqual(register.covered,{RSD:800000,EUR:3000});
   assert.deepEqual(register.remaining,{RSD:800000,EUR:5000});
+  const groupOnly=A.monthlyPaymentRegister(state,'2026-11','2026-11-27','belgrade');
+  assert.deepEqual(groupOnly.clients.map(({client})=>client.id),[paid.id,upcoming.id]);
+  assert.deepEqual(groupOnly.remaining,{RSD:800000});
   assert.equal(A.monthlyPaymentRegister(state,'2026-11','2026-11-27').clients[0].charges[0].charge.lastPaidOn,'2026-10-27');
 });
 

@@ -128,6 +128,13 @@ test('group reports retain dates without inventing duration or affecting the liv
   assert.deepEqual(teamSummary(state,trainer.id,'2026-11').currencies,{});
   assert.equal(teamSummary(state,trainer.id,'2026-11').minutes,75);
   assert.equal(saveGroupCompletion(state,live.id,group,trainer.id,coach,false,later),linked);
+  linked.payConfirmed=true;
+  assert.deepEqual(teamSummary(state,trainer.id,'2026-11').currencies.RSD,
+    {accrued:200000,paid:0,expenses:0,balance:200000});
+  assert.equal(teamMonthFinance(state,'2026-11',[]).trainers[0].accrued.RSD,200000);
+  dated.payConfirmed=true;
+  assert.throws(()=>validateState(state),/Некорректная отметка/);
+  delete dated.payConfirmed;
   saveGroupCompletion(state,live.id,group,trainer.id,admin,true,later);
   assert.equal(teamEntries(state,trainer.id).length,1);
   assert.deepEqual(teamSummary(state,trainer.id,'2026-11').currencies,{});
