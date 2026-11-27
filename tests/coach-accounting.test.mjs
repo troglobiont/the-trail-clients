@@ -5,7 +5,7 @@ import {accounting,clientAccountHistory,saveService} from '../src/accounting.js'
 import {GROUP_REPORT,groupCompletion,groupEventReference,groupStaffing,saveGroupCompletion,submitCoachCash,reviewCoachCash,coachCash,updateGroupStaffing} from '../src/coach-accounting.js';
 import {groupCoach,OWNER_COACH} from '../src/role-preview.js';
 import {athleteScheduleEntries} from '../src/calendar-ui.js';
-import {saveTeamGroupRate,saveTeamProfile,saveTeamVisibility,teamEntries,teamSummary} from '../src/team.js';
+import {saveTeamEntry,saveTeamGroupRate,saveTeamProfile,saveTeamVisibility,teamEntries,teamMonthFinance,teamSummary} from '../src/team.js';
 import {beginCloudSync,cloudData,prepareCloudWrite,receiveCloudData,trackCloudChanges} from '../src/cloud-state.js';
 
 const day='2026-11-24';
@@ -25,6 +25,20 @@ function fixture(){
   return {state,trainer,other,client,service,coach};
 }
 const cash=service=>({serviceId:service.id,date:day,period:'2026-11',currency:'RSD',amount:800000,note:'Получено на тренировке'});
+
+test('club costs distinguish work, cash payouts and possible payroll overlaps',()=>{
+  const {state,trainer,other}=fixture();
+  saveGroupCompletion(state,'group-instance',group,trainer.id,admin,false,now);
+  saveTeamEntry(state,trainer.id,{kind:'work',day,minutes:30,amount:100000,currency:'RSD'});
+  const payout=saveTeamEntry(state,trainer.id,{kind:'payout',day,amount:300000,currency:'RSD'});
+  const expense=saveTeamEntry(state,other.id,{kind:'expense',day,amount:12000,currency:'RSD'});
+  const finance=teamMonthFinance(state,'2026-11',[{date:'',row:{name:'Алексей',values:{RSD:1200000}}}]);
+  assert.deepEqual(finance.trainers.map(({groups,minutes,accrued})=>({groups,minutes,accrued})),
+    [{groups:1,minutes:105,accrued:{RSD:300000}}]);
+  assert.deepEqual(finance.cash.map(record=>record.teamEntry.id),[expense.id]);
+  assert.deepEqual(finance.review.map(record=>record.teamEntry.id),[payout.id]);
+  assert.equal(teamMonthFinance(state,'2026-11',[]).cash.length,2);
+});
 
 test('one group session earns one accrual, and only an admin can correct completed attribution',()=>{
   const {state,trainer,other,coach}=fixture();

@@ -105,3 +105,51 @@ export function teamSummary(state,memberId,month){
   return {minutes:monthly.reduce((sum,e)=>sum+(e.minutes||0),0),entries:monthly.length,
     unpricedWork:monthly.filter(e=>e.kind==='work'&&e.amount===null).length,currencies};
 }
+
+export function teamMonthFinance(state, month, externalExpenses) {
+  const trainers = new Map();
+  const cash = [], review = [];
+  const trainerFor = member => {
+    if (!trainers.has(member.id)) trainers.set(member.id,{
+      member, groups:0, minutes:0, historic:0, accrued:{}, unpriced:0
+    });
+    return trainers.get(member.id);
+  };
+  const addAccrued = (trainer,entry) => {
+    if (entry.amount) trainer.accrued[entry.currency] = (trainer.accrued[entry.currency] ?? 0) + entry.amount;
+    else trainer.unpriced++;
+  };
+  for (const entry of groupRecords(state)) {
+    const member = state.clients[entry.clientId];
+    if (!member || entry.voided || !entry.day.startsWith(month+'-')) continue;
+    const trainer = trainerFor(member);
+    trainer.groups++;
+    trainer.minutes += entry.minutes || 0;
+    if (entry.type === GROUP_REPORT) trainer.historic++;
+    else addAccrued(trainer,entry);
+  }
+  const words = string => (string||'').toLowerCase().replace(/ё/g,'е').match(/[\p{L}\p{N}]+/gu) || [];
+  for (const member of Object.values(state.clients)) {
+    if (member.mergedInto) continue;
+    for (const entry of Object.values(member.teamAdmin?.entries||{})) {
+      if (!entry.day.startsWith(month+'-')) continue;
+      if (entry.kind === 'work' || entry.kind === 'accrual') {
+        const trainer = trainerFor(member);
+        trainer.minutes += entry.minutes || 0;
+        addAccrued(trainer,entry);
+        continue;
+      }
+      const possibleOverlap = externalExpenses.some(({date,operation,row})=>{
+        if (operation) return date === entry.day && operation.currency === entry.currency && operation.amount === entry.amount;
+        const amount = row.values[entry.currency];
+        if (!amount) return false;
+        if (date === entry.day && amount === entry.amount) return true;
+        const label = words(row.name);
+        return !date && entry.kind === 'payout' && label.length > 0 &&
+          (label.every(word=>words(member.name).includes(word)) || /тренер/iu.test(row.name));
+      });
+      (possibleOverlap ? review : cash).push({kind:'expense',date:entry.day,member,teamEntry:entry});
+    }
+  }
+  return {trainers:[...trainers.values()].sort((a,b)=>a.member.name.localeCompare(b.member.name,'ru')),cash,review};
+}

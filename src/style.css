@@ -259,6 +259,16 @@ button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opa
 .account-client-status{padding:2px 12px;background:var(--soft);border-radius:10px}
 .account-client-status .payment-indicator{display:block;font-size:13px;font-weight:650}
 .account-receivable-service{padding-bottom:12px;border-bottom:1px solid var(--line)}
+.account-register{gap:0;border-block:1px solid var(--line)}
+.account-register .account-register-row{padding:0;border:0;border-radius:0;background:none}
+.account-register-row+.account-register-row{border-top:1px solid var(--line)}
+.account-register-row>summary{display:grid;grid-template-columns:minmax(0,1fr) auto 8px;gap:8px;min-height:44px;align-items:center;overflow-wrap:anywhere;list-style:none}
+.account-register-row>summary::-webkit-details-marker{display:none}
+.account-register-row>summary::after{content:'';width:6px;height:6px;border:solid var(--muted);border-width:0 1px 1px 0;transform:rotate(45deg)}
+.account-register-row[open]>summary::after{transform:rotate(225deg)}
+.account-register-row>summary .payment-indicator{padding-inline-end:4px;font-size:.8rem;font-weight:600}
+.account-register-detail{padding-inline-start:10px;border-inline-start:2px solid var(--line)}
+.account-register-detail>button.subtle{margin-top:5px}
 button.account-move-date{padding-inline:0}
 .payment-indicator::before{content:"";display:inline-block;width:.5em;height:.5em;margin-inline-end:.45em;border-radius:50%;background:var(--payment-color,var(--muted));vertical-align:.14em}
 .payment-paid{--payment-color:#357951}

@@ -1,6 +1,7 @@
 import * as A from './accounting.js';
 import { addDays, localDate } from './model-utils.js';
 import { changeImportedPayment, editableImportedPayment, importedPaymentOriginal, ledgerRows } from './ledger-import.js';
+import { teamMonthFinance } from './team.js';
 
 const today = () => localDate();
 const currencyOptions = A.CURRENCIES.map(c => [c, ({ RSD: 'RSD · динары', RUB: 'RUB · рубли', EUR: 'EUR · евро', USD: 'USD · доллары' })[c]]);
@@ -9,11 +10,15 @@ const totals = amounts => A.CURRENCIES.filter(c => c in amounts).map(c => A.mone
 const monthLabel = month => new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric', timeZone: 'UTC' })
   .format(new Date(month + '-15T12:00:00Z')).replace(/\s*г\.$/, '');
 const isMonthly = service => service.kind !== 'personal';
+const paymentLabels = {paid:'Закрыто',upcoming:'Срок впереди',due:'К оплате',overdue:'Просрочено'};
 
 export function createAccountingUI({ state, el, append, button, row, field, input, select, text, section, modal, commit, render, formatDate, openClient, navigate, message, importLedger, searchClients, activateClient, pauseClientTariff }) {
   let month = today().slice(0, 7);
   let tab = 'summary';
   let receivablePlace = 'all';
+  let operationFilter = 'all';
+  let registerFilter = 'all';
+  const operationBatches = new Map();
   const historyFilters = new Map();
   const book = () => A.accounting(state());
   const findService = id => book().services[id];
@@ -636,6 +641,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     if (fromAccount) {
       month = values.date.slice(0, 7);
       tab = 'operations';
+      operationFilter = values.kind;
+      operationBatches.set(month+'/open',true);
     }
     await commit(s => A.saveOperation(s, buildAllocations ? { ...values, allocations:buildAllocations(s) } : values, existing?.id));
     message(existing ? 'Операция обновлена' : ({ payment: 'Оплата записана', session: 'Занятие записано', expense: 'Расход записан' })[values.kind]);
@@ -835,12 +842,12 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     if (kind === 'expense') return line(operation.category, `${status}${formatDate(date)} · Расход${note ? ' · ' + note : ''}`, '−' + A.money(operation.amount, currency), () => editExpense(operation));
     if (kind === 'session') {
       const service = findService(operation.serviceId);
-      const when = formatDate(date) + ' · ' + operation.place;
+      const when = formatDate(date) + ' · Занятие · ' + operation.place;
       return line(clientName(service.clientId), `${status}${when}${note ? ' · ' + note : ''}`, A.money(operation.amount, currency),
         () => editSession({existing:operation,fromAccount:true}));
     }
     const { names, tariffs, amount } = paymentBreakdown(operation);
-    return line(names.join(', '),[status+formatDate(date),tariffs,note].filter(Boolean).join(' · '),A.money(amount,currency),
+    return line(names.join(', '),[status+formatDate(date),'Поступление',tariffs,note].filter(Boolean).join(' · '),A.money(amount,currency),
       () => editPayment({existing:operation,fromAccount:true}));
   }
 
@@ -871,20 +878,6 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return {names,tariffs:[...new Set(details)].join(' / '),amount:items.reduce((sum,item)=>sum+item.part,0)};
   }
 
-  function remindersPanel(limit = Infinity, periodFilter) {
-    const reminders = A.paymentReminders(state()).filter(item => !periodFilter || item.month === periodFilter);
-    if (!reminders.length) return null;
-    const list = reminders.slice(0, limit).map(({ service, month: period, due, remaining }) => {
-      const status = A.paymentTiming(due,today()) === 'overdue' ? 'Просрочено · срок ' : 'срок ';
-      const detail = `${serviceTitle(service)} · ${monthLabel(period)} · ${status}${formatDate(due)}`;
-      return append(el('div', null, 'account-reminder'),
-        line(clientName(service.clientId), detail, A.money(remaining, service.currency), () => openClient(service.clientId)),
-        button('Записать оплату', () => editPayment({ clientId: service.clientId, serviceId: service.id, period, suggested: remaining }), 'subtle'));
-    });
-    if (reminders.length > limit) list.push(button('Все напоминания', () => navigate('#todo'), 'subtle'));
-    return group('По оплатам', ...list);
-  }
-
   function todoItems(days,{clientId,reminderDays}={}) {
     const date = today();
     return A.paymentReminders(state(),date,days??reminderDays).filter(({due,service})=>(!clientId||service.clientId===clientId)
@@ -904,24 +897,67 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       ...Object.entries(labels).map(([block, label]) => line(label, '', totals(source.blocks[block] || {}))));
   }
 
-  function sourceLine(entry) {
-    const labels = { payment: 'Оплата по таблице', shared: 'Общий платёж семьи', review: 'Нужно сверить', repeat: 'Повтор строки', session: 'Персональные занятия', expense: 'Расход' };
-    const information = [entry.date ? formatDate(entry.date) : '', labels[entry.kind], entry.detail].filter(Boolean).join(' · ');
+  function sourceLine(entry, values) {
+    const labels = {payment:'Поступление',shared:'Общий платёж семьи',review:'Нужно сверить',repeat:'Повтор строки',session:'Персональные занятия',expense:'Расход'};
+    const information = [entry.date ? formatDate(entry.date) : 'Без даты', labels[entry.kind],entry.detail,'Из таблицы'].filter(Boolean).join(' · ');
     const owner = entry.owners.length === 1 ? entry.owners[0] : null;
-    return line(entry.name, information, totals(entry.values), owner ? () => openClient(owner) : null);
+    const whollyImported = !values || Object.entries(entry.values).every(([currency,amount])=>!amount||values[currency]===amount);
+    const action = whollyImported&&editableImportedPayment(entry) ? () => editImportedPayment(entry,true) : owner && (()=>openClient(owner));
+    return line(entry.name,information,(entry.kind==='expense'?'−':'')+totals(values??entry.values),action);
   }
 
-  function sourceOperations() {
-    const entries = ledgerRows(state(), { period: month });
-    if (!entries.length) return null;
-    return group('Строки из бухгалтерии', ...Object.entries({ ...A.BLOCKS, expenses: 'Расходы' }).map(([block, label]) => {
-      const group = entries.filter(entry => entry.block === block);
-      return group.length && section(`${label} · ${group.length}`, `ledger-${month}-${block}`, group.map(entry => sourceLine(entry)));
-    }));
+  function monthFinance() {
+    const data = A.accountingMonth(state(),month);
+    const team = teamMonthFinance(state(),month,data.entries.filter(entry=>entry.kind==='expense'));
+    for (const record of team.cash) {
+      const {currency,amount} = record.teamEntry;
+      data.summary.expenses[currency] = (data.summary.expenses[currency]??0)+amount;
+      data.summary.localBalance[currency] = (data.summary.localBalance[currency]??0)-amount;
+    }
+    return {...data,team,entries:[...data.entries,...team.cash].sort((a,b)=>b.date.localeCompare(a.date))};
+  }
+
+  function monthOperationLine(entry) {
+    if (entry.operation) return operationLine(entry.operation);
+    if (entry.row) return sourceLine(entry.row,entry.values);
+    const {kind,amount,currency,note} = entry.teamEntry;
+    const label = kind === 'payout' ? 'Выплата' : 'Расход команды';
+    return line(entry.member.name,[formatDate(entry.date),label,note].filter(Boolean).join(' · '),'−'+A.money(amount,currency));
+  }
+
+  function operationsPage() {
+    const {entries,review,team} = monthFinance();
+    const list = el('div',null,'account-history-list');
+    const more = button('',()=>{
+      operationBatches.set(month+'/'+operationFilter,limit()+12);
+      draw();
+    },'subtle');
+    const limit = ()=>operationBatches.get(month+'/'+operationFilter)??12;
+    const filters = tariffButtons([['all','Все'],['payment','Поступления'],['session','Занятия'],['expense','Расходы']],
+      operationFilter,value=>{operationFilter=value;draw();return value;},'Тип операции');
+    const draw = ()=>{
+      const filtered = operationFilter === 'all' ? entries : entries.filter(entry=>entry.kind===operationFilter);
+      list.replaceChildren(...filtered.slice(0,limit()).map(monthOperationLine));
+      if (!filtered.length) list.append(text('Операций пока нет'));
+      more.hidden = limit()>=filtered.length;
+      more.textContent = 'Показать ещё · '+(filtered.length-limit());
+    };
+    draw();
+    const fold = section('Записи за месяц · '+entries.length,'account-month-entries-'+month,[filters,list,more]);
+    const key = month+'/open';
+    fold.open = operationBatches.get(key)??true;
+    fold.addEventListener('toggle',()=>operationBatches.set(key,fold.open));
+    const pending = [...review,...team.review].sort((a,b)=>b.date.localeCompare(a.date));
+    return [text('Журнал поступлений, занятий и фактических расходов за выбранный месяц.'),
+      row(button('Распределить оплату',()=>editPayment({fromAccount:true})),button('+ Расход',()=>editExpense())),
+      fold,pending.length&&section('Сверка и отменённые · '+pending.length,'account-month-review-'+month,[
+        team.review.length>0&&text('Выплаты с возможным совпадением показаны здесь до сверки.'),
+        ...pending.map(monthOperationLine)
+      ])];
   }
 
   function summary() {
-    const summary = A.combinedSummary(state(), month);
+    const {summary,team} = monthFinance();
     const metrics = append(el('div', null, 'panel stack'), text('Получено за месяц'), totalDisplay(summary.receipts));
     const byDirection = group('Источники поступлений', ...Object.entries(statementLabels).map(([key,label])=>line(label,'',totals(summary.blocks[key]||{}))));
     const lastDay = addDays(A.nextMonth(month)+'-01',-1);
@@ -933,13 +969,58 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     ]);
     const source = sourceSummary();
     return [metrics,byDirection,personal,group('Расходы и остаток',
-      line('Расходы','',totals(summary.expenses)),line('Остаток · Белград и персональные','',totals(summary.localBalance))),
+      line('Фактические расходы','',totals(summary.expenses)),
+      line('Остаток по Белграду и персональным','Поступления по этим направлениям за вычетом фактических расходов',totals(summary.localBalance))),
+      coachFinance(team),section('Движение клиентов','account-client-movement',movement()),
       source && section('Сверка с бухгалтерией','account-source-totals',[
         summary.imported.review>0&&text('Строки без подтверждённой оплаты не включены · '+summary.imported.review),
         summary.imported.skippedDuplicates>0&&text('Точные совпадения учтены один раз · '+summary.imported.skippedDuplicates),
         summary.imported.sessionRows>0&&text('В таблице занятия могут быть сгруппированы за месяц. Без дат отдельных занятий совпадения с приложением не проверяются.'),
         source
-      ]),remindersPanel(3,month)];
+      ])];
+  }
+
+  function coachFinance(team) {
+    const duration = minutes=>[Math.floor(minutes/60)&&Math.floor(minutes/60)+' ч',minutes%60&&minutes%60+' мин'].filter(Boolean).join(' ');
+    const labor = team.trainers.map(({member,groups,minutes,historic,accrued,unpriced})=>line(member.name,[
+      groups>0&&'Групповых: '+groups,minutes>0&&duration(minutes),historic>0&&'Из архива: '+historic,
+      unpriced>0&&'Работа без суммы: '+unpriced
+    ].filter(Boolean).join(' · '),totals(accrued)));
+    const paid = {};
+    for (const {teamEntry:{amount,currency}} of team.cash) paid[currency]=(paid[currency]??0)+amount;
+    return section('Работа и выплаты команды','account-team-finance-'+month,[
+      labor.length>0&&el('h3','Проведено и начислено'),...labor,
+      line('Выплаты и расходы из «Команды»','Включены в фактические расходы',totals(paid)),
+      team.review.length>0&&text('Возможные совпадения выплат в разделе «Операции → Сверка» · '+team.review.length)
+    ]);
+  }
+
+  function paymentsPage() {
+    const data = A.monthlyPaymentRegister(state(),month,today());
+    const show = status => registerFilter === 'all' || (registerFilter === 'paid' ? status==='paid' : status!=='paid');
+    const rows = data.clients.filter(({status})=>show(status)).map(({client,status,charges})=>{
+      const type = {paid:'paid',overdue:'overdue',due:'pending',upcoming:'pending'}[status];
+      const detail = append(el('div',null,'account-register-detail'),
+        ...charges.map(({service,charge,status:payment})=>line(serviceTitle(service),[
+          charge.coverageOnly ? 'Закрыто по сверке' : payment==='paid' ? 'Оплачено' : paymentLabels[payment],
+          charge.lastPaidOn ? 'Оплата '+formatDate(charge.lastPaidOn) : 'Срок '+formatDate(charge.due)
+        ].join(' · '),A.money(charge.remaining||service.rate,service.currency),charge.remaining ? ()=>editPayment({
+          clientId:client.id,serviceId:service.id,period:month,suggested:charge.remaining,fromAccount:true
+        }) : null)),button('Открыть карточку',()=>openClient(client.id),'subtle'));
+      const item = section('',`account-register-${month}-${client.id}`,[detail]);
+      item.classList.add('account-register-row');
+      append(item.firstElementChild,el('span',client.name),el('span',paymentLabels[status],'payment-indicator payment-'+type));
+      return item;
+    });
+    return [group('Оплаты за '+monthLabel(month),
+      line('Закрыли месяц', 'По месячным тарифам',data.paid+' из '+data.clients.length),
+      line('План по тарифам','',totals(data.expected)),
+      line('Зачтено за месяц','Включая периоды, закрытые по сверке',totals(data.covered)),
+      line('Осталось получить','По выбранному месяцу',totals(data.remaining))),
+      tariffButtons([['all','Все'],['open','Открытые'],['paid','Закрытые']],registerFilter,value=>{
+        registerFilter=value;render();return value;
+      },'Состояние оплаты'),
+      append(el('div',null,'stack account-register'),...rows,...(!rows.length?[text('По этому фильтру записей нет')]:[]))];
   }
 
   function movement() {
@@ -983,7 +1064,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const list = [...clients].map(([clientId,{items,sums}]) => section(clientName(clientId) + ' · ' + totals(sums),
       'account-receivable-'+clientId,[...items.map(receivableDetails),button('Открыть карточку',()=>openClient(clientId),'subtle')]));
     return append(el('section',null,'stack'),el('h2','Проведено, не оплачено'),
-      text('За персональные занятия, записанные в приложении'),places,
+      text('Задолженность за проведённые персональные занятия на сегодня'),places,
       clients.size ? line('Всего к получению','',totals(total)) : text('Неоплаченных занятий нет'),...list);
   }
 
@@ -995,7 +1076,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const tabs = el('div', null, 'segmented');
     tabs.setAttribute('role', 'group');
     tabs.setAttribute('aria-label', 'Раздел учёта');
-    for (const [key, label] of [['summary','Сводка'],['operations','Операции'],['receivables','К получению'],['movement','Движение']]) {
+    for (const [key, label] of [['summary','Сводка'],['payments','Оплаты'],['operations','Операции'],['receivables','К получению']]) {
       const control = button(label, () => { tab = key; render(); });
       control.setAttribute('aria-pressed', String(tab === key));
       tabs.append(control);
@@ -1006,12 +1087,10 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     if (tab === 'summary') {
       if (!choices().length) page.append(text('Начни с услуги в карточке клиента. Укажи тариф и день оплаты для напоминаний в ToDo.'), row(button('К клиентам', () => navigate('#clients'), 'subtle')));
       append(page, ...summary());
-    } else if (tab === 'operations') {
-      const entries = A.operations(state(), { month, includeVoided: true });
-      append(page, sourceOperations(), row(button('Распределить оплату', () => editPayment({ fromAccount: true })),button('+ Расход', () => editExpense())), group(state().ledger ? 'Записано в приложении' : 'Операции за месяц', ...(entries.length ? entries.map(o => operationLine(o)) : [text('Операций пока нет')])));
-    } else append(page, ...movement());
-    page.append(section('Импорт учёта', 'account-import', [
-      state().ledger && text('Бухгалтерия загружена по ' + formatDate(state().ledger.asOf)),
+    } else if (tab === 'operations') append(page, ...operationsPage());
+    else append(page,...paymentsPage());
+    if (tab === 'operations') page.append(section('Импорт учёта', 'account-import', [
+      state().ledger && text('Срез бухгалтерии от '+formatDate(state().ledger.asOf)+'. Для обновления загрузи свежий файл.'),
       button('Импортировать файл учёта 2026', importLedger)
     ]));
     return page;
@@ -1249,7 +1328,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       ].filter(Boolean)});
   }
 
-  function editImportedPayment(entry) {
+  function editImportedPayment(entry, fromAccount = false) {
     modal('Редактировать оплату',form=>{
       const date = dateInput(entry.date);
       const context = [entry.kind === 'shared' ? 'Общий платёж семьи' : '', 'За '+monthLabel(entry.month)].filter(Boolean).join(' · ');
@@ -1268,7 +1347,13 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           from,currency:currency.value,amount:A.amountMinor(amount.value),
           ...(parts.length && {parts:Object.fromEntries(parts.map(([pkg,control])=>[pkg,A.amountMinor(control.value)]))})
         }));
-        await commit(s=>changeImportedPayment(s,entry,{date:recordedDate(date),entries:changes}));
+        const actualDate = recordedDate(date);
+        if (fromAccount) {
+          month = actualDate.slice(0,7);
+          operationFilter = 'payment';
+          operationBatches.set(month+'/open',true);
+        }
+        await commit(s=>changeImportedPayment(s,entry,{date:actualDate,entries:changes}));
         message('Оплата обновлена');
       };
     });
@@ -1362,6 +1447,6 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       })));
   }
 
-  return { page, clientPanel, remindersPanel, todoItems, settingsPanel, quickEntry, quickOptions, assistantVisit, activeClientIds, resumeClient,
+  return { page, clientPanel, todoItems, settingsPanel, quickEntry, quickOptions, assistantVisit, activeClientIds, resumeClient,
     scheduledSession, addScheduledTariff:(clientId,scheduled)=>editService(clientId,undefined,{scheduled}) };
 }

@@ -18,6 +18,47 @@ function payment(state, date, currency, amount, allocations) {
 
 const credit = (service, month, part, credited = part) => ({ serviceId: service.id, month, part, credit: credited });
 
+test('monthly journal uses receipt dates and the same per-currency reconciliation as the summary', () => {
+  const state=emptyState(),client=createClient(state,{name:'Тестовый клиент'},'2026-09-01');
+  const service=enrollment(state,client,{startsOn:'2026-09-01'});
+  const native=payment(state,'2026-11-04','RSD',800000,[credit(service,'2026-10',800000)]);
+  const cancelled=payment(state,'2026-11-07','RSD',800000,[credit(service,'2026-11',800000)]);
+  A.setVoided(state,cancelled.id,true);
+  state.ledger={rows:[
+    {id:'same-receipt',kind:'payment',month:'2026-10',date:native.date,block:'belgrade',
+      owners:[client.id],values:{RSD:800000,EUR:8000}},
+    {id:'undated-receipt',kind:'payment',month:'2026-11',date:'',block:'belgrade',
+      owners:[client.id],values:{RSD:800000}}
+  ]};
+  const {entries,review,summary}=A.accountingMonth(state,'2026-11');
+  assert.deepEqual(entries.map(entry=>entry.operation?.id??entry.row.id),[native.id,'same-receipt']);
+  assert.deepEqual(entries[1].values,{EUR:8000});
+  assert.deepEqual(summary.receipts,{RSD:800000,EUR:8000});
+  assert.deepEqual(review.map(entry=>entry.operation?.id??entry.row.id),[cancelled.id,'undated-receipt']);
+  assert.deepEqual(A.accountingMonth(state,'2026-10').entries,[]);
+});
+
+test('the monthly register uses applied payments, excludes pauses and keeps earlier dues separate', () => {
+  const state=emptyState();
+  const paid=createClient(state,{name:'Андреев Тест'},'2026-09-01');
+  const partial=createClient(state,{name:'Буров Тест'},'2026-09-01');
+  const paused=createClient(state,{name:'Ветров Тест'},'2026-09-01');
+  const upcoming=createClient(state,{name:'Горин Тест'},'2026-09-01');
+  const group=enrollment(state,paid,{startsOn:'2026-09-01',day:20});
+  const online=enrollment(state,partial,{startsOn:'2026-09-01',kind:'online',block:'online',currency:'EUR',rate:8000,day:10});
+  enrollment(state,paused,{startsOn:'2026-09-01',pauses:[{from:'2026-11-01',until:null}]});
+  enrollment(state,upcoming,{startsOn:'2026-09-01',day:28});
+  payment(state,'2026-10-27','RSD',800000,[credit(group,'2026-11',800000)]);
+  payment(state,'2026-11-19','EUR',3000,[credit(online,'2026-11',3000)]);
+  const register=A.monthlyPaymentRegister(state,'2026-11','2026-11-27');
+  assert.deepEqual(register.clients.map(({client,status})=>[client.id,status]),[[paid.id,'paid'],[partial.id,'overdue'],[upcoming.id,'upcoming']]);
+  assert.equal(register.paid,1);
+  assert.deepEqual(register.expected,{RSD:1600000,EUR:8000});
+  assert.deepEqual(register.covered,{RSD:800000,EUR:3000});
+  assert.deepEqual(register.remaining,{RSD:800000,EUR:5000});
+  assert.equal(A.monthlyPaymentRegister(state,'2026-11','2026-11-27').clients[0].charges[0].charge.lastPaidOn,'2026-10-27');
+});
+
 test('personal history distinguishes advance usage, unpaid sessions, and cash receipts', () => {
   const s=emptyState(), client=createClient(s,{name:'Тестовый клиент'},'2026-09-15');
   const tariff=enrollment(s,client,{kind:'personal',block:'personal',place:'Улица',day:null,rate:400000,reminder:false,startsOn:'2026-09-15'});

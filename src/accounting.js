@@ -751,8 +751,9 @@ function reconciledSessionRows(state, operations, rows) {
   }).map(row=>row.id));
 }
 
-export function combinedSummary(state, month) {
+export function accountingMonth(state, month) {
   const result = summarize(state,month), book = accounting(state);
+  const entries = [], review = [];
   result.imported = { receipts:0, expenses:0, sessionRows:0, skippedDuplicates:0, review:0 };
   const nativeByKey = new Map();
   const historicalServices = new Map();
@@ -763,22 +764,31 @@ export function combinedSummary(state, month) {
     services.push(service);
     historicalServices.set(service.clientId,services);
   }
-  const recorded = operations(state,{month});
+  const recorded = operations(state,{month,includeVoided:true});
   const imported = state.ledger?.rows || [];
   const reconciled = reconciledSessionRows(state,recorded,imported);
   const correctedReceipts = reconciledReceipts(book);
   for (const operation of recorded) {
-    if (operation.kind !== 'payment') continue;
+    const list = operation.voided ? review : entries;
+    list.push({kind:operation.kind,date:operation.date,operation});
+    if (operation.kind !== 'payment' || operation.voided) continue;
     const key = operationReceiptKey(book.services,operation);
     nativeByKey.set(key,(nativeByKey.get(key)||0)+1);
   }
   for (const row of imported) {
     if (row.kind === 'review') {
-      if (row.month === month) result.imported.review++;
+      if (row.month === month) {
+        result.imported.review++;
+        review.push({kind:row.kind,date:row.date,row});
+      }
       continue;
     }
     if (row.kind === 'payment' || row.kind === 'shared') {
-      if (!validDate(row.date) || !row.date.startsWith(month+'-')) continue;
+      if (!validDate(row.date)) {
+        if (row.month === month) review.push({kind:row.kind,date:row.date,row});
+        continue;
+      }
+      if (!row.date.startsWith(month+'-')) continue;
       for (const [currency,amount] of Object.entries(row.values)) if (amount > 0) {
         if (correctedReceipts.has(sourceReceiptKey(row,currency))) {
           result.imported.skippedDuplicates++;
@@ -791,12 +801,14 @@ export function combinedSummary(state, month) {
       continue;
     }
     if (row.month !== month) continue;
+    if (row.kind === 'repeat') review.push({kind:row.kind,date:row.date,row});
     if (row.kind === 'expense') {
       for (const [currency,amount] of Object.entries(row.values)) {
         addTotal(result.expenses,currency,amount);
         addTotal(result.localBalance,currency,-amount);
       }
       result.imported.expenses++;
+      entries.push({kind:row.kind,date:row.date,row});
     } else if (row.kind === 'session') {
       if (reconciled.has(row.id)) {
         result.imported.skippedDuplicates++;
@@ -806,8 +818,10 @@ export function combinedSummary(state, month) {
       const sessions = Number(/^([\d.]+) зан\./.exec(row.detail || '')?.[1]);
       if (Number.isInteger(sessions) && sessions > 0) result.count += sessions;
       result.imported.sessionRows++;
+      entries.push({kind:row.kind,date:row.date,row});
     }
   }
+  const received = new Map();
   for (const {row,currency,amount,key} of payments) {
     if (key && nativeByKey.get(key) === 1 && ledgerByKey.get(key) === 1) {
       result.imported.skippedDuplicates++;
@@ -829,8 +843,15 @@ export function combinedSummary(state, month) {
     } else addTotal(result.services[packageId]??={},currency,amount);
     if (row.block !== 'online') addTotal(result.localBalance,currency,amount);
     result.imported.receipts++;
+    if (!received.has(row)) received.set(row,{});
+    received.get(row)[currency] = amount;
   }
-  return result;
+  for (const [row,values] of received) entries.push({kind:'payment',date:row.date,row,values});
+  return {summary:result,entries,review};
+}
+
+export function combinedSummary(state, month) {
+  return accountingMonth(state,month).summary;
 }
 
 export function nextMonth(month, delta = 1) {
@@ -940,6 +961,36 @@ function chargeFor(credits, service, month, { settle = false, recordCovered = fa
 
 export function monthlyCharge(state, service, month, today = localDate()) {
   return chargeFor(monthlyCredits(state, today), service, month);
+}
+
+export function monthlyPaymentRegister(state, month, today = localDate()) {
+  const credits = monthlyCredits(state,today);
+  const people = new Map();
+  const movements = new Map();
+  const priority = {paid:1, upcoming:2, due:3, overdue:4};
+  const expected = {}, covered = {}, remaining = {};
+  for (const service of Object.values(accounting(state).services)) {
+    const client = state.clients[service.clientId];
+    if (service.kind === 'personal' || client?.role !== 'Клиент' || client.mergedInto) continue;
+    const charge = chargeFor(credits,service,month);
+    if (!charge) continue;
+    if (!movements.has(client.id)) movements.set(client.id,clientMovements(state,client.id));
+    const history = movements.get(client.id);
+    const active = history.length ? activeOn(history,charge.due)
+      : charge.due < today.slice(0,7)+'-01' || client.status === 'Активный';
+    if (!active && charge.remaining) continue;
+    const person = people.get(client.id) ?? {client,status:'paid',charges:[]};
+    if (!people.has(client.id)) people.set(client.id,person);
+    const timing = paymentTiming(charge.due,today);
+    const status = !charge.remaining ? 'paid' : timing === 'upcoming' || timing === 'overdue' ? timing : 'due';
+    person.charges.push({service,charge,status});
+    if (priority[status] > priority[person.status]) person.status = status;
+    addTotal(expected,service.currency,service.rate);
+    if (charge.remaining) addTotal(remaining,service.currency,charge.remaining);
+    if (charge.remaining < service.rate) addTotal(covered,service.currency,service.rate-charge.remaining);
+  }
+  const clients = [...people.values()].sort((a,b)=>a.client.name.localeCompare(b.client.name,'ru'));
+  return {clients,expected,covered,remaining,paid:clients.filter(person=>person.status==='paid').length};
 }
 
 export function paidServicePeriodEnd(state, service, date = localDate(), today = localDate()) {
