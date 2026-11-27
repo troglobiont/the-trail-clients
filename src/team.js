@@ -3,6 +3,7 @@ import {CURRENCIES} from './accounting.js';
 import {GROUP_REPORT,groupRecords} from './coach-accounting.js';
 
 export const TEAM_ENTRY_KINDS={work:'Работа',accrual:'Начисление',payout:'Выплата',expense:'Расход'};
+export const TEAM_PARTICIPATION={regular:'Постоянный',guest:'Приглашённый'};
 const key=value=>typeof value==='string'&&/^[-a-zA-Z0-9_]{1,180}$/.test(value)&&!['__proto__','constructor','prototype'].includes(value);
 const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
 const money=value=>Number.isSafeInteger(value)&&value>0&&value<=1e11;
@@ -13,6 +14,7 @@ export const teamMembers=(state,{includeHidden=true}={})=>Object.values(state.cl
   .filter(member=>isTeamMember(member)&&(includeHidden||sharesTeamProfile(member)))
   .sort((a,b)=>a.name.localeCompare(b.name,'ru'));
 export const teamRole=member=>member.role==='Тренер'&&member.teamRole==='Организатор'?'Организатор':'Тренер';
+export const teamParticipation=member=>member.teamAdmin?.participation??'regular';
 function memberFor(state,memberId){
   const member=state.clients[memberId];
   if(!isTeamMember(member))throw Error('Участник команды не найден');
@@ -34,10 +36,22 @@ export function validateTeam(state){
     // Keep the business history when a person's directory role is later changed.
     if(!object(admin)||!note(admin.notes)||!object(admin.entries)||Object.keys(admin.entries).length>10000
       ||admin.role!==undefined&&admin.role!=='Тренер'||admin.visible!==undefined&&typeof admin.visible!=='boolean'
+      ||admin.participation!==undefined&&!Object.hasOwn(TEAM_PARTICIPATION,admin.participation)
+      ||admin.specialty!==undefined&&(typeof admin.specialty!=='string'||admin.specialty.length>120||!admin.specialty.trim())
       ||admin.groupRate!==undefined&&!money(admin.groupRate))
       throw Error('Некорректные данные команды');
     for(const [k,entry] of Object.entries(admin.entries))checkEntry(entry,k);
   }
+}
+export function saveTeamProfile(state,memberId,{participation,specialty}){
+  const member=memberFor(state,memberId);
+  if(teamRole(member)!=='Тренер'||!Object.hasOwn(TEAM_PARTICIPATION,participation)||typeof specialty!=='string'||specialty.length>120)
+    throw Error('Проверь формат участия и специализацию тренера');
+  const admin={notes:'',entries:{},...member.teamAdmin,participation};
+  const trimmed=specialty.trim();
+  if(trimmed)admin.specialty=trimmed;
+  else delete admin.specialty;
+  member.teamAdmin=admin;
 }
 export function saveTeamVisibility(state,memberId,visible){
   const member=memberFor(state,memberId);

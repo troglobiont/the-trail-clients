@@ -5,7 +5,7 @@ import {accounting,clientAccountHistory,saveService} from '../src/accounting.js'
 import {GROUP_REPORT,groupCompletion,groupEventReference,groupStaffing,saveGroupCompletion,submitCoachCash,reviewCoachCash,coachCash,updateGroupStaffing} from '../src/coach-accounting.js';
 import {groupCoach,OWNER_COACH} from '../src/role-preview.js';
 import {athleteScheduleEntries} from '../src/calendar-ui.js';
-import {saveTeamGroupRate,teamEntries,teamSummary} from '../src/team.js';
+import {saveTeamGroupRate,saveTeamProfile,saveTeamVisibility,teamEntries,teamSummary} from '../src/team.js';
 import {beginCloudSync,cloudData,prepareCloudWrite,receiveCloudData,trackCloudChanges} from '../src/cloud-state.js';
 
 const day='2026-11-24';
@@ -149,4 +149,24 @@ test('staffing requests retain the existing coach until approval and follow a mo
   beginCloudSync(imported,'10000000-0000-4000-8000-000000000001');
   receiveCloudData(imported,{revision:1,data:cloudData(state)});
   assert.equal(groupCoach(moved,imported),other.id);
+});
+
+test('invited coaches keep their team history and calendar identity but cannot receive a new group assignment',()=>{
+  const {state,trainer,coach}=fixture();
+  const event={...group,coachName:'Алексей'};
+  const before=new Date(day+'T14:00:00Z');
+  saveGroupCompletion(state,'group-old',event,trainer.id,coach,false,now);
+  saveTeamVisibility(state,trainer.id,false);
+  saveTeamGroupRate(state,trainer.id,250000);
+  saveTeamProfile(state,trainer.id,{participation:'guest',specialty:'  ОФП и пилатес  '});
+  assert.equal(trainer.teamAdmin.specialty,'ОФП и пилатес');
+  assert.equal(trainer.teamAdmin.visible,false);
+  assert.equal(trainer.teamAdmin.groupRate,250000);
+  assert.equal(teamEntries(state,trainer.id).length,1);
+  assert.equal(groupCoach(event,state),trainer.id);
+  assert.throws(()=>updateGroupStaffing(state,'staffing-2',event,{action:'draft',revision:0,coachId:trainer.id},admin,before),/Выбери тренера/u);
+  saveTeamProfile(state,trainer.id,{participation:'regular',specialty:''});
+  assert.equal(trainer.teamAdmin.specialty,undefined);
+  assert.equal(updateGroupStaffing(state,'staffing-2',event,{action:'draft',revision:0,coachId:trainer.id},admin,before).draftCoachId,trainer.id);
+  validateState(state);
 });

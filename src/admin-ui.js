@@ -1,8 +1,9 @@
-import {teamMembers,teamRole,teamEntries,teamSummary,saveTeamEntry,saveTeamNotes,saveTeamVisibility,saveTeamGroupRate,sharesTeamProfile,TEAM_ENTRY_KINDS} from './team.js';
+import {teamMembers,teamRole,teamParticipation,teamEntries,teamSummary,saveTeamEntry,saveTeamNotes,saveTeamVisibility,saveTeamGroupRate,saveTeamProfile,sharesTeamProfile,TEAM_ENTRY_KINDS,TEAM_PARTICIPATION} from './team.js';
 import {amountMinor,money,CURRENCIES} from './accounting.js';
 import {addDays,localDate,validDate} from './model-utils.js';
 import {coachContact,isOwnerPerson} from './role-preview.js';
 import {GROUP_RATE} from './coach-accounting.js';
+import {inlineSelect} from './inline-select.js';
 
 const duration=minutes=>[Math.floor(minutes/60)?Math.floor(minutes/60)+' ч':'',minutes%60?minutes%60+' мин':''].filter(Boolean).join(' ')||'0 ч';
 export function createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,addCoach,render,formatDate,partnersUI,cashPanel}){
@@ -14,7 +15,8 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
     const list=el('div',null,'team-list');
     for(const member of members){
       const item=canManageTeam?button('',()=>navigate('#admin/team/'+member.id),'team-tile'):el('div',null,'team-tile');
-      list.append(append(item,el('strong',member.name),text(teamRole(member)),
+      list.append(append(item,el('strong',member.name),text([teamRole(member),member.teamAdmin?.specialty].filter(Boolean).join(' · ')),
+        canManageTeam&&teamRole(member)==='Тренер'&&teamParticipation(member)==='guest'&&text('Приглашённый'),
         canManageTeam&&!sharesTeamProfile(member)&&text('Только суперадмин'),
         canManageTeam&&el('span','›','team-chevron')));
     }
@@ -26,6 +28,14 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
       athlete&&isOwnerPerson(person)&&section('Интеграции','preview-athlete-integrations',[
         button('Источники данных',()=>openClient(person.id,'sources'),'subtle')
       ]));
+  }
+  function editCoachProfile(member){
+    modal('Профиль тренера',form=>{
+      const participation=inlineSelect(form.ownerDocument,Object.entries(TEAM_PARTICIPATION),teamParticipation(member),'Формат участия');
+      const specialty=input('text',member.teamAdmin?.specialty||'','Например, бег или ОФП');specialty.maxLength=120;
+      append(form,participation.field,field('Специализация',specialty),text('В обычном списке назначения доступны постоянные тренеры.'));
+      return ()=>commit(s=>saveTeamProfile(s,member.id,{participation:participation.value,specialty:specialty.value}));
+    });
   }
   function editNotes(member){
     modal('Заметки · '+member.name,form=>{
@@ -148,6 +158,10 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
       ()=>commit(s=>saveTeamVisibility(s,member.id,!visible)),'subtle');
     const page=append(el('div',null,'stack-lg team-card'),button('← Админ',adminBack,'back subtle'),
       append(el('div',null,'page-title'),el('h1',member.name),el('span',teamRole(member),'chip')),
+      teamRole(member)==='Тренер'&&append(el('section',null,'panel stack'),el('h2','Профиль тренера'),
+        append(el('div',null,'row between'),text('Формат участия'),el('strong',TEAM_PARTICIPATION[teamParticipation(member)])),
+        append(el('div',null,'row between'),text('Специализация'),el('strong',member.teamAdmin?.specialty||'Не указана')),
+        row(button('Изменить профиль',()=>editCoachProfile(member),'subtle'))),
       append(el('section',null,'panel stack'),el('h2','Видимость в команде'),
         text(visible?'Виден тренеру, бухгалтеру и спортсмену.':'Виден только суперадмину.'),row(visibility)),
       button('Карточка человека',()=>openClient(member.id),'subtle'),

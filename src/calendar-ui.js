@@ -220,7 +220,7 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
   }
 
   function groupSchedule(){
-    return createGroupStaffingUI({state,context:roleContext,el,append,text,button,row,field,input,select,modal,formatDate,timeRange,
+    return createGroupStaffingUI({state,context:roleContext,el,append,text,button,row,field,input,modal,formatDate,timeRange,
       navigate,commit,message,loadWeek:dataSource.loadWeek,initialWeek:staffingWeek,onWeekChange:day=>{staffingWeek=day;},
       writeCalendar:async action=>{
         try{return await writeGroupCalendar(action);}

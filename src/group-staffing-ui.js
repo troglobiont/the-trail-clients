@@ -1,10 +1,11 @@
 import {addDays,localDate} from './model-utils.js';
-import {groupStaffing,updateGroupStaffing} from './coach-accounting.js';
+import {assignableGroupCoach,groupStaffing,updateGroupStaffing} from './coach-accounting.js';
 import {coachContact,groupCoach,previewCoaches} from './role-preview.js';
+import {inlineSelect} from './inline-select.js';
 
 export const GROUP_STAFFING_ROUTE='#todo/schedule/group-staffing';
 
-export function createGroupStaffingUI({state,context,el,append,text,button,row,field,select,modal,
+export function createGroupStaffingUI({state,context,el,append,text,button,row,field,modal,
   input,formatDate,timeRange,navigate,commit,message,loadWeek,writeCalendar,eventKey,initialWeek,onWeekChange}){
   const today=localDate();
   const monday=addDays(today,-((new Date(today+'T12:00:00Z').getUTCDay()+6)%7));
@@ -93,16 +94,20 @@ export function createGroupStaffingUI({state,context,el,append,text,button,row,f
       message({draft:'Предварительное назначение сохранено',request:'Запрос отправлен суперадмину',
         approve:'Ответственный тренер утверждён',decline:'Запрос отклонён'}[action]);
     };
-    const pick=(action,initial)=>modal(action==='draft'?'Предварительно назначить тренера':'Предложить замену',form=>{
-      const choices=previewCoaches(state(),{includeHidden:admin}).map(([key,label])=>[coachContact(state(),key)?.id,label])
-        .filter(([id])=>id);
-      const coach=select([['','Выбери тренера'],...choices],initial||'');
-      form.append(field('Ответственный тренер',coach));
+    const pick=(action,initial)=>modal(action==='draft'?'Предварительно назначить тренера':'Предложить замену',(form,enable)=>{
+      const choices=previewCoaches(state(),{includeHidden:admin}).flatMap(([key,label])=>{
+        const coach=coachContact(state(),key);
+        return assignableGroupCoach(coach)?[[coach.id,label]]:[];
+      });
+      const coach=inlineSelect(form.ownerDocument,[['',choices.length?'Выбери тренера':'Доступных тренеров нет'],...choices],initial||'','Ответственный тренер');
+      enable(Boolean(coach.value));
+      coach.element.addEventListener('change',()=>enable(Boolean(coach.value)));
+      form.append(coach.field);
       return ()=>save(action,coach.value);
     },{saveLabel:action==='draft'?'Сохранить предварительно':'Отправить запрос'});
     const requests=admin?Object.entries(entry?.requests||{}).map(([requester,proposal])=>
       append(el('div',null,'stack'),text(`${name(requester)} предлагает: ${name(proposal.coachId)} · На проверке`),
-        future&&row(button('Утвердить запрос',()=>save('approve',proposal.coachId,requester),'primary'),
+        future&&row(assignableGroupCoach(state().clients[proposal.coachId])&&button('Утвердить запрос',()=>save('approve',proposal.coachId,requester),'primary'),
           button('Отклонить',()=>save('decline',null,requester),'subtle')))):[];
     return append(el('article',null,'panel stack'),el('h2',event.location||'Групповая тренировка'),
       text(formatDate(localDate(new Date(event.start)))+' · '+timeRange(event)),
@@ -111,10 +116,10 @@ export function createGroupStaffingUI({state,context,el,append,text,button,row,f
       own&&!admin&&text('Твой запрос · '+name(own.coachId)+' · На проверке'),
       future&&admin&&row(button(entry?.draftCoachId?'Изменить предварительное назначение':'Предварительно назначить',
         ()=>pick('draft',entry?.draftCoachId||current?.id),'subtle'),
-        entry?.draftCoachId&&button('Утвердить назначение',()=>save('approve',entry.draftCoachId),'primary')),
+        assignableGroupCoach(state().clients[entry?.draftCoachId])&&button('Утвердить назначение',()=>save('approve',entry.draftCoachId),'primary')),
       future&&admin&&event.canEdit&&row(button('Перенести',()=>changeEvent(event,from,false),'subtle'),
         button('Отменить',()=>changeEvent(event,from,true),'subtle')),
-      future&&!admin&&row(current?.id!==actor.id&&own?.coachId!==actor.id&&button('Запросить себе',()=>save('request',actor.id),'primary'),
+      future&&!admin&&row(assignableGroupCoach(actor)&&current?.id!==actor.id&&own?.coachId!==actor.id&&button('Запросить себе',()=>save('request',actor.id),'primary'),
         button(own?'Изменить запрос':'Предложить замену',()=>pick('request',own?.coachId),'subtle')),
       ...requests);
   }

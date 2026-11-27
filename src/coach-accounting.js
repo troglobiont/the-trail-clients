@@ -16,6 +16,7 @@ const month=value=>typeof value==='string'&&/^\d{4}-(0[1-9]|1[0-2])$/u.test(valu
 const staff=(state,id)=>Object.hasOwn(state.clients,id)?state.clients[id]:null;
 const trainer=person=>person&&!person.mergedInto&&
   (person.teamAdmin?.role==='Тренер'||person.role==='Тренер'&&person.teamRole!=='Организатор');
+export const assignableGroupCoach=person=>Boolean(trainer(person)&&person.teamAdmin?.participation!=='guest');
 
 export const isGroupRecord=entry=>entry?.type===GROUP_COMPLETION||entry?.type===GROUP_REPORT;
 export const groupCompletion=(state,eventKey,calendarRef)=>
@@ -62,7 +63,7 @@ export function updateGroupStaffing(state,eventKey,event,{action,coachId,request
     if(!Object.hasOwn(entry.requests,requesterId))throw Error('Запрос уже рассмотрен');
     delete entry.requests[requesterId];
   }else{
-    if(!key(coachId)||!trainer(staff(state,coachId)))throw Error('Выбери ответственного тренера');
+    if(!key(coachId)||!assignableGroupCoach(staff(state,coachId)))throw Error('Выбери тренера для группового расписания');
     if(action==='draft')entry.draftCoachId=coachId;
     else if(action==='request')entry.requests[context.coachId]={coachId,at};
     else if(action==='approve'){
