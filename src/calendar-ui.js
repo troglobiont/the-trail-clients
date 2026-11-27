@@ -110,7 +110,8 @@ export function athleteScheduleEntries(state, clientId, events) {
       return meeting ? [{event,client,day:meeting.day}] : [];
     }
     const day = localDate(new Date(event.start));
-    return groupTariffs.some(tariff=>activeService(tariff,day)) && calendarGroupCoach(event,state)===coachId
+    return groupTariffs.some(tariff=>activeService(tariff,day)) &&
+      calendarGroupCoach({...event,coachName:event.rosterCoachName||event.coachName},state)===coachId
       ? [{event,day}] : [];
   });
 }
@@ -119,7 +120,7 @@ export const CALENDAR_ARCHIVE_ROUTE = '#todo/schedule/past';
 export const CALENDAR_ARCHIVE_SECTION = 'calendar-past';
 export const CALENDAR_UPCOMING_SECTION = 'calendar-upcoming';
 
-export function createCalendarUI({state, service, readCalendar, saveCalendar, roleContext=()=>({role:'superadmin'}), el, append, button, row, field, input, select, text, section, modal, commit, formatDate,
+export function createCalendarUI({state, service, readCalendar, writeGroupCalendar, saveCalendar, roleContext=()=>({role:'superadmin'}), el, append, button, row, field, input, select, text, section, modal, commit, formatDate,
     navigate, openClient, message, searchClients, scheduledSession, addScheduledTariff, groupProtocol}) {
   const dataSource = createCalendarData({read:readCalendar,saved:()=>state().settings.calendarCache,save:saveCalendar});
   const selectedClients = new Map();
@@ -219,8 +220,12 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
   }
 
   function groupSchedule(){
-    return createGroupStaffingUI({state,context:roleContext,el,append,text,button,row,field,select,modal,formatDate,timeRange,
+    return createGroupStaffingUI({state,context:roleContext,el,append,text,button,row,field,input,select,modal,formatDate,timeRange,
       navigate,commit,message,loadWeek:dataSource.loadWeek,initialWeek:staffingWeek,onWeekChange:day=>{staffingWeek=day;},
+      writeCalendar:async action=>{
+        try{return await writeGroupCalendar(action);}
+        finally{dataSource.invalidate();}
+      },
       eventKey:async event=>(await sessionIds('staffing:'+groupEventReference(event))).sessionId});
   }
 
@@ -408,7 +413,8 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
           event.location&&el('h2',event.location),text('Ответственный · '+(actual?.name||event.coachName||'требует уточнения')),
           entry&&el('span',entry.voided?'Не проведена':entry.type===GROUP_REPORT?'Проведена · отчёт':'Проведена','chip'),
           !athlete&&entry?.source&&text(entry.source),
-          !athlete&&event.coachName&&calendarGroupCoach(event,state())!==matched&&text('В Google Календаре · '+event.coachName),
+          !athlete&&event.coachName&&(calendarGroupCoach(event,state())!==matched||entry&&expectedCoach?.id!==actual?.id)
+            &&text('В Google Календаре · '+event.coachName),
           text([formatDate(date),timeRange(event)].join(' · '),'calendar-time'),
           !athlete&&eventLink(event,'Открыть в Google Календаре'),actions?.children?.length&&actions),...(athlete?[]:[groupProtocol(date)]));
         return;

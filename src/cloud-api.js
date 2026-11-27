@@ -4,7 +4,8 @@ export function createCloudAPI({ url, key, request }) {
   async function post(path, data, token) {
     const headers = { apikey: key, 'Content-Type': 'application/json' };
     if (token) headers.Authorization = `Bearer ${token}`;
-    const response = await request({ url: url + path, method: 'POST', headers, data, connectTimeout: 10000, readTimeout: 20000 });
+    const calendarWrite=path==='/functions/v1/trail-calendar'&&Boolean(data.action);
+    const response = await request({ url: url + path, method: 'POST', headers, data, connectTimeout: 10000, readTimeout: calendarWrite?50000:20000 });
     if (response.status < 200 || response.status >= 300) {
       let garminError;
       if(path==='/functions/v1/trail-garmin-connect'){
@@ -23,7 +24,14 @@ export function createCloudAPI({ url, key, request }) {
         response.status===404?'Облачная публикация тренировок пока недоступна':
         response.status===403?'Нет доступа к облачной неделе':
         response.status===409?'Подготовленная неделя изменилась. Открой её ещё раз.':'Не удалось обратиться к облачной неделе');
-      const message = garminError||trainingError||(path.startsWith('/functions/') ? 'Не удалось обновить облачное расписание' :
+      let calendarError;
+      if(calendarWrite){
+        try{
+          const result=typeof response.data==='string'?JSON.parse(response.data):response.data;
+          if(typeof result?.error==='string'&&result.error.length<=250)calendarError=result.error;
+        }catch{}
+      }
+      const message = garminError||trainingError||calendarError||(path.startsWith('/functions/') ? 'Не удалось обновить облачное расписание' :
         path.startsWith('/auth/') ? 'Не удалось войти. Проверь почту и пароль' :
         response.status === 403 ? 'Этот аккаунт ещё не подключён к базе The.Trail' : 'Облако не приняло изменения');
       throw Object.assign(Error(message), { status: response.status });

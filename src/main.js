@@ -117,6 +117,11 @@ const calendarUI=createCalendarUI({state,service,roleContext,el,append,button,ro
     if(!cloud)throw Error('Подключи облачную синхронизацию для расписания');
     return cloud.calendar({from,to,includeGroups:true});
   },
+  writeGroupCalendar:async action=>{
+    await cloudReady;
+    if(!cloud)throw Error('Подключи облачную синхронизацию для расписания');
+    return cloud.calendar(action);
+  },
   saveCalendar:value=>store.mutate(s=>{s.settings.calendarCache=value;},{trackCloud:false}),
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   scheduledSession:accountingUI.scheduledSession,addScheduledTariff:accountingUI.addScheduledTariff,groupProtocol:trainingWeekUI.groupProtocol});

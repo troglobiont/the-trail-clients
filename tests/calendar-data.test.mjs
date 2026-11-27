@@ -142,3 +142,69 @@ test('cloud endpoint signs a read-only Google assertion, paginates and never nee
   await handler(req());
   assert.equal(calls.filter(url=>url.includes('oauth2')).length,1);
 });
+
+test('copy, move and cancel use the club calendar and do not recreate processed meetings',async()=>{
+  const keys=await crypto.subtle.generateKey({name:'RSASSA-PKCS1-v1_5',modulusLength:2048,publicExponent:new Uint8Array([1,0,1]),hash:'SHA-256'},true,['sign','verify']);
+  const pkcs8=Buffer.from(await crypto.subtle.exportKey('pkcs8',keys.privateKey)).toString('base64');
+  const config=JSON.stringify({calendarId:'test-calendar',account:{client_email:'test@example.test',private_key:'-----BEGIN PRIVATE KEY-----\n'+pkcs8+'\n-----END PRIVATE KEY-----'}});
+  const group=(id,summary,day,time)=>({id,summary,start:{dateTime:day+'T'+time+':00+01:00'},
+    end:{dateTime:day+'T'+time+':00+00:00'},location:'Парк',etag:'tag-'+id});
+  const source=group('source-a','Группа · Парк · Сергей','2027-03-27','17:30');
+  const blocked=group('source-b','Группа · Парк · Сергей','2027-03-26','17:30');
+  const existing=group('manual','Группа · Парк · Алексей','2027-04-02','16:30');
+  const rows=new Map([[source.id,source],[blocked.id,blocked],[existing.id,existing]]);
+  const log=[];
+  const handler=createCalendarHandler({env:name=>name==='TRAIL_GOOGLE_CALENDAR'?config:'https://cloud.example.test',
+    now:()=>Date.parse('2027-03-27T20:00:00Z'),fetch:async(address,options)=>{
+      const url=new URL(address),{method,headers}=options;
+      if(url.pathname.endsWith('/trail_calendar_access'))return new Response('true');
+      if(url.hostname==='oauth2.googleapis.com'){
+        const claim=JSON.parse(Buffer.from(options.body.get('assertion').split('.')[1],'base64url'));
+        return Response.json({access_token:claim.scope.endsWith('.readonly')?'reader':'writer',expires_in:3600});
+      }
+      assert.ok(url.pathname.startsWith('/calendar/v3/calendars/test-calendar/events'));
+      if(url.searchParams.get('fields')==='accessRole')return Response.json({accessRole:'writer'});
+      const id=url.pathname.split('/events/')[1];
+      if(method==='GET'&&!id){
+        const from=Date.parse(url.searchParams.get('timeMin')),to=Date.parse(url.searchParams.get('timeMax'));
+        return Response.json({items:[...rows.values()].filter(r=>r.status!=='cancelled'&&Date.parse(r.start.dateTime)>=from&&Date.parse(r.start.dateTime)<to)});
+      }
+      if(method==='GET')return rows.has(id)?Response.json(rows.get(id)):new Response('{}',{status:404});
+      assert.equal(headers.Authorization,'Bearer writer');
+      assert.equal(url.searchParams.get('sendUpdates'),'none');
+      const body=options.body&&JSON.parse(options.body);
+      log.push([method,id??body.id]);
+      if(method==='POST'){
+        if(rows.has(body.id))return new Response('{}',{status:409});
+        assert.equal(body.attendees,undefined);
+        rows.set(body.id,{...body,etag:'created'});
+        return Response.json({id:body.id});
+      }
+      assert.equal(headers['If-Match'],rows.get(id).etag);
+      if(method==='PATCH'){
+        const next={...rows.get(id),...body,etag:'changed'};rows.set(id,next);return Response.json(next);
+      }
+      rows.set(id,{id,status:'cancelled'});
+      return new Response(null,{status:204});
+    }});
+  const send=body=>handler(new Request('https://cloud.example.test',{method:'POST',headers:{Authorization:'Bearer session'},body:JSON.stringify(body)}));
+  const copy={action:'copy-group-week',from:'2027-03-29',coaches:[{id:source.id,coachName:'Алексей Тестов'}]};
+  assert.deepEqual(await (await send(copy)).json(),{created:1,skipped:1,failed:0,sourceCount:2});
+  const id=log[0][1],newEvent=rows.get(id);
+  assert.deepEqual([newEvent.start.dateTime,newEvent.end.dateTime],['2027-04-03T15:30:00.000Z','2027-04-03T16:30:00.000Z']);
+  assert.equal(newEvent.summary,'Группа · Парк · Алексей Тестов');
+  assert.equal(newEvent.extendedProperties.private.trailRosterCoach,'Сергей');
+  const expected={start:newEvent.start.dateTime,end:newEvent.end.dateTime,location:newEvent.location};
+  const edit={action:'move-group',id,expected,day:'2027-04-03',time:'18:00'};
+  assert.equal((await send({...edit,expected:{...expected,location:'Изменённое место'}})).status,409);
+  const {event:moved}=await (await send(edit)).json();
+  assert.equal(moved.start,'2027-04-03T16:00:00.000Z');
+  assert.equal(moved.id,id);
+  assert.equal(moved.rosterCoachName,'Сергей');
+  assert.deepEqual(await (await send(copy)).json(),{created:0,skipped:2,failed:0,sourceCount:2});
+  const cancel={action:'cancel-group',id,expected:{start:moved.start,end:moved.end,location:moved.location}};
+  assert.deepEqual(await (await send(cancel)).json(),{cancelled:true});
+  assert.deepEqual(await (await send(copy)).json(),{created:0,skipped:2,failed:0,sourceCount:2});
+  assert.equal(rows.get(id).status,'cancelled');
+  assert.deepEqual(rows.get(existing.id),existing);
+});
