@@ -15,11 +15,13 @@ test('re-import retains itemized historical sessions without creating receipts o
   const months=['2026-01','2026-02'].map(month=>({month,blocks:{},link:source}));
   const sessions=['2026-01-30','2026-02-02'].map(date=>({...original,id:'visit-'+date,month:date.slice(0,7),date,
     place:'Зал',sourceLedgerRowId:original.id,detail:'1 зан. × 4000 RSD',values:{RSD:400000}}));
-  state.ledger={datasetId:'old',asOf:'2026-02-03',months,rows:[{...original,kind:'repeat',sourceKind:'session'},...sessions]};
+  const comparison={'2026-02':{checkedAt:'2026-02-05T08:00:00Z',link:source,blocks:{personal:{RSD:800000}}}};
+  state.ledger={datasetId:'old',asOf:'2026-02-03',months,comparison,rows:[{...original,kind:'repeat',sourceKind:'session'},...sessions]};
   const file={format:'the-trail-ledger-import',version:1,datasetId:'new',asOf:'2026-02-04',months,rows:[original],
     profiles:[{id:client.id,name:client.name,role:'Клиент',aliases:[],create:false}]};
   applyLedger(state,file,{createClient:C.createClient,setTelegramBinding:C.setTelegramBinding});
   assert.doesNotThrow(()=>C.validateState(state));
+  assert.deepEqual(C.parseImport(C.exportState(state)).ledger.comparison,comparison);
   assert.deepEqual(clientAccountHistory(state,client.id).map(item=>item.date),['2026-02-02','2026-01-30']);
   assert.equal(combinedSummary(state,'2026-01').count,1);
   assert.deepEqual(combinedSummary(state,'2026-02').sessions,{RSD:400000});

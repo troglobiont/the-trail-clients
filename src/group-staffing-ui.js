@@ -39,9 +39,10 @@ export function createGroupStaffingUI({state,context,el,append,text,button,row,f
       form.append(text(`Групповых встреч к переносу: ${groups.length}. Можно изменить время и ответственных после копирования.`));
       return async()=>{
         const coaches=groups.flatMap(event=>{
-          const approved=groupStaffing(state(),event)?.coachId;
-          const coachName=approved&&state().clients[approved]?.name;
-          return coachName?[{id:event.id,coachName}]:[];
+          const entry=groupStaffing(state(),event);
+          const responsible=entry?.draftCoachId||entry?.coachId;
+          const coachName=responsible&&state().clients[responsible]?.name;
+          return coachName?[{id:event.id,coachName,status:entry.draftCoachId?'draft':'approved'}]:[];
         });
         const result=await write({action:'copy-group-week',from,coaches},from);
         if(!result.sourceCount){message('В предыдущей неделе нет групповых тренировок');return;}
@@ -83,14 +84,30 @@ export function createGroupStaffingUI({state,context,el,append,text,button,row,f
     const current=coachContact(state(),groupCoach(event,state()));
     const own=entry?.requests[actor?.id];
     const future=editable&&Date.parse(event.start)>Date.now();
+    const draftId=entry?.draftCoachId||(!entry?.coachId&&event.assignmentStatus==='draft'?current?.id:null);
+    const calendarExpected={start:event.start,end:event.end,location:event.location,coachName:event.coachName};
+    async function publishAssignment(coachId,status){
+      await write({action:'assign-group',id:event.id,expected:calendarExpected,coachName:name(coachId),status},from);
+    }
     const save=async(action,coachId,requesterId)=>{
       const id=await eventKey(event);
       await commit(draft=>{
         const active=context();
         const coach=coachContact(draft,active.coachId);
-        return updateGroupStaffing(draft,id,event,{action,coachId,requesterId,revision:entry?.revision??0},
-          {...active,coachId:coach?.id});
+        const role={...active,coachId:coach?.id};
+        let revision=entry?.revision??0;
+        if(action==='approve'&&!requesterId&&!entry?.draftCoachId&&draftId)
+          revision=updateGroupStaffing(draft,id,event,{action:'draft',coachId:draftId,revision},role).revision;
+        return updateGroupStaffing(draft,id,event,{action,coachId,requesterId,revision},role);
       });
+      if(action==='draft'||action==='approve'){
+        try{await publishAssignment(coachId,action==='draft'?'draft':'approved');}
+        catch{
+          await refresh(from);
+          message('Назначение сохранено. В карточке можно повторить обновление Google Календаря.',true);
+          return;
+        }
+      }
       message({draft:'Предварительное назначение сохранено',request:'Запрос отправлен суперадмину',
         approve:'Ответственный тренер утверждён',decline:'Запрос отклонён'}[action]);
     };
@@ -111,12 +128,14 @@ export function createGroupStaffingUI({state,context,el,append,text,button,row,f
           button('Отклонить',()=>save('decline',null,requester),'subtle')))):[];
     return append(el('article',null,'panel stack'),el('h2',event.location||'Групповая тренировка'),
       text(formatDate(localDate(new Date(event.start)))+' · '+timeRange(event)),
-      el('strong','Ответственный · '+(current?.name||'Не назначен')),
-      entry?.draftCoachId&&text('Предварительно · '+name(entry.draftCoachId)),
+      el('strong',(draftId?'Предварительно · ':'Ответственный · ')+(current?.name||'Не назначен')),
+      future&&admin&&event.canEdit&&(entry?.draftCoachId||entry?.coachId)&&
+        (event.coachName!==name(entry.draftCoachId||entry.coachId)||event.assignmentStatus!==(entry.draftCoachId?'draft':'approved'))&&
+        button('Обновить назначение в Google Календаре',()=>publishAssignment(entry.draftCoachId||entry.coachId,entry.draftCoachId?'draft':'approved'),'subtle'),
       own&&!admin&&text('Твой запрос · '+name(own.coachId)+' · На проверке'),
-      future&&admin&&row(button(entry?.draftCoachId?'Изменить предварительное назначение':'Предварительно назначить',
-        ()=>pick('draft',entry?.draftCoachId||current?.id),'subtle'),
-        assignableGroupCoach(state().clients[entry?.draftCoachId])&&button('Утвердить назначение',()=>save('approve',entry.draftCoachId),'primary')),
+      future&&admin&&row(button(draftId?'Изменить предварительное назначение':'Предварительно назначить',
+        ()=>pick('draft',draftId||current?.id),'subtle'),
+        assignableGroupCoach(state().clients[draftId])&&button('Утвердить назначение',()=>save('approve',draftId),'primary')),
       future&&admin&&event.canEdit&&row(button('Перенести',()=>changeEvent(event,from,false),'subtle'),
         button('Отменить',()=>changeEvent(event,from,true),'subtle')),
       future&&!admin&&row(assignableGroupCoach(actor)&&current?.id!==actor.id&&own?.coachId!==actor.id&&button('Запросить себе',()=>save('request',actor.id),'primary'),

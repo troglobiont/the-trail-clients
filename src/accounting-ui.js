@@ -12,7 +12,7 @@ const monthLabel = month => new Intl.DateTimeFormat('ru-RU', { month: 'long', ye
 const isMonthly = service => service.kind !== 'personal';
 const paymentLabels = {paid:'Закрыто',upcoming:'Срок впереди',due:'К оплате',overdue:'Просрочено'};
 
-export function createAccountingUI({ state, el, append, button, row, field, input, select, text, section, modal, commit, render, formatDate, openClient, navigate, message, importLedger, searchClients, activateClient, pauseClientTariff }) {
+export function createAccountingUI({ state, el, append, button, row, field, input, select, text, section, modal, commit, render, formatDate, openClient, navigate, message, importLedger, searchClients, activateClient, pauseClientTariff, canManageTeam }) {
   let month = today().slice(0, 7);
   let tab = 'summary';
   let receivablePlace = 'all';
@@ -898,12 +898,29 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     }));
   }
 
-  function sourceSummary() {
-    const source = state().ledger?.months.find(item => item.month === month);
+  function sourceSummary(summary) {
+    const ledger=state().ledger;
+    const latest=ledger?.comparison?.[month];
+    const source=latest&&latest.checkedAt.slice(0,10)>=ledger.asOf ? latest : ledger?.months.find(item=>item.month===month);
     if (!source) return null;
-    const labels = { ...A.BLOCKS, personal: 'Стоимость персональных занятий', expenses: 'Расходы', balance: 'Остаток по Белграду и персональным' };
-    return group('По бухгалтерии за ' + monthLabel(month),
-      ...Object.entries(labels).map(([block, label]) => line(label, '', totals(source.blocks[block] || {}))));
+    const comparisons = [
+      ['Белград',source.blocks.belgrade,summary.blocks.belgrade],
+      ['Онлайн',source.blocks.online,summary.blocks.online],
+      ['Стоимость персональных занятий',source.blocks.personal,summary.sessions],
+      ['Фактические расходы',source.blocks.expenses,summary.expenses],
+      ['Остаток по Белграду и персональным',source.blocks.balance,summary.localBalance]
+    ];
+    const link=el('a','Открыть источник в Google Sheets');
+    link.href=source.link;link.target='_blank';link.rel='noopener noreferrer';
+    return summaryFold('Сравнение с бухгалтерией','account-source-totals',[
+      text(source.checkedAt ? 'Итоги таблицы считаны '+formatDate(source.checkedAt,true) : 'Загруженный срез от '+formatDate(ledger.asOf)),
+      text('Таблица показывает итоги своей вкладки. В приложении поступления идут по фактической дате, а расходы включают записи команды.'),
+      ...comparisons.map(([label,sheet,app])=>line(label,'Таблица · '+totals(sheet||{}),
+        append(el('span',null,'account-value'),el('small','Приложение'),el('span',totals(app||{}))))),
+      link,
+      summary.imported.review>0&&text('Строки импорта без подтверждённой оплаты · '+summary.imported.review),
+      summary.imported.skippedDuplicates>0&&text('Точные совпадения старого импорта с приложением учтены один раз · '+summary.imported.skippedDuplicates)
+    ]);
   }
 
   function sourceLine(entry, values) {
@@ -942,8 +959,9 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       draw();
     },'subtle');
     const limit = ()=>operationBatches.get(month+'/'+operationFilter)??12;
-    const filters = tariffButtons([['all','Все'],['payment','Поступления'],['session','Занятия'],['expense','Расходы']],
-      operationFilter,value=>{operationFilter=value;draw();return value;},'Тип операции');
+    const filters = tariffButtons([['payment','Поступления'],['session','Занятия'],['expense','Расходы']],
+      operationFilter,value=>{operationFilter=value===operationFilter?'all':value;draw();return operationFilter;},'Тип операции');
+    filters.classList.add('account-filter-three');
     const draw = ()=>{
       const filtered = operationFilter === 'all' ? entries : entries.filter(entry=>entry.kind===operationFilter);
       list.replaceChildren(...filtered.slice(0,limit()).map(monthOperationLine));
@@ -952,14 +970,14 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       more.textContent = 'Показать ещё · '+(filtered.length-limit());
     };
     draw();
-    const fold = section('Записи за месяц · '+entries.length,'account-month-entries-'+month,[filters,list,more]);
+    const fold = summaryFold('Записи за месяц · '+entries.length,'account-month-entries-'+month,[filters,list,more]);
     const key = month+'/open';
     fold.open = operationBatches.get(key)??true;
     fold.addEventListener('toggle',()=>operationBatches.set(key,fold.open));
     const pending = [...review,...team.review].sort((a,b)=>b.date.localeCompare(a.date));
     return [text('Журнал поступлений, занятий и фактических расходов за выбранный месяц.'),
       row(button('Распределить оплату',()=>editPayment({fromAccount:true})),button('+ Расход',()=>editExpense())),
-      fold,pending.length&&section('Сверка и отменённые · '+pending.length,'account-month-review-'+month,[
+      fold,pending.length&&summaryFold('Сверка и отменённые · '+pending.length,'account-month-review-'+month,[
         team.review.length>0&&text('Выплаты с возможным совпадением показаны здесь до сверки.'),
         ...pending.map(monthOperationLine)
       ])];
@@ -983,21 +1001,14 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const amounts = operation ? {[operation.currency]:operation.amount} : row.values;
       for (const [currency,amount] of Object.entries(amounts)) advertising[currency]=(advertising[currency]??0)+amount;
     }
-    const source = sourceSummary();
+    const source = sourceSummary(summary);
     return [metrics,byDirection,personal,group('Расходы и остаток',
       line('Фактические расходы','',totals(summary.expenses)),
       summaryFold('Реклама · '+(ads.length?totals(advertising):A.money(0,'RSD')),'account-ads',[
         ...ads.map(monthOperationLine),button('+ Расход на рекламу',()=>editExpense(undefined,true,'Реклама'),'subtle')
       ]),
       line('Остаток по Белграду и персональным','Поступления по этим направлениям за вычетом фактических расходов',totals(summary.localBalance))),
-      coachFinance(team),summaryFold('Движение клиентов','account-client-movement',movement()),
-      source && summaryFold('Сравнение с импортом бухгалтерии','account-source-totals',[
-        text('Срез от '+formatDate(state().ledger.asOf)+'. Для сравнения с текущей таблицей нужен новый импорт.'),
-        summary.imported.review>0&&text('Строки без подтверждённой оплаты не включены · '+summary.imported.review),
-        summary.imported.skippedDuplicates>0&&text('Точные совпадения учтены один раз · '+summary.imported.skippedDuplicates),
-        summary.imported.sessionRows>0&&text('В таблице занятия могут быть сгруппированы за месяц. Без дат отдельных занятий совпадения с приложением не проверяются.'),
-        source
-      ])];
+      coachFinance(team),summaryFold('Движение клиентов','account-client-movement',movement()),source];
   }
 
   function coachFinance(team) {
@@ -1006,7 +1017,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       const currencies = A.CURRENCIES.filter(c=>c in accrued || c in paid);
       return append(el('div',null,'account-trainer-line'),
         line(member.name,[groups>0&&'Групповых: '+groups,minutes>0&&duration(minutes),
-          historic>0&&'Архивных без начисления: '+historic,unpriced>0&&'Работа без суммы: '+unpriced].filter(Boolean).join(' · ')),
+          historic>0&&'Архивных без начисления: '+historic,unpriced>0&&'Работа без суммы: '+unpriced].filter(Boolean).join(' · '),
+          canManageTeam()?'›':'',canManageTeam()?()=>navigate('#admin/team/'+member.id):null),
         ...currencies.map(currency=>{
           const earned = accrued[currency]??0, sent = paid[currency]??0;
           return line('Начислено '+A.money(earned,currency),sent?'Выплачено в этом месяце '+A.money(sent,currency):'',
@@ -1017,7 +1029,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     for (const {teamEntry:{amount,currency}} of team.cash) paid[currency]=(paid[currency]??0)+amount;
     return summaryFold('Работа и выплаты команды','account-team-finance-'+month,[
       labor.length>0&&el('h3','Проведено и начислено'),...labor,
-      line('Выплачено и потрачено по записям команды','Выданные выплаты и расходы, внесённые в карточках «Админ → Команда»',totals(paid)),
+      line('Выплачено и потрачено по записям команды','Админ → Команда → карточка участника → «+ Запись»',totals(paid)),
       team.review.length>0&&text('Возможные совпадения выплат в разделе «Операции → Сверка» · '+team.review.length)
     ]);
   }
@@ -1026,17 +1038,22 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     const controls = tariffButtons([['all','Все за месяц'],['open','Открытые'],['paid','Закрытые']],registerFilter,value=>{
       registerFilter=value;render();return value;
     },'Состояние оплаты');
+    controls.classList.add('account-filter-three','account-payment-tabs');
     if (registerFilter!=='open') return [controls,monthlyRegister()];
     const scopes = tariffButtons([['all','Все'],['monthly','Месячные'],['personal','Персональные']],openScope,value=>{
       openScope=value;render();return value;
     },'Вид оплаты');
-    if (openScope==='personal') return [controls,scopes,receivablesPage(true)];
-    if (openScope==='all') return [controls,scopes,monthlyRegister(),receivablesPage(false)];
+    scopes.classList.add('account-filter-three');
+    const filterPanel=append(el('div',null,'account-payment-filter'),text('Открытые оплаты'),scopes);
+    const header=append(el('div',null,'account-payment-controls'),controls,filterPanel);
+    if (openScope==='personal') return [header,receivablesPage(true)];
+    if (openScope==='all') return [header,monthlyRegister(),receivablesPage(false)];
     const timing = tariffButtons([['all','Все сроки'],['overdue','Просрочено'],['due','К оплате'],['upcoming','Срок впереди']],
       monthlyTiming,value=>{monthlyTiming=value;render();return value;},'Срок месячной оплаты');
     const tariff = select([['all','Все месячные тарифы'],...Object.entries(A.TARIFF_LABELS).filter(([key])=>!key.startsWith('personal-'))],monthlyTariff);
     tariff.addEventListener('change',()=>{monthlyTariff=tariff.value;render();});
-    return [controls,scopes,timing,field('Тариф',tariff),monthlyRegister()];
+    filterPanel.append(timing,field('Тариф',tariff));
+    return [header,monthlyRegister()];
   }
 
   function monthlyRegister() {
@@ -1113,7 +1130,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       client.sums[currency] = (client.sums[currency] ?? 0) + item.remaining;
       total[currency] = (total[currency] ?? 0) + item.remaining;
     }
-    const list = [...clients].map(([clientId,{items,sums}]) => section(clientName(clientId) + ' · ' + totals(sums),
+    const list = [...clients].map(([clientId,{items,sums}]) => summaryFold(clientName(clientId) + ' · ' + totals(sums),
       'account-receivable-'+clientId,[...items.map(receivableDetails),button('Открыть карточку',()=>openClient(clientId),'subtle')]));
     return append(el('section',null,'stack'),el('h2','Персональные к получению на сегодня'),
       text('Проведено, не оплачено'),scoped&&places,
@@ -1141,7 +1158,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       append(page, ...summary());
     } else if (tab === 'operations') append(page, ...operationsPage());
     else append(page,...paymentsPage());
-    if (tab === 'operations') page.append(section('Импорт учёта', 'account-import', [
+    if (tab === 'operations') page.append(summaryFold('Импорт учёта', 'account-import', [
       state().ledger && text('Срез бухгалтерии от '+formatDate(state().ledger.asOf)+'. Для обновления загрузи свежий файл.'),
       button('Импортировать файл учёта 2026', importLedger)
     ]));

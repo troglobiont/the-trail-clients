@@ -61,9 +61,10 @@ export function calendarGroupCoach(event,state){
 }
 
 export function groupCoach(event,state){
-  const approved=groupStaffing(state,event)?.coachId;
-  if(approved){
-    const choice=previewCoaches(state).find(([id])=>coachContact(state,id)?.id===approved);
+  const staffing=groupStaffing(state,event);
+  const responsible=staffing?.draftCoachId||staffing?.coachId;
+  if(responsible){
+    const choice=previewCoaches(state).find(([id])=>coachContact(state,id)?.id===responsible);
     return choice?.[0]??null;
   }
   return calendarGroupCoach(event,state);

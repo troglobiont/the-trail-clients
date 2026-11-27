@@ -2,7 +2,7 @@
 // Google credentials stay in server secrets; callers use their existing app login.
 const cors = {'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type',
   'Access-Control-Allow-Methods':'POST, OPTIONS','Cache-Control':'no-store','Content-Type':'application/json'};
-const fields = 'id,summary,start,end,location,status,extendedProperties,recurringEventId,recurrence,attendees(self),etag';
+const fields = 'id,summary,start,end,location,status,colorId,description,extendedProperties,recurringEventId,recurrence,attendees(self),etag';
 const encoder = new TextEncoder();
 const base64url = bytes => btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/u,'');
 const encodeJSON = value => base64url(encoder.encode(JSON.stringify(value)));
@@ -12,6 +12,17 @@ const localFormat=new Intl.DateTimeFormat('sv-SE',{timeZone:zone,year:'numeric',
 const localStamp=value=>localFormat.format(new Date(value)).replace(' ','T');
 const dayShift=(day,days)=>new Date(Date.parse(day)+days*86400000).toISOString().slice(0,10);
 const changeError=(status,message)=>Object.assign(Error(message),{status,calendarAction:true});
+const draftLine='Статус назначения: предварительное';
+const approvedLine='Статус назначения: утверждено';
+const colorForCoach=name=>{
+  const words=name.toLocaleLowerCase('ru').split(/\s+/u);
+  return words.includes('алексей')?'6':words.includes('сергей')?'10':undefined;
+};
+function staffingFields(place,coach,status,description=''){
+  const note=description.split('\n').filter(line=>line!==draftLine&&line!==approvedLine&&!/^Тип: групповая тренировка\. Тренер: .*\.$/u.test(line)).join('\n').trim();
+  return {summary:'Группа · '+place+' · '+coach,
+    description:['Тип: групповая тренировка. Тренер: '+coach+'.',status==='draft'?draftLine:status==='approved'?approvedLine:'',note].filter(Boolean).join('\n')};
+}
 
 function localInstant(stamp) {
   let time = Date.parse(stamp+'Z');
@@ -52,6 +63,9 @@ export function calendarEvent(raw,calendar,includeGroups=false) {
   const url='https://calendar.google.com/calendar/event?eid='+eid;
   if (group) return {id:raw.id,title,start:raw.start.dateTime,end:raw.end.dateTime,location:raw.location||group[1].trim(),
     kind:'group',coachName:group[2].trim(),rosterCoachName:raw.extendedProperties?.private?.trailRosterCoach||group[2].trim(),
+    ...(raw.description?.split('\n').includes(draftLine)&&{assignmentStatus:'draft'}),
+    ...(raw.description?.split('\n').includes(approvedLine)&&{assignmentStatus:'approved'}),
+    ...(raw.colorId&&{colorId:raw.colorId}),
     canEdit:Boolean(raw.etag&&!raw.recurrence),url};
   return {id:raw.id,title,start:raw.start.dateTime,end:raw.end.dateTime,location:raw.location||'',
     clientId:raw.extendedProperties?.private?.trailClientId || null,
@@ -69,9 +83,10 @@ async function copyGroupWeek({input,calendarId,list,google,now}){
   catch{throw changeError(400,'Проверь неделю расписания');}
   if(new Date(from+'T12:00:00Z').getUTCDay()!==1||from<=localStamp(now()).slice(0,10))
     throw changeError(400,'Выбери будущую неделю, начиная с понедельника');
-  if(!Array.isArray(coaches)||coaches.length>40||coaches.some(item=>!eventId(item?.id)||!label(item.coachName)))
+  if(!Array.isArray(coaches)||coaches.length>40||coaches.some(item=>!eventId(item?.id)||!label(item.coachName)
+      ||item.status!==undefined&&!['draft','approved'].includes(item.status)))
     throw changeError(400,'Проверь список ответственных тренеров');
-  const coachNames=new Map(coaches.map(({id,coachName})=>[id,coachName.trim()]));
+  const coachAssignments=new Map(coaches.map(item=>[item.id,item]));
   const [previous,target]=await Promise.all([list(dayShift(from,-7),from,true),list(from,dayShift(from,7),true)]);
   const groups=previous.filter(e=>e.kind==='group'&&localStamp(e.start).slice(0,10)>=dayShift(from,-7));
   if(groups.length>40)throw changeError(400,'В предыдущей неделе больше 40 групповых встреч');
@@ -95,8 +110,11 @@ async function copyGroupWeek({input,calendarId,list,google,now}){
       occupied.add(position);
       const bytes=await crypto.subtle.digest('SHA-256',encoder.encode(calendarId+'\n'+from+'\n'+group.id));
       const id=Array.from(new Uint8Array(bytes).slice(0,20),b=>b.toString(16).padStart(2,'0')).join('');
-      const coach=coachNames.get(group.id)||group.coachName;
-      copies.push({id,summary:'Группа · '+group.title.split('·')[1].trim()+' · '+coach,location:group.location,
+      const assignment=coachAssignments.get(group.id);
+      const coach=assignment?.coachName.trim()||group.coachName;
+      const status=assignment?.status||group.assignmentStatus;
+      const colorId=colorForCoach(coach)??(coach===group.coachName?group.colorId:undefined);
+      copies.push({id,...staffingFields(group.title.split('·')[1].trim(),coach,status),...(colorId&&{colorId}),location:group.location,
         ...timing,extendedProperties:{private:{trailGroupCopy:from,trailRosterCoach:group.rosterCoachName}}});
     }catch{result.failed++;}
   }
@@ -145,7 +163,19 @@ async function editGroupEvent({input,calendarId,google,now}){
     if(Date.parse(body.start.dateTime)<=now())throw changeError(400,'Выбери дату и время в будущем');
     if(Date.parse(body.start.dateTime)===Date.parse(current.start))return {event:current};
   }
-  if(['start','end','location'].some(key=>expected[key]!==current[key]))throw conflict();
+  if(action==='assign-group'){
+    if(!label(input.coachName)||!['draft','approved'].includes(input.status))
+      throw changeError(400,'Проверь тренера и статус назначения');
+    const coach=input.coachName.trim();
+    body=staffingFields(current.title.split('·')[1].trim(),coach,input.status,raw.description);
+    const colorId=colorForCoach(coach);
+    if(colorId)body.colorId=colorId;
+    else if(coach!==current.coachName)body.colorId=null;
+    body.extendedProperties={private:{...raw.extendedProperties?.private,trailRosterCoach:current.rosterCoachName}};
+    if(current.coachName===coach&&current.assignmentStatus===input.status&&(!colorId||current.colorId===colorId))return {event:current};
+  }
+  if(['start','end','location'].some(key=>expected[key]!==current[key])
+      ||action==='assign-group'&&expected.coachName!==current.coachName)throw conflict();
   const changed=await google(path,{sendUpdates:'none',...(body&&{fields})},{method:body?'PATCH':'DELETE',body,etag:raw.etag,write:true});
   if(action==='cancel-group'&&[404,410].includes(changed.status))return {cancelled:true};
   if([404,410,412].includes(changed.status))throw conflict();
@@ -202,7 +232,7 @@ export function createCalendarHandler({env,fetch:request=fetch,now=Date.now}) {
         input=JSON.parse(body);
         if(!input||typeof input!=='object'||Array.isArray(input))throw Error();
         if(input.action===undefined)calendarRange(input);
-        else if(!['copy-group-week','move-group','cancel-group'].includes(input.action))throw Error();
+        else if(!['copy-group-week','move-group','cancel-group','assign-group'].includes(input.action))throw Error();
       } catch { return reply(400,{error:'Проверь даты расписания'}); }
       const settings = env('TRAIL_GOOGLE_CALENDAR');
       if (!settings) return reply(503,{error:'Облачное расписание ещё не подключено'});

@@ -271,6 +271,14 @@ button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opa
 .account-register-detail>button.subtle{margin-top:5px}
 .account-summary-fold[open]>.fold-body{margin:0 0 10px 7px;padding:6px 10px 8px 12px;min-width:0;border-inline-start:2px solid var(--line);border-radius:0 9px 9px 0;background:var(--soft)}
 .account-trainer-line+.account-trainer-line{border-top:1px solid var(--line)}
+.account-filter-three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+.account-filter-three>button{min-width:0;padding-inline:3px;font-size:clamp(11px,3.6vw,14px);line-height:1.15;white-space:nowrap}
+.account-payment-controls{display:grid}
+.account-payment-filter{position:relative;display:grid;gap:8px;margin-top:9px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--soft)}
+.account-payment-filter>.account-filter-three{grid-template-columns:minmax(0,.8fr) minmax(0,1fr) minmax(0,1.3fr)}
+.account-payment-filter::before{content:'';position:absolute;left:50%;top:-5px;width:8px;height:8px;translate:-50%;rotate:45deg;border:solid var(--line);border-width:1px 0 0 1px;background:var(--soft)}
+.account-payment-filter label{font-size:13px}
+.account-value>small{display:block;color:var(--muted);font-weight:400}
 button.account-move-date{padding-inline:0}
 .payment-indicator::before{content:"";display:inline-block;width:.5em;height:.5em;margin-inline-end:.45em;border-radius:50%;background:var(--payment-color,var(--muted));vertical-align:.14em}
 .payment-paid{--payment-color:#357951}

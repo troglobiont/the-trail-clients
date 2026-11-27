@@ -88,6 +88,7 @@ const detailsUI=createClientDetailsUI({state,ui,el,append,button,row,field,input
   canManageSportProfiles:(s,c)=>sportProfilesVisible(s,c,roleContext()),
   openAthleteEntry:(c,id)=>athleteUI.openEntry(c,id)});
 const accountingUI=createAccountingUI({state,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,navigate,message,importLedger:()=>importDatabase(true),
+  canManageTeam:()=>ui.role==='superadmin',
   searchClients:query=>C.filterClients(state(),{query,role:'Клиент'}),
   activateClient:(s,id,day)=>C.editClient(s,id,{status:'Активный',engagement:null,pause:null},day),
   pauseClientTariff:C.pauseClientTariff,
@@ -202,7 +203,8 @@ function bindHeaderControls(){
 function renderRoleSwitch(){
   const switcher=document.getElementById('role-switch'),menu=document.getElementById('role-menu');
   document.getElementById('current-role').textContent=ROLES[ui.role];
-  document.getElementById('sync-now').hidden=ui.role!=='superadmin';
+  document.getElementById('sync-now').hidden=ui.role!=='superadmin'&&
+    !(ui.role==='accountant'&&cloud&&cloud.state().status!=='disconnected');
   const choices=Object.entries(ROLES).map(([key,label])=>{
     const control=button(label,()=>{
       switcher.open=false;

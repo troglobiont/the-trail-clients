@@ -188,11 +188,13 @@ test('copy, move and cancel use the club calendar and do not recreate processed 
       return new Response(null,{status:204});
     }});
   const send=body=>handler(new Request('https://cloud.example.test',{method:'POST',headers:{Authorization:'Bearer session'},body:JSON.stringify(body)}));
-  const copy={action:'copy-group-week',from:'2027-03-29',coaches:[{id:source.id,coachName:'Алексей Тестов'}]};
+  const copy={action:'copy-group-week',from:'2027-03-29',coaches:[{id:source.id,coachName:'Алексей Тестов',status:'draft'}]};
   assert.deepEqual(await (await send(copy)).json(),{created:1,skipped:1,failed:0,sourceCount:2});
   const id=log[0][1],newEvent=rows.get(id);
   assert.deepEqual([newEvent.start.dateTime,newEvent.end.dateTime],['2027-04-03T15:30:00.000Z','2027-04-03T16:30:00.000Z']);
   assert.equal(newEvent.summary,'Группа · Парк · Алексей Тестов');
+  assert.equal(newEvent.colorId,'6');
+  assert.match(newEvent.description,/Статус назначения: предварительное/u);
   assert.equal(newEvent.extendedProperties.private.trailRosterCoach,'Сергей');
   const expected={start:newEvent.start.dateTime,end:newEvent.end.dateTime,location:newEvent.location};
   const edit={action:'move-group',id,expected,day:'2027-04-03',time:'18:00'};
@@ -201,6 +203,13 @@ test('copy, move and cancel use the club calendar and do not recreate processed 
   assert.equal(moved.start,'2027-04-03T16:00:00.000Z');
   assert.equal(moved.id,id);
   assert.equal(moved.rosterCoachName,'Сергей');
+  const reassign={action:'assign-group',id,coachName:'Сергей',status:'approved',
+    expected:{start:moved.start,end:moved.end,location:moved.location,coachName:moved.coachName}};
+  const {event:assigned}=await (await send(reassign)).json();
+  assert.equal(assigned.coachName,'Сергей');
+  assert.equal(assigned.colorId,'10');
+  assert.equal(assigned.assignmentStatus,'approved');
+  assert.equal(assigned.start,moved.start);
   assert.deepEqual(await (await send(copy)).json(),{created:0,skipped:2,failed:0,sourceCount:2});
   const cancel={action:'cancel-group',id,expected:{start:moved.start,end:moved.end,location:moved.location}};
   assert.deepEqual(await (await send(cancel)).json(),{cancelled:true});

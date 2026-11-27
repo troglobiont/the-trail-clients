@@ -156,7 +156,15 @@ export function parseLedgerImport(file) {
 }
 
 export function validateStoredLedger(state) {
-  if (state.ledger !== undefined) validateLedger(state.ledger, new Set(Object.keys(state.clients)));
+  if (state.ledger === undefined) return;
+  validateLedger(state.ledger, new Set(Object.keys(state.clients)));
+  const comparison = state.ledger.comparison;
+  if (comparison !== undefined && (!comparison || Array.isArray(comparison)||typeof comparison!=='object'
+      ||Object.entries(comparison).some(([period,value])=>!month(period)||!value
+        ||typeof value.checkedAt!=='string'||!Number.isFinite(Date.parse(value.checkedAt))
+        ||!sourceLink(value.link)||!value.blocks||typeof value.blocks!=='object'||Array.isArray(value.blocks)
+        ||Object.entries(value.blocks).some(([block,values])=>!blocks.includes(block)||!amounts(values)))))
+    throw Error('Некорректный срез для сравнения учёта');
 }
 
 export function applyLedger(state, file, { createClient, setTelegramBinding }) {
@@ -208,6 +216,7 @@ export function applyLedger(state, file, { createClient, setTelegramBinding }) {
   const fileMonths = new Set(file.months.map(period=>period.month));
   state.ledger = {
     datasetId: file.datasetId, asOf: file.asOf, months: file.months,
+    ...(state.ledger?.comparison&&{comparison:state.ledger.comparison}),
     rows: file.rows.flatMap(row => {
       const mapped = {...row,owners:[...new Set(row.owners.map(id=>owners.get(id)).filter(Boolean))]};
       const old = previousRows.get(row.id);

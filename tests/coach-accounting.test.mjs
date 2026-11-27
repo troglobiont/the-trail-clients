@@ -141,7 +141,7 @@ test('group reports retain dates without inventing duration or affecting the liv
   validateState(state);
 });
 
-test('staffing requests retain the existing coach until approval and follow a moved calendar event',()=>{
+test('administrator drafts take effect in the schedule and requests still require approval',()=>{
   const {state,trainer,other,client}=fixture();
   client.coachId=trainer.id;
   const occurrence={...group,coachName:'Алексей'};
@@ -149,10 +149,10 @@ test('staffing requests retain the existing coach until approval and follow a mo
   const coach={role:'coach',coachId:other.id};
   const edit=(event,values,context,at=before)=>updateGroupStaffing(state,'staffing-1',event,values,context,at);
   const draft=edit(occurrence,{action:'draft',revision:0,coachId:other.id},admin);
-  assert.equal(groupCoach(occurrence,state),trainer.id);
+  assert.equal(groupCoach(occurrence,state),other.id);
   const request=edit(occurrence,{action:'request',revision:draft.revision,coachId:other.id},coach);
   assert.equal(request.requests[other.id].coachId,other.id);
-  assert.equal(groupCoach(occurrence,state),trainer.id);
+  assert.equal(groupCoach(occurrence,state),other.id);
   const decision={action:'approve',revision:request.revision,coachId:other.id,requesterId:other.id};
   assert.throws(()=>edit(occurrence,decision,coach),/только суперадмин/u);
   assert.throws(()=>edit(occurrence,{...decision,revision:draft.revision},admin),/изменилось/u);
