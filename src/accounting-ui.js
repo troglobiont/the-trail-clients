@@ -175,7 +175,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           note.textContent = '';
           if (session) {
             if (!received.dataset.edited) received.value = rate.value;
-            const {balance} = A.serviceBalance(state(),service.id);
+            const balance = A.availablePersonalAdvance(state(),service,date.value||today(),scheduled?service.place:place.value);
             if (scheduled) {
               const covered = Math.min(service.rate,Math.max(0,balance));
               const value = amount => A.money(amount,service.currency);
@@ -199,6 +199,8 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
           }
         };
         period.addEventListener('change',recalc);
+        date.addEventListener('change',recalc);
+        place.addEventListener('change',recalc);
         recordSession.addEventListener('change',recalc);
         paid.addEventListener('change',recalc);
         rate.addEventListener('input',recalc);
@@ -1223,12 +1225,17 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
       details = [application.covered>0 && 'Погашено '+A.money(application.covered,application.currency),
         application.advance>0 && application.covered>0 && 'В аванс '+A.money(application.advance,application.currency)].filter(Boolean).join(' · ');
     } else if (settlement && visit) {
-      details = [settlement.fromAdvance>0 && 'Зачтено из аванса '+A.money(settlement.fromAdvance,visit.currency),
+      const shared = settlement.fromOtherAdvance || 0;
+      const own = settlement.fromAdvance - shared;
+      details = [own>0 && 'Зачтено из аванса '+A.money(own,visit.currency),
+        shared>0 && 'Из аванса за другое место · '+A.money(shared,visit.currency),
         settlement.remaining>0 && 'К оплате '+A.money(settlement.remaining,visit.currency),
         !settlement.remaining && settlement.paidOn > visit.date && 'Оплачено '+formatDate(settlement.paidOn)].filter(Boolean).join(' · ');
     }
     const extra = !payment && settlement?.fromAdvance>0 ? () => {
-      const {balance} = A.serviceBalance(state(),visit.serviceId,visit.date);
+      const balance = settlement.fromOtherAdvance
+        ? A.availablePersonalAdvance(state(),book().services[visit.serviceId],visit.date,visit.place)
+        : A.serviceBalance(state(),visit.serviceId,visit.date).balance;
       return line('Аванс на конец дня','',A.money(Math.max(0,balance),visit.currency));
     } : null;
     const context = visit ? '' : info.tariffs;

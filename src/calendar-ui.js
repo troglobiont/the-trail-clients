@@ -1,6 +1,6 @@
 import {addDays, localDate, TIMEZONE} from './model-utils.js';
 import {linkCalendarTask, normalizeSearch} from './core.js';
-import {accounting, activeService, clientServices, money, serviceBalance, tariffLabel} from './accounting.js';
+import {accounting, activeService, availablePersonalAdvance, clientServices, money, personalVisitSettlements, serviceBalance, tariffLabel} from './accounting.js';
 import {createCalendarData} from './calendar-data.js';
 import {assignedCoach,calendarGroupCoach,coachContact,groupCoach,OWNER_COACH,previewCoaches,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
 import {GROUP_REPORT,groupCompletion,groupEventReference,groupRecords,saveGroupCompletion} from './coach-accounting.js';
@@ -439,7 +439,9 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
       const tariffs = client ? clientServices(s,client.id).filter(tariff=>tariff.kind==='personal' && !tariff.oneOff
         && activeService(tariff,date) && (!place || tariff.place===place)) : [];
       const tariff = recorded ? services[operation.serviceId] : tariffs.length===1 ? tariffs[0] : null;
-      const credit = tariff && serviceBalance(s,tariff.id).balance;
+      const settlement = recorded && personalVisitSettlements(s,client?.id).get(operation.id);
+      const credit = tariff && (recorded && !settlement?.fromOtherAdvance
+        ? serviceBalance(s,tariff.id).balance : availablePersonalAdvance(s,tariff,recorded?undefined:date));
       const started = Date.parse(event.start) <= Date.now();
       const pickClient = () => modal('Выбрать клиента',form=>{
         const query = input('search',calendarName(event),'Поиск (фамилия имя)');
@@ -473,7 +475,8 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
       append(actions,tariff && append(el('div',null,'row between'),el('h2',tariffLabel(tariff)),
         el('strong',money(recorded?operation.amount:tariff.rate,tariff.currency),'money-amount')),
         credit > 0 && text('Остаток аванса · '+money(credit,tariff.currency)),
-        recorded && credit < 0 && text('К оплате по тарифу · '+money(-credit,tariff.currency)));
+        settlement?.fromOtherAdvance > 0 && text('Зачтено из аванса · '+money(settlement.fromOtherAdvance,tariff.currency)),
+        settlement?.remaining > 0 && text('К оплате за занятие · '+money(settlement.remaining,tariff.currency)));
       if (!recorded) {
         if (tariffs.length) {
           const complete = button('Тренировка состоялась',()=>scheduledSession(client.id,{...ids,date},tariffs),'primary');

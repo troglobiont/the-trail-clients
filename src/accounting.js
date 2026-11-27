@@ -135,6 +135,7 @@ function checkOperation(book, operation) {
     const service = has(book.services, operation.serviceId) && book.services[operation.serviceId];
     if (service?.kind !== 'personal' || service.currency !== currency || !PLACES.includes(operation.place)) throw Error('Выбери персональную услугу и место занятия');
     if (operation.sourceLedgerRowId !== undefined && !validKey(operation.sourceLedgerRowId)) throw Error('Некорректная связь со строкой учёта');
+    if (operation.usePersonalAdvance !== undefined && typeof operation.usePersonalAdvance !== 'boolean') throw Error('Проверь зачёт аванса');
   } else if (kind === 'expense') {
     if (!EXPENSES.includes(operation.category)) throw Error('Выбери статью расхода');
     if (operation.quantity !== null && (operation.category !== 'Оплата тренеру' || !Number.isInteger(operation.quantity) || operation.quantity < 1 || !validMoney(operation.rate) || operation.quantity * operation.rate !== amount)) throw Error('Проверь число занятий и ставку тренера');
@@ -165,6 +166,7 @@ function prepareOperation(state, values, operationId) {
   if (!validKey(operationId) || (prior && prior.kind !== values.kind)) throw Error('Некорректная операция');
   const operation = { ...values, id: operationId, voided: prior?.voided ?? false };
   if (prior?.sourceLedgerRowId && operation.kind === 'session') operation.sourceLedgerRowId ??= prior.sourceLedgerRowId;
+  if (operation.kind === 'session' && (prior?.usePersonalAdvance || !prior && !operation.sourceLedgerRowId)) operation.usePersonalAdvance ??= true;
   checkOperation(book, operation);
   if (operation.date > localDate()) throw Error('Укажи дату фактической операции');
   if (operation.kind === 'session' && (prior?.serviceId !== operation.serviceId || prior?.date !== operation.date)) {
@@ -513,6 +515,8 @@ export function operations(state, { month, clientId, includeVoided = false } = {
 }
 
 export function serviceBalance(state, serviceId, today = localDate()) {
+  const service=accounting(state).services[serviceId];
+  if(service?.kind==='personal')return personalBalance(personalSettlements(state,today,service.clientId).get(serviceId));
   let received = 0;
   let used = 0;
   for (const o of operations(state)) {
@@ -526,36 +530,19 @@ export function serviceBalance(state, serviceId, today = localDate()) {
 }
 
 export function personalOperationHistory(state, clientId) {
-  const tariffs = new Map(clientServices(state,clientId).filter(s=>s.kind==='personal').map(s=>[s.id,s]));
-  const entries = operations(state,{clientId}).sort((a,b)=>a.date.localeCompare(b.date)
-    || Number(b.kind==='session')-Number(a.kind==='session'));
-  const balances = new Map(), details = new Map(), receiptsPerDay = new Map(), sessionsPerDay = new Map();
-  for (const entry of entries) {
-    if (entry.kind==='session') {
-      const key = entry.serviceId+'/'+entry.date;
-      sessionsPerDay.set(key,(sessionsPerDay.get(key) || 0)+1);
-    } else for (const item of entry.allocations) {
-      const key = item.serviceId+'/'+entry.date;
-      receiptsPerDay.set(key,(receiptsPerDay.get(key) || 0)+1);
+  const details=new Map();
+  for(const {service,visits,credits} of personalSettlements(state,localDate(),clientId).values()){
+    const {currency}=service,receiptsPerDay=new Map(),sessionsPerDay=new Map();
+    for(const {date,receipt} of credits)if(receipt)receiptsPerDay.set(date,(receiptsPerDay.get(date)||0)+1);
+    for(const {session:{date}} of visits.values())sessionsPerDay.set(date,(sessionsPerDay.get(date)||0)+1);
+    for(const credit of credits){
+      const {receipt,date,covered,amount}=credit;
+      if(receipt&&!receipt.sessionId&&receipt.allocations.length===1&&receiptsPerDay.get(date)===1)
+        details.set(receipt.id,{covered,advance:amount-covered,currency});
     }
-  }
-  for (const entry of entries) {
-    const changes = entry.kind==='session' ? [{serviceId:entry.serviceId,credit:-entry.amount}] : entry.allocations;
-    for (const {serviceId,credit} of changes) {
-      const tariff = tariffs.get(serviceId);
-      if (!tariff) continue;
-      const opening = tariff.openingCredit;
-      const delta = balances.get(serviceId) || 0;
-      const balance = delta+(opening?.date<=entry.date ? opening.amount : 0);
-      balances.set(serviceId,delta+credit);
-      const key = serviceId+'/'+entry.date;
-      if (entry.kind==='payment' && !entry.sessionId && entry.allocations.length===1 && receiptsPerDay.get(key)===1) {
-        const covered = Math.min(credit,Math.max(0,-balance));
-        details.set(entry.id,{covered,advance:credit-covered,currency:tariff.currency});
-      } else if (entry.kind==='session' && sessionsPerDay.get(key)===1 && !receiptsPerDay.has(key)) {
-        const fromAdvance = Math.min(entry.amount,Math.max(0,balance));
-        details.set(entry.id,{fromAdvance,due:entry.amount-fromAdvance,currency:tariff.currency});
-      }
+    for(const {session,fromAdvance} of visits.values()){
+      if(sessionsPerDay.get(session.date)===1&&!receiptsPerDay.has(session.date))
+        details.set(session.id,{fromAdvance,due:session.amount-fromAdvance,currency});
     }
   }
   return details;
@@ -563,54 +550,117 @@ export function personalOperationHistory(state, clientId) {
 
 export function personalBalances(state, through = localDate()) {
   const result = { advance:{}, debt:{} };
-  for (const service of Object.values(accounting(state).services)) {
-    if (service.kind !== 'personal') continue;
-    const { balance } = serviceBalance(state,service.id,through);
-    if (balance) addTotal(balance > 0 ? result.advance : result.debt,service.currency,Math.abs(balance));
+  for (const account of personalSettlements(state,through).values()) {
+    const { balance } = personalBalance(account);
+    const {currency}=account.service;
+    if (balance) addTotal(balance > 0 ? result.advance : result.debt,currency,Math.abs(balance));
   }
   return result;
 }
 
+function personalBalance({visits,credits}){
+  const totals={received:0,used:0,balance:0};
+  for(const credit of credits){
+    if(credit.receipt)totals.received+=credit.amount;
+    totals.balance+=credit.remaining;
+  }
+  for(const visit of visits.values()){
+    totals.used+=visit.session.amount;
+    totals.balance-=visit.remaining;
+  }
+  return totals;
+}
+
+const personalPoolKey=({clientId,currency})=>clientId+'/'+currency;
+const canShareAdvance=({service},to,place)=>!service.oneOff&&service.id!==to.id&&service.place!==place&&
+  personalPoolKey(service)===personalPoolKey(to);
+
+export function availablePersonalAdvance(state,service,day=localDate(),place=service.place){
+  let total=0;
+  for(const account of personalSettlements(state,day,service.clientId).values()){
+    if(account.service.id===service.id)total+=Math.max(0,personalBalance(account).balance);
+    else if(canShareAdvance(account,service,place))for(const credit of account.credits)if(!credit.receipt?.sessionId)total+=credit.remaining;
+  }
+  return total;
+}
+
 function personalSettlements(state, through, clientId) {
-  const accounts = new Map();
+  const accounts = new Map(),pools=new Map(),days=new Map();
+  const onDay=day=>{
+    if(!days.has(day))days.set(day,{accounts:new Set(),visits:[]});
+    return days.get(day);
+  };
+  const addCredit=(account,date,amount,receipt)=>{
+    account.credits.push({date,amount,remaining:amount,covered:0,receipt});
+    onDay(date).accounts.add(account);
+  };
   for (const service of Object.values(accounting(state).services)) {
     if (service.kind !== 'personal' || (clientId && service.clientId !== clientId)) continue;
-    const advance = service.openingCredit;
-    const credits = advance?.date <= through ? [{date:advance.date,remaining:advance.amount}] : [];
-    accounts.set(service.id,{service,visits:new Map(),credits});
+    const account={service,visits:new Map(),credits:[],pending:[],firstVisit:0,firstCredit:0};
+    accounts.set(service.id,account);
+    const key=personalPoolKey(service);
+    if(!pools.has(key))pools.set(key,[]);
+    pools.get(key).push(account);
+    const opening=service.openingCredit;
+    if(opening?.date<=through)addCredit(account,opening.date,opening.amount);
   }
   const entries = operations(state).sort((a,b)=>a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
   for (const operation of entries) {
     if (operation.date > through) continue;
-    if (operation.kind === 'session') accounts.get(operation.serviceId)?.visits.set(operation.id,{
-      session:operation,remaining:operation.amount,fromAdvance:0,paidOn:null,receiptIds:new Set()
-    });
+    if(operation.kind==='session'){
+      const account=accounts.get(operation.serviceId);
+      if(!account)continue;
+      const visit={session:operation,remaining:operation.amount,fromAdvance:0,fromOtherAdvance:0,paidOn:null,receiptIds:new Set()};
+      account.visits.set(operation.id,visit);
+      const day=onDay(operation.date);
+      day.accounts.add(account);day.visits.push({account,visit});
+    }
     if (operation.kind !== 'payment') continue;
     for (const allocation of operation.allocations) {
-      accounts.get(allocation.serviceId)?.credits.push({date:operation.date,remaining:allocation.credit,receiptId:operation.id,sessionId:operation.sessionId});
+      const account=accounts.get(allocation.serviceId);
+      if(account)addCredit(account,operation.date,allocation.credit,operation);
     }
   }
-  const apply = (visit, credit) => {
+  const apply = (visit, credit, shared=false) => {
     const amount = Math.min(visit.remaining,credit.remaining);
     if (!amount) return;
     visit.remaining -= amount;
     credit.remaining -= amount;
-    if (credit.date < visit.session.date || !credit.receiptId && credit.date === visit.session.date) visit.fromAdvance += amount;
+    if(shared)visit.fromOtherAdvance+=amount;
+    if(shared||credit.date<visit.session.date||!credit.receipt&&credit.date===visit.session.date)visit.fromAdvance+=amount;
+    if(!shared&&visit.session.date<=credit.date)credit.covered+=amount;
     if (!visit.paidOn || credit.date > visit.paidOn) visit.paidOn = credit.date;
-    if (credit.receiptId) visit.receiptIds.add(credit.receiptId);
+    if(credit.receipt)visit.receiptIds.add(credit.receipt.id);
   };
   for (const {visits,credits} of accounts.values()) {
     credits.sort((a,b)=>a.date.localeCompare(b.date));
     for (const credit of credits) {
-      const targeted = visits.get(credit.sessionId);
+      const targeted = visits.get(credit.receipt?.sessionId);
       if (targeted) apply(targeted,credit);
     }
-    let index = 0;
-    for (const visit of visits.values()) {
-      while (visit.remaining && index < credits.length) {
-        const credit = credits[index];
+  }
+  // Settle each day within each tariff first. Only then spend free advance at another venue.
+  for(const date of [...days.keys()].sort()){
+    const day=days.get(date);
+    for(const {account,visit} of day.visits)account.pending.push(visit);
+    for(const account of day.accounts){
+      while(account.firstVisit<account.pending.length){
+        const visit=account.pending[account.firstVisit];
+        if(!visit.remaining){account.firstVisit++;continue;}
+        const credit=account.credits[account.firstCredit];
+        if(!credit||credit.date>date)break;
+        if(!credit.remaining){account.firstCredit++;continue;}
         apply(visit,credit);
-        if (!credit.remaining) index++;
+      }
+    }
+    for(const {account,visit} of day.visits){
+      if(!visit.session.usePersonalAdvance||!visit.remaining)continue;
+      const credits=pools.get(personalPoolKey(account.service)).filter(donor=>canShareAdvance(donor,account.service,visit.session.place))
+        .flatMap(donor=>donor.credits.filter(c=>c.remaining&&c.date<=date&&!c.receipt?.sessionId))
+        .sort((a,b)=>a.date.localeCompare(b.date));
+      for(const credit of credits){
+        if(!visit.remaining)break;
+        apply(visit,credit,true);
       }
     }
   }
@@ -1061,13 +1111,14 @@ export function currentPaymentStatuses(state, today = localDate(), clientId) {
   const credits = monthlyCredits(state,today);
   const result = new Map();
   const movements = new Map();
+  const personal=personalSettlements(state,today,clientId);
   for (const service of Object.values(accounting(state).services)) {
     const client = state.clients[service.clientId];
     if ((clientId && clientId !== service.clientId) || client?.status !== 'Активный' || client.mergedInto) continue;
     const active = activeService(service,today);
     if (service.kind === 'personal') {
       if (!service.oneOff && !active) continue;
-      const { balance, used } = serviceBalance(state,service.id,today);
+      const { balance, used } = personalBalance(personal.get(service.id));
       if (service.oneOff && balance >= 0) continue;
       result.set(service.id, { type:balance < 0 ? 'pending' : balance > 0 || used ? 'paid' : 'none', balance, used });
       continue;

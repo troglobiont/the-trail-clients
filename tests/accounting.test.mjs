@@ -126,6 +126,45 @@ test('a one-off visit leaves a payable balance without creating a recurring tari
   assert.doesNotThrow(()=>parseImport(exportState(state)));
 });
 
+test('a gym calendar visit consumes available outdoor advance without adding a receipt', () => {
+  const state=emptyState(),client=createClient(state,{name:'Тестовый клиент'},'2024-10-01');
+  const terms={kind:'personal',block:'personal',day:null,rate:400000,reminder:false};
+  const outdoor=enrollment(state,client,{...terms,place:'Улица'});
+  const gym=enrollment(state,client,{...terms,place:'Зал'});
+  const receipt=payment(state,'2024-10-01','RSD',1600000,[credit(outdoor,null,1600000)]);
+  const details={clientId:client.id,serviceId:gym.id,date:'2024-10-05',currency:'RSD',amount:400000,place:'Зал',
+    sessionId:'test-calendar-session',paymentId:'test-calendar-payment'};
+  assert.equal(A.availablePersonalAdvance(state,gym,details.date),1600000);
+  A.recordCalendarSession(state,details);
+  const settlement=A.personalVisitSettlements(state,client.id,details.date).get(details.sessionId);
+  assert.equal(settlement.fromOtherAdvance,400000);
+  assert.deepEqual([...settlement.receiptIds],[receipt.id]);
+  assert.equal(A.serviceBalance(state,outdoor.id,details.date).balance,1200000);
+  assert.equal(A.serviceBalance(state,gym.id,details.date).balance,0);
+  assert.equal(A.currentPaymentStatuses(state,details.date,client.id).get(gym.id).type,'paid');
+  assert.deepEqual(A.personalReceivables(state,details.date,client.id),[]);
+  assert.deepEqual(A.personalBalances(state,details.date),{advance:{RSD:1200000},debt:{}});
+  assert.deepEqual(A.summarize(state,'2024-10').receipts,{RSD:1600000});
+  A.setVoided(state,details.sessionId,true);
+  assert.equal(A.serviceBalance(state,outdoor.id,details.date).balance,1600000);
+});
+
+test('a visit only draws same-currency advance from the same client and keeps any unpaid difference', () => {
+  const state=emptyState(),client=createClient(state,{name:'Тестовый клиент'},'2024-10-01');
+  const other=createClient(state,{name:'Другой клиент'},'2024-10-01');
+  const terms={kind:'personal',block:'personal',day:null,rate:400000,reminder:false};
+  const outdoor=enrollment(state,client,{...terms,place:'Улица',openingCredit:{date:'2024-10-01',amount:250000}});
+  enrollment(state,client,{...terms,place:'Улица',rate:4000,currency:'EUR',openingCredit:{date:'2024-10-01',amount:4000}});
+  enrollment(state,other,{...terms,place:'Улица',openingCredit:{date:'2024-10-01',amount:400000}});
+  const [gym]=A.savePersonalVisit(state,{clientId:client.id,oneOff:true,place:'Зал',currency:'RSD',rate:400000,date:'2024-10-05'});
+  const later=A.saveOperation(state,{kind:'session',serviceId:outdoor.id,place:'Улица',currency:'RSD',
+    amount:400000,date:'2024-10-07',note:''});
+  const [gymDebt,outdoorDebt]=A.personalReceivables(state,later.date,client.id);
+  assert.deepEqual(gymDebt.unpaid,[{session:gym,remaining:150000}]);
+  assert.deepEqual(outdoorDebt.unpaid,[{session:later,remaining:400000}]);
+  assert.deepEqual(A.personalBalances(state,later.date),{advance:{RSD:400000,EUR:4000},debt:{RSD:550000}});
+});
+
 test('receivables apply linked receipts to their own sessions and general payments to the oldest open balance', () => {
   const state=emptyState();
   const client=createClient(state,{name:'Клиент'},'2024-10-01');
