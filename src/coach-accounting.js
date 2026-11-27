@@ -36,6 +36,10 @@ export function groupStaffing(state,event){
   const ref=groupEventReference(event);
   return ref&&state.events.find(entry=>entry.type===GROUP_STAFFING&&entry.calendarRef===ref);
 }
+export function groupCancellations(state,from,to){
+  return state.events.filter(e=>e.type===GROUP_STAFFING&&e.cancellation?.day>=from&&e.cancellation.day<=to)
+    .map(e=>e.cancellation).sort((a,b)=>a.start.localeCompare(b.start));
+}
 export const coachCash=(state,coachId)=>state.events.filter(e=>e.type===COACH_CASH&&(!coachId||e.clientId===coachId))
   .sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)||a.id.localeCompare(b.id));
 
@@ -53,6 +57,7 @@ export function updateGroupStaffing(state,eventKey,event,{action,coachId,request
   if(Date.parse(event.start)<=now.getTime())throw Error('Тренировка уже началась');
   const previous=groupStaffing(state,event);
   if((previous?.revision??0)!==revision)throw Error('Назначение изменилось. Открой тренировку снова');
+  if(previous?.cancellation)throw Error('Тренировка отменена');
   const admin=context.role==='superadmin';
   if(action==='request'){
     if(context.role!=='coach'||!trainer(staff(state,context.coachId)))throw Error('Запрос может отправить тренер');
@@ -76,6 +81,19 @@ export function updateGroupStaffing(state,eventKey,event,{action,coachId,request
     }else throw Error('Действие с назначением неизвестно');
   }
   return replaceEvent(state,{...entry,updatedAt:at,revision:entry.revision+1});
+}
+
+export function saveGroupCancellation(state,eventKey,event,comment,context,now=new Date()){
+  if(context.role!=='superadmin')throw Error('Расписание меняет суперадмин');
+  const calendarRef=groupEventReference(event);
+  if(!key(eventKey)||!calendarRef||!note(calendarRef)||event.kind!=='group'||!timestamp(event.start)
+      ||!note(event.location,180)||!note(comment,300))throw Error('Проверь данные отмены');
+  const existing=groupStaffing(state,event);
+  if(existing?.cancellation)return existing;
+  const at=now.toISOString();
+  const entry=existing??{id:eventKey,type:GROUP_STAFFING,calendarRef,at,revision:0,coachId:null,draftCoachId:null,requests:{}};
+  const cancellation={day:localDate(new Date(event.start)),start:event.start,location:event.location,comment:comment.trim()};
+  return replaceEvent(state,{...entry,cancellation,updatedAt:at,revision:entry.revision+1});
 }
 
 export function saveGroupCompletion(state,eventKey,event,coachId,context,voided=false,now=new Date()){
@@ -161,6 +179,8 @@ export function validateCoachAccounting(state){
       if(!key(e.id)||seen.has(e.id)||!e.calendarRef||!note(e.calendarRef,1000)||staffed.has(e.calendarRef)
         ||!timestamp(e.at)||!timestamp(e.updatedAt)||!Number.isSafeInteger(e.revision)||e.revision<1
         ||e.coachId!==null&&!knownCoach(e.coachId)||e.draftCoachId!==null&&!knownCoach(e.draftCoachId)
+        ||e.cancellation!==undefined&&(!validDate(e.cancellation?.day)||!timestamp(e.cancellation.start)
+          ||!note(e.cancellation.location,180)||!note(e.cancellation.comment,300))
         ||!e.requests||typeof e.requests!=='object'||Array.isArray(e.requests)
         ||Object.entries(e.requests).some(([id,r])=>!knownCoach(id)||!knownCoach(r?.coachId)||!timestamp(r.at)))
         throw Error('Некорректное назначение группового тренера');

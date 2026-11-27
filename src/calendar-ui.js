@@ -126,6 +126,7 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
   const selectedClients = new Map();
   const aligning = new Set();
   let archiveView,staffingWeek;
+  const copiedGroupWeeks=new Set();
   const load = dataSource.load;
   const timeRange = event => clock.format(new Date(event.start)) + '–' + clock.format(new Date(event.end));
   async function personalWeek(clientId, weekStart) {
@@ -220,8 +221,8 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
   }
 
   function groupSchedule(){
-    return createGroupStaffingUI({state,context:roleContext,el,append,text,button,row,field,input,modal,formatDate,timeRange,
-      navigate,commit,message,loadWeek:dataSource.loadWeek,initialWeek:staffingWeek,onWeekChange:day=>{staffingWeek=day;},
+    return createGroupStaffingUI({state,context:roleContext,el,append,text,button,row,field,input,modal,section,formatDate,timeRange,
+      navigate,commit,message,loadWeek:dataSource.loadWeek,initialWeek:staffingWeek,copiedWeeks:copiedGroupWeeks,onWeekChange:day=>{staffingWeek=day;},
       writeCalendar:async action=>{
         try{return await writeGroupCalendar(action);}
         finally{dataSource.invalidate();}

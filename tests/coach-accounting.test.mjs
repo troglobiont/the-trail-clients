@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createClient,emptyState,mergeState,validateState} from '../src/core.js';
 import {accounting,clientAccountHistory,saveService} from '../src/accounting.js';
-import {GROUP_REPORT,groupCompletion,groupEventReference,groupStaffing,saveGroupCompletion,submitCoachCash,reviewCoachCash,coachCash,updateGroupStaffing} from '../src/coach-accounting.js';
+import {GROUP_REPORT,groupCancellations,groupCompletion,groupEventReference,groupStaffing,saveGroupCancellation,saveGroupCompletion,submitCoachCash,reviewCoachCash,coachCash,updateGroupStaffing} from '../src/coach-accounting.js';
 import {groupCoach,OWNER_COACH} from '../src/role-preview.js';
 import {athleteScheduleEntries} from '../src/calendar-ui.js';
 import {saveTeamEntry,saveTeamGroupRate,saveTeamProfile,saveTeamVisibility,teamEntries,teamMonthFinance,teamSummary} from '../src/team.js';
@@ -170,6 +170,19 @@ test('administrator drafts take effect in the schedule and requests still requir
   beginCloudSync(imported,'10000000-0000-4000-8000-000000000001');
   receiveCloudData(imported,{revision:1,data:cloudData(state)});
   assert.equal(groupCoach(moved,imported),other.id);
+});
+
+test('group cancellations preserve the note and can be retried without duplicating the event',()=>{
+  const {state,trainer,coach}=fixture();
+  const before=new Date(day+'T14:00:00Z');
+  const edit={action:'draft',revision:0,coachId:trainer.id};
+  updateGroupStaffing(state,'staffing-1',group,edit,admin,before);
+  assert.throws(()=>saveGroupCancellation(state,'staffing-1',group,'Дождь',coach,before),/суперадмин/u);
+  const cancelled=saveGroupCancellation(state,'staffing-1',group,' Дождь ',admin,before);
+  assert.equal(saveGroupCancellation(state,'staffing-1',group,'Дождь',admin,before),cancelled);
+  assert.deepEqual(groupCancellations(state,day,day),[{day,start:group.start,location:group.location,comment:'Дождь'}]);
+  assert.throws(()=>updateGroupStaffing(state,'staffing-1',group,{...edit,revision:cancelled.revision},admin,before),/отменена/u);
+  validateState(state);
 });
 
 test('invited coaches keep their team history and calendar identity but cannot receive a new group assignment',()=>{

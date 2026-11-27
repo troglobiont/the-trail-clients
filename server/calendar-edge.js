@@ -66,6 +66,7 @@ export function calendarEvent(raw,calendar,includeGroups=false) {
     ...(raw.description?.split('\n').includes(draftLine)&&{assignmentStatus:'draft'}),
     ...(raw.description?.split('\n').includes(approvedLine)&&{assignmentStatus:'approved'}),
     ...(raw.colorId&&{colorId:raw.colorId}),
+    ...(raw.extendedProperties?.private?.trailGroupCopy&&{copiedWeek:raw.extendedProperties.private.trailGroupCopy}),
     canEdit:Boolean(raw.etag&&!raw.recurrence),url};
   return {id:raw.id,title,start:raw.start.dateTime,end:raw.end.dateTime,location:raw.location||'',
     clientId:raw.extendedProperties?.private?.trailClientId || null,
@@ -154,28 +155,35 @@ async function editGroupEvent({input,calendarId,google,now}){
     throw changeError(409,'Можно изменить только предстоящую групповую встречу');
   const duration=Date.parse(current.end)-Date.parse(current.start);
   let body;
-  if(action==='move-group'){
+  if(action==='move-group'||action==='edit-group'){
     try{calendarRange({from:input.day,to:dayShift(input.day,1)});}
     catch{throw changeError(400,'Проверь дату тренировки');}
     if(typeof input.time!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/u.test(input.time))
       throw changeError(400,'Проверь время тренировки');
     body=timedFields(input.day,input.time+':00',duration);
     if(Date.parse(body.start.dateTime)<=now())throw changeError(400,'Выбери дату и время в будущем');
-    if(Date.parse(body.start.dateTime)===Date.parse(current.start))return {event:current};
+    if(action==='move-group'&&Date.parse(body.start.dateTime)===Date.parse(current.start))return {event:current};
   }
-  if(action==='assign-group'){
+  const place=action==='edit-group'?input.location:current.title.split('·')[1].trim();
+  if(action==='edit-group'){
+    if(!label(place))throw changeError(400,'Укажи место тренировки');
+    body.location=place.trim();
+    body.summary='Группа · '+body.location+' · '+current.coachName;
+  }
+  if(action==='assign-group'||action==='edit-group'&&input.coachName!==undefined){
     if(!label(input.coachName)||!['draft','approved'].includes(input.status))
       throw changeError(400,'Проверь тренера и статус назначения');
     const coach=input.coachName.trim();
-    body=staffingFields(current.title.split('·')[1].trim(),coach,input.status,raw.description);
+    body={...body,...staffingFields(place.trim(),coach,input.status,raw.description)};
     const colorId=colorForCoach(coach);
     if(colorId)body.colorId=colorId;
     else if(coach!==current.coachName)body.colorId=null;
     body.extendedProperties={private:{...raw.extendedProperties?.private,trailRosterCoach:current.rosterCoachName}};
-    if(current.coachName===coach&&current.assignmentStatus===input.status&&(!colorId||current.colorId===colorId))return {event:current};
+    if(action==='assign-group'&&current.coachName===coach&&current.assignmentStatus===input.status&&(!colorId||current.colorId===colorId))
+      return {event:current};
   }
   if(['start','end','location'].some(key=>expected[key]!==current[key])
-      ||action==='assign-group'&&expected.coachName!==current.coachName)throw conflict();
+      ||['assign-group','edit-group'].includes(action)&&expected.coachName!==current.coachName)throw conflict();
   const changed=await google(path,{sendUpdates:'none',...(body&&{fields})},{method:body?'PATCH':'DELETE',body,etag:raw.etag,write:true});
   if(action==='cancel-group'&&[404,410].includes(changed.status))return {cancelled:true};
   if([404,410,412].includes(changed.status))throw conflict();
@@ -232,7 +240,7 @@ export function createCalendarHandler({env,fetch:request=fetch,now=Date.now}) {
         input=JSON.parse(body);
         if(!input||typeof input!=='object'||Array.isArray(input))throw Error();
         if(input.action===undefined)calendarRange(input);
-        else if(!['copy-group-week','move-group','cancel-group','assign-group'].includes(input.action))throw Error();
+        else if(!['copy-group-week','move-group','edit-group','cancel-group','assign-group'].includes(input.action))throw Error();
       } catch { return reply(400,{error:'Проверь даты расписания'}); }
       const settings = env('TRAIL_GOOGLE_CALENDAR');
       if (!settings) return reply(503,{error:'Облачное расписание ещё не подключено'});

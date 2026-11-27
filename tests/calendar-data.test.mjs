@@ -210,8 +210,19 @@ test('copy, move and cancel use the club calendar and do not recreate processed 
   assert.equal(assigned.colorId,'10');
   assert.equal(assigned.assignmentStatus,'approved');
   assert.equal(assigned.start,moved.start);
+  assert.equal(assigned.copiedWeek,copy.from);
+  const revised={action:'edit-group',id,expected:{...expected,start:assigned.start,end:assigned.end,coachName:assigned.coachName},
+    day:'2027-04-03',time:'18:00',location:'Стадион',coachName:'Алексей Тестов',status:'draft'};
+  const previousWrites=log.length;
+  const {event:changed}=await (await send(revised)).json();
+  assert.equal(log.length,previousWrites+1);
+  assert.equal(changed.start,assigned.start);
+  assert.equal(changed.location,'Стадион');
+  assert.equal(changed.title,'Группа · Стадион · Алексей Тестов');
+  assert.equal(changed.assignmentStatus,'draft');
+  assert.equal(changed.colorId,'6');
   assert.deepEqual(await (await send(copy)).json(),{created:0,skipped:2,failed:0,sourceCount:2});
-  const cancel={action:'cancel-group',id,expected:{start:moved.start,end:moved.end,location:moved.location}};
+  const cancel={action:'cancel-group',id,expected:{start:changed.start,end:changed.end,location:changed.location}};
   assert.deepEqual(await (await send(cancel)).json(),{cancelled:true});
   assert.deepEqual(await (await send(copy)).json(),{created:0,skipped:2,failed:0,sourceCount:2});
   assert.equal(rows.get(id).status,'cancelled');
