@@ -3,8 +3,9 @@ import {linkCalendarTask, normalizeSearch} from './core.js';
 import {accounting, activeService, availablePersonalAdvance, clientServices, money, personalVisitSettlements, serviceBalance, tariffLabel} from './accounting.js';
 import {createCalendarData} from './calendar-data.js';
 import {assignedCoach,calendarGroupCoach,coachContact,groupCoach,OWNER_COACH,previewCoaches,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
-import {GROUP_REPORT,groupCompletion,groupEventReference,groupRecords,saveGroupCompletion} from './coach-accounting.js';
+import {GROUP_REPORT,groupCompletion,groupEventReference,groupRecords,saveGroupCancellation,saveGroupCompletion} from './coach-accounting.js';
 import {createGroupStaffingUI,GROUP_STAFFING_ROUTE} from './group-staffing-ui.js';
+import {createScheduleCancellation} from './schedule-cancellation-ui.js';
 
 const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit'});
 const monthFormat = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, month:'long', year:'numeric'});
@@ -98,6 +99,28 @@ export function personalWeekMeetings(state, clientId, events) {
     });
 }
 
+const rosterCoach=(state,event)=>calendarGroupCoach({...event,coachName:event.rosterCoachName||event.coachName},state);
+const groupEligible=(tariff,day)=>tariff.kind==='belgrade'&&activeService(tariff,day);
+
+export function cancellationRecipients(state,event,selectedId) {
+  if(event.kind==='group'){
+    const coach=rosterCoach(state,event);
+    const day=localDate(new Date(event.start));
+    if(!coach)return [];
+    return [...new Set(Object.values(accounting(state).services).filter(tariff=>groupEligible(tariff,day)).map(tariff=>tariff.clientId))]
+      .map(id=>state.clients[id]).filter(client=>client?.role==='Клиент'&&!client.mergedInto&&client.status==='Активный'
+        &&assignedCoach(state,client)===coach)
+      .sort((a,b)=>a.name.localeCompare(b.name,'ru'));
+  }
+  const manual=selectedId&&calendarClient(event,state.clients,selectedId);
+  if(manual)return [manual];
+  const named=calendarClient({...event,clientId:null},state.clients,undefined,{allowFirstName:false});
+  const ids=[event.clientId,...Object.values(state.tasks).filter(task=>task.calendarEvent?.id===event.id).map(task=>task.clientId)].filter(Boolean);
+  const linked=ids.map(id=>calendarClient(event,state.clients,id));
+  const client=linked[0]||named;
+  return client&&linked.every(item=>item?.id===client.id)&&(!named||named.id===client.id)?[client]:[];
+}
+
 export function athleteScheduleEntries(state, clientId, events) {
   const client = state.clients[clientId];
   if (client?.role!=='Клиент' || client.mergedInto) return [];
@@ -110,8 +133,8 @@ export function athleteScheduleEntries(state, clientId, events) {
       return meeting ? [{event,client,day:meeting.day}] : [];
     }
     const day = localDate(new Date(event.start));
-    return groupTariffs.some(tariff=>activeService(tariff,day)) &&
-      calendarGroupCoach({...event,coachName:event.rosterCoachName||event.coachName},state)===coachId
+    return groupTariffs.some(tariff=>groupEligible(tariff,day)) &&
+      rosterCoach(state,event)===coachId
       ? [{event,day}] : [];
   });
 }
@@ -129,6 +152,8 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
   const copiedGroupWeeks=new Set();
   const load = dataSource.load;
   const timeRange = event => clock.format(new Date(event.start)) + '–' + clock.format(new Date(event.end));
+  const cancelTraining=createScheduleCancellation({state,service,roleContext,el,append,text,button,field,input,modal,formatDate,timeRange,message,
+    recipientsFor:event=>cancellationRecipients(state(),event,selectedClients.get(event.id))});
   async function personalWeek(clientId, weekStart) {
     if (!clientServices(state(),clientId).some(service=>service.kind==='personal')) return {sessions:[]};
     const data = await dataSource.loadWeek(weekStart);
@@ -227,7 +252,7 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
         try{return await writeGroupCalendar(action);}
         finally{dataSource.invalidate();}
       },
-      eventKey:async event=>(await sessionIds('staffing:'+groupEventReference(event))).sessionId});
+      eventKey:staffingKey,cancelTraining:cancelGroup});
   }
 
   function pastSchedule(kind, context) {
@@ -355,14 +380,19 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
     },{onSaved:()=>{onSaved(updated);message('Тренировка обновлена в календаре');}});
   }
 
-  function cancelEvent(event, back) {
-    modal('Отменить тренировку',form=>{
-      append(form,text([formatDate(localDate(new Date(event.start))),timeRange(event)].join(' · ')),
-        text('Встреча будет убрана из расписания и Google Календаря.'));
-      return ()=>changeEvent(event,'cancel');
-    },{saveLabel:'Отменить тренировку',saveClass:'danger',cancelLabel:'Назад',onSaved:()=>{
-      navigate(back);message('Тренировка отменена');
-    }});
+  async function staffingKey(event){
+    return (await sessionIds('staffing:'+groupEventReference(event))).sessionId;
+  }
+
+  function cancelGroup(event,onCancelled){
+    cancelTraining(event,async comment=>{
+      if(roleContext().role!=='superadmin')throw Error('Расписание меняет суперадмин');
+      const id=await staffingKey(event),{start,end,location}=event;
+      const result=await writeGroupCalendar({action:'cancel-group',id:event.id,expected:{start,end,location}});
+      if(!result?.cancelled)throw Error('Google Календарь не подтвердил отмену');
+      dataSource.invalidate();
+      await commit(s=>saveGroupCancellation(s,id,event,comment,roleContext()),false);
+    },onCancelled);
   }
 
   function session(eventId, month) {
@@ -417,7 +447,10 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
           !athlete&&event.coachName&&(calendarGroupCoach(event,state())!==matched||entry&&expectedCoach?.id!==actual?.id)
             &&text('В Google Календаре · '+event.coachName),
           text([formatDate(date),timeRange(event)].join(' · '),'calendar-time'),
-          !athlete&&eventLink(event,'Открыть в Google Календаре'),actions?.children?.length&&actions),...(athlete?[]:[groupProtocol(date)]));
+          !athlete&&eventLink(event,'Открыть в Google Календаре'),actions?.children?.length&&actions,
+          canManage&&mode==='live'&&event.canEdit&&Date.parse(event.start)>Date.now()&&
+            button('Отменить тренировку',()=>cancelGroup(event,()=>navigate(back)),'subtle danger')),
+          ...(athlete?[]:[groupProtocol(date)]));
         return;
       }
       const {services,operations} = accounting(s);
@@ -466,11 +499,12 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
             recorded && el('span','Проведена','chip')),
           text([date===localDate()?'Сегодня':null,formatDate(date),timeRange(event)].filter(Boolean).join(' · '),'calendar-time'),
           event.location && el('p',event.location),
-          !client && button('Выбрать клиента',pickClient,'subtle'),
+          (!client||!started&&roleContext().role==='superadmin'&&!cancellationRecipients(s,event,selectedClients.get(event.id)).length)
+            &&button(client?'Уточнить клиента':'Выбрать клиента',pickClient,'subtle'),
           eventLink(event,'Открыть в Google Календаре'),
           !recorded && mode==='live' && event.canEdit && row(
             button('Изменить',()=>editEvent(event,updated=>display(updated,ids,mode)),'subtle'),
-            button('Отменить тренировку',()=>cancelEvent(event,back),'subtle danger'))));
+            button('Отменить тренировку',()=>cancelTraining(event,()=>changeEvent(event,'cancel'),()=>navigate(back)),'subtle danger'))));
       if (!client) return;
       const actions = el('section',null,'stack calendar-actions');
       append(actions,tariff && append(el('div',null,'row between'),el('h2',tariffLabel(tariff)),

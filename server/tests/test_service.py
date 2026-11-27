@@ -46,6 +46,21 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             telegram_send({"peerId": "123", "accountPeerId": "wrong", "text": "Привет! Как дела?"})
 
+    def test_cancellation_message_uses_existing_idempotent_private_delivery(self):
+        text = "Групповая тренировка отменена.\n28 нояб. · 18:00–19:00 · Парк\nИз-за погоды"
+        payload = {"peerId": "123", "accountPeerId": "456", "kind": "training-cancellation",
+                   "text": text, "idempotencyKey": "cancel-" + "c" * 64}
+        with patch('server.service.cached_operation', return_value={"messageId": "789"}) as operation:
+            self.assertEqual(telegram_send(payload), {"messageId": "789"})
+            self.assertEqual(operation.call_args.args[:2], ("telegram-" + payload["idempotencyKey"],
+                            {"peerId": "123", "accountPeerId": "456", "text": text}))
+            for change in ({"kind": None}, {"peerId": "-100123"}, {"idempotencyKey": "other"},
+                           {"text": "Групповая тренировка отменена.\nПроизвольный текст"},
+                           {"text": text + "x" * 300}):
+                with self.assertRaises(ValueError):
+                    telegram_send({**payload, **change})
+            operation.assert_called_once()
+
     def test_invalid_voice_never_calls_upstream(self):
         with self.assertRaises(ValueError):
             transcribe({"mime": "text/html", "audio": "invalid"})

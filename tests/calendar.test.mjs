@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {createClient, emptyState, linkCalendarTask} from '../src/core.js';
 import * as A from '../src/accounting.js';
 import {localDate} from '../src/model-utils.js';
-import {athleteScheduleEntries, athleteScheduleKinds, calendarClient, calendarPlace, isSchedulingTask, matchesScheduleKind, personalWeekMeetings, taskCalendarChoices} from '../src/calendar-ui.js';
+import {athleteScheduleEntries, athleteScheduleKinds, calendarClient, calendarPlace, cancellationRecipients, isSchedulingTask, matchesScheduleKind, personalWeekMeetings, taskCalendarChoices} from '../src/calendar-ui.js';
+import {cancellationText,notifyCancellation} from '../src/schedule-cancellation-ui.js';
 import {athletePlanSessions} from '../src/training-calendar-ui.js';
 import {calendarEvent} from '../server/calendar-edge.js';
 import {OWNER_COACH,previewGroupScheduleVisible} from '../src/role-preview.js';
@@ -66,6 +67,47 @@ test('schedule filters keep group meetings separate from personal gym and outdoo
   assert.deepEqual(events.filter(event=>matchesScheduleKind(event,null)),events);
   assert.deepEqual(events.filter(event=>matchesScheduleKind(event,'group')),[group]);
   assert.deepEqual(events.filter(event=>matchesScheduleKind(event,'gym')),[gym]);
+});
+
+test('cancellation includes the calendar roster and only an unambiguous personal client',()=>{
+  const state=emptyState(), first=createClient(state,{name:'Тестов Иван'}),
+    second=createClient(state,{name:'Тестова Мария'}), paused=createClient(state,{name:'Примерова Мария',status:'На паузе'}),
+    coach=createClient(state,{name:'Тестов Алексей',role:'Тренер'});
+  second.coachId=coach.id;
+  for(const client of [first,second,paused]){
+    A.saveService(state,{clientId:client.id,kind:'belgrade',block:'belgrade',place:null,currency:'RSD',rate:800000,
+      startsOn:'2026-11-01',endsOn:null,day:20,reminder:false});
+  }
+  const group={id:'group',kind:'group',start:'2026-11-28T18:00:00+01:00',coachName:'Алексей',rosterCoachName:'Сергей'};
+  assert.deepEqual(cancellationRecipients(state,group).map(c=>c.id),[first.id]);
+  assert.deepEqual(cancellationRecipients(state,{...group,rosterCoachName:'Другой'}),[]);
+  const personal={id:'personal',title:'Персональная · Тестова Мария · Сергей'};
+  assert.deepEqual(cancellationRecipients(state,personal).map(c=>c.id),[second.id]);
+  assert.deepEqual(cancellationRecipients(state,{...personal,clientId:first.id}),[]);
+  assert.deepEqual(cancellationRecipients(state,{...personal,title:'Персональная · Иван · Сергей'}),[]);
+  assert.deepEqual(cancellationRecipients(state,personal,first.id).map(c=>c.id),[first.id]);
+});
+
+test('cancellation retries use the same key and never send to a changed or duplicated recipient',async()=>{
+  const event={id:'group',kind:'group',start:'2026-11-28T18:00:00+01:00',location:'Парк'};
+  const body=cancellationText(event,'28 нояб.','18:00–19:00','Из-за погоды');
+  const binding={peerId:'123',accountPeerId:'456'};
+  const clients={a:{id:'a',telegram:binding},b:{id:'b',telegram:binding},c:{id:'c',telegram:{...binding,peerId:'789'}}};
+  const calls=[];
+  const send=(recipients)=>notifyCancellation({event,body,state:()=>({clients}),
+    recipients:recipients.map(client=>({client,binding})),service:async(path,payload)=>{
+      if(path==='/telegram/status')return {connected:true,account:{peerId:'456'}};
+      calls.push(payload);
+      return calls.length===1?{error:'timeout'}:{messageId:'10',sentAt:'2026-11-27T13:00:00Z'};
+    }});
+  const results=await send(Object.values(clients));
+  assert.equal(calls.length,1);
+  assert.match(results[0].error,/не подтвердил/u);
+  assert.equal(results[1].error,results[0].error);
+  assert.match(results[2].error,/изменилась/u);
+  assert.equal((await send([clients.a]))[0].error,null);
+  assert.deepEqual(calls[0],calls[1]);
+  assert.match(calls[0].text,/18:00–19:00 · Парк\nИз-за погоды/u);
 });
 
 test('the athlete week requires an unambiguous client and a personal tariff at the venue on that date', () => {

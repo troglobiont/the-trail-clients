@@ -1,5 +1,5 @@
 import {addDays,localDate} from './model-utils.js';
-import {assignableGroupCoach,groupCancellations,groupStaffing,saveGroupCancellation,updateGroupStaffing} from './coach-accounting.js';
+import {assignableGroupCoach,groupCancellations,groupStaffing,updateGroupStaffing} from './coach-accounting.js';
 import {calendarGroupCoach,coachContact,groupCoach,previewCoaches} from './role-preview.js';
 import {inlineSelect} from './inline-select.js';
 
@@ -7,7 +7,7 @@ export const GROUP_STAFFING_ROUTE='#todo/schedule/group-staffing';
 const expectedEvent=({start,end,location,coachName})=>({start,end,location,coachName});
 
 export function createGroupStaffingUI({state,context,el,append,text,button,row,field,modal,section,
-  input,formatDate,timeRange,navigate,commit,message,loadWeek,writeCalendar,eventKey,initialWeek,onWeekChange,copiedWeeks}){
+  input,formatDate,timeRange,navigate,commit,message,loadWeek,writeCalendar,eventKey,initialWeek,onWeekChange,copiedWeeks,cancelTraining}){
   const today=localDate();
   const monday=addDays(today,-((new Date(today+'T12:00:00Z').getUTCDay()+6)%7));
   const viewer=context(),admin=viewer.role==='superadmin';
@@ -116,21 +116,6 @@ export function createGroupStaffingUI({state,context,el,append,text,button,row,f
     },{saveLabel:'Утвердить'});
   }
 
-  function cancelTraining(event,from){
-    modal('Отменить групповую тренировку',form=>{
-      const comment=el('textarea');comment.rows=2;comment.maxLength=300;
-      form.append(text([formatDate(localDate(new Date(event.start))),timeRange(event),event.location].join(' · ')),
-        field('Комментарий к отмене',comment));
-      return async()=>{
-        const id=await eventKey(event);
-        await write({action:'cancel-group',id:event.id,expected:expectedEvent(event)});
-        await commit(draft=>saveGroupCancellation(draft,id,event,comment.value,context()),false);
-        await refresh(from);
-        message('Тренировка отменена');
-      };
-    },{saveLabel:'Отменить тренировку',cancelLabel:'Назад',saveClass:'danger'});
-  }
-
   function editTraining(item,from){
     const {event,current}=item;
     const startDay=localDate(new Date(event.start)),startTime=timeRange(event).split('–')[0].trim();
@@ -139,7 +124,7 @@ export function createGroupStaffingUI({state,context,el,append,text,button,row,f
       day.min=today;day.required=time.required=location.required=true;location.maxLength=180;
       const coach=chooseCoach(form,current?.id,'Предварительно назначить');
       form.append(row(field('Дата',day),field('Время Белграда',time)),field('Место',location),coach.field,
-        button('Отменить тренировку',()=>cancelTraining(event,from),'subtle danger'));
+        button('Отменить тренировку',()=>cancelTraining(event,()=>void refresh(from)),'subtle danger'));
       return async()=>{
         if(!form.reportValidity())throw Error('Проверь дату, время и место');
         const changeCoach=coach.value&&coach.value!==current?.id;

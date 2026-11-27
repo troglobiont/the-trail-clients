@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from server.calendar_sync import calendar_align, calendar_book, calendar_change, calendar_list
 
 TEMPLATES = {"Привет! Как дела?", "Привет! Как самочувствие?", "Привет! Как прошла тренировка?"}
+CANCELLATION_TITLES = {"Групповая тренировка отменена.", "Персональная тренировка отменена."}
 GOAL_STATUSES = {"Желание клиента", "Согласовано", "Предложение тренера", "Рабочая цель тренера"}
 MAX_BODY = 9 * 1024 * 1024
 LOCK = threading.Lock()
@@ -189,7 +190,15 @@ def telegram_send(payload):
     expected_account = payload.get("accountPeerId")
     text = payload.get("text")
     key = str(payload.get("idempotencyKey", ""))
-    if not re.fullmatch(r"[1-9][0-9]{0,18}", peer_id) or text not in TEMPLATES:
+    kind = payload.get("kind")
+    valid_text = isinstance(text, str) and kind is None and text in TEMPLATES
+    if kind == "training-cancellation" and isinstance(text, str) and len(text) <= 600:
+        lines = text.split("\n", 2)
+        valid_text = (len(lines) >= 2 and lines[0] in CANCELLATION_TITLES
+                      and bool(re.fullmatch(r"[^\r]{1,35} · \d{2}:\d{2}–\d{2}:\d{2}(?: · [^\r]{1,180})?", lines[1]))
+                      and (len(lines) < 3 or len(lines[2]) <= 300)
+                      and bool(re.fullmatch(r"cancel-[a-f0-9]{64}", key)))
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", peer_id) or not valid_text:
         raise ValueError("Проверь получателя и заготовку")
     if expected_account is not None and not re.fullmatch(r"[1-9][0-9]{0,18}", str(expected_account)):
         raise ValueError("Проверь аккаунт отправителя")
