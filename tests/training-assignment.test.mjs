@@ -4,7 +4,7 @@ import {cloudData} from '../src/cloud-state.js';
 import {createClient,emptyState} from '../src/core.js';
 import {OWNER_COACH,previewRoute,previewTrainingVisible} from '../src/role-preview.js';
 import {createStore} from '../src/store.js';
-import {applyTrainingAssignment,parseTrainingAssignment,trainingAssignmentFor} from '../src/training-assignment.js';
+import {applyTrainingAssignment,compareTrainingSessions,parseTrainingAssignment,trainingAssignmentFor} from '../src/training-assignment.js';
 
 const monday='2026-11-23';
 const source=(trainingPeaksId)=>({schemaVersion:1,trainingPeaksId,sources:{},entries:{},current:{},
@@ -63,4 +63,15 @@ test('the personal workout route respects owner, assigned coach and athlete prev
   assert(!previewTrainingVisible(state,rider,{role:'accountant'}));
   assert.equal(previewRoute('#calendar',athlete),'#calendar');
   assert.equal(previewRoute('#client/'+other.id+'/training-plan',athlete),'#profile');
+});
+
+test('external sessions keep their type and the report follows Sunday meetings',()=>{
+  const report={id:'993',day:'2026-11-29',title:'Weekly report',description:'Как прошла неделя?',kind:'weekly-report'};
+  const external={...workout,kind:'external',description:''};
+  const sunday={...workout,id:'994',day:report.day};
+  const week=parseTrainingAssignment(JSON.stringify({...packet,sessions:[report,external,sunday]}));
+  assert.deepEqual(week.sessions.map(x=>[x.id,x.kind]),[['991','external'],['994',undefined],['993','weekly-report']]);
+  const gym={id:'calendar:gym',day:report.day,kind:'gym'};
+  assert.deepEqual([...week.sessions,gym].sort(compareTrainingSessions).map(x=>x.id),['991','994','calendar:gym','993']);
+  assert.throws(()=>parseTrainingAssignment(JSON.stringify({...packet,sessions:[{...report,day:workout.day}]})),/конце недели/u);
 });

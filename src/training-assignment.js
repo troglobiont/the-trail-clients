@@ -3,6 +3,12 @@ import {addDays,localDate,validDate} from './model-utils.js';
 export const ASSIGNMENT_MAX_BYTES = 128 * 1024;
 const FORMAT = 'the-trail-athlete-training-week';
 const numericId = value => typeof value === 'string' && /^\d{1,24}$/.test(value);
+const textCardKinds = new Set(['external', 'weekly-report']);
+
+export function compareTrainingSessions(left, right){
+  return left.day.localeCompare(right.day)
+    || Number(left.kind==='weekly-report') - Number(right.kind==='weekly-report');
+}
 
 function workoutText(value,max,required=false){
   if(value==null&&!required)return '';
@@ -19,12 +25,20 @@ function normalizeAssignment(value){
     ||!validDate(checkedAt.slice(0,10))||!Number.isFinite(Date.parse(checkedAt)))throw Error('Проверь время сверки пакета.');
   if(!Array.isArray(sessions)||sessions.length>100)throw Error('Проверь список тренировок недели.');
   const ids=new Set(),end=addDays(weekStart,6);
+  let hasWeeklyReport=false;
   const workouts=sessions.map(session=>{
     if(!numericId(session?.id)||ids.has(session.id))throw Error('Проверь идентификаторы тренировок. Каждый должен быть уникальным.');
     if(!validDate(session.day)||session.day<weekStart||session.day>end)throw Error('Дата тренировки выходит за границы недели.');
+    const {kind}=session;
+    if(kind!==undefined&&!textCardKinds.has(kind))throw Error('Неизвестный тип карточки тренировочной недели.');
+    if(kind==='weekly-report'){
+      if(hasWeeklyReport||session.day!==end)throw Error('В конце недели может быть один недельный отчёт.');
+      hasWeeklyReport=true;
+    }
     ids.add(session.id);
-    return {id:session.id,day:session.day,title:workoutText(session.title,180,true),description:workoutText(session.description,10000)};
-  }).sort((left,right)=>left.day.localeCompare(right.day));
+    return {id:session.id,day:session.day,title:workoutText(session.title,180,true),description:workoutText(session.description,10000),
+      ...(kind&&{kind})};
+  }).sort(compareTrainingSessions);
   return {format:FORMAT,schemaVersion:1,athleteId,weekStart,checkedAt:new Date(checkedAt).toISOString(),sessions:workouts};
 }
 

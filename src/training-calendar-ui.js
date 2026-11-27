@@ -2,7 +2,7 @@ import {addDays,localDate,TIMEZONE} from './model-utils.js';
 import {normalizeSearch} from './core.js';
 import {athleteScheduleKinds} from './calendar-ui.js';
 import {
-  applyTrainingAssignment,ASSIGNMENT_MAX_BYTES,parseTrainingAssignment,previewTrainingAssignment,trainingAssignmentFor
+  applyTrainingAssignment,ASSIGNMENT_MAX_BYTES,compareTrainingSessions,parseTrainingAssignment,previewTrainingAssignment,trainingAssignmentFor
 } from './training-assignment.js';
 
 const dayFormat=new Intl.DateTimeFormat('ru-RU',{timeZone:TIMEZONE,weekday:'short'});
@@ -11,7 +11,8 @@ const dateObject=day=>new Date(day+'T12:00:00Z');
 
 export function athletePlanSessions(state,clientId,sessions,groupWeek){
   const matching=new Set((groupWeek?.sessions||[]).map(session=>session.day+'|'+normalizeSearch(session.title)));
-  return sessions.map(session=>matching.has(session.day+'|'+normalizeSearch(session.title))
+  return sessions.map(session=>session.kind==='external'?{...session,subtitle:'Внешняя нагрузка'}:
+    !session.kind&&matching.has(session.day+'|'+normalizeSearch(session.title))
     && athleteScheduleKinds(state,clientId,session.day).includes('group')?{...session,kind:'group'}:session);
 }
 
@@ -110,7 +111,7 @@ export function createTrainingCalendarUI({state,el,append,text,button,row,sectio
 
     function draw(){
       const fromPlan=athletePlanSessions(state(),client.id,plan?.sessions||[],groupWeek);
-      const calendarSessions=[...fromPlan,...sessions].sort((a,b)=>a.day.localeCompare(b.day));
+      const calendarSessions=[...fromPlan,...sessions].sort(compareTrainingSessions);
       content.replaceChildren(weekPanel({weekStart,sessions:calendarSessions},{preferredId,preferredDay,individualDots:true,
         weekList:list=>section('Тренировки недели','athlete-week-list-'+client.id,[list]),
         emptyDay:()=> 'На этот день тренировки не назначены',

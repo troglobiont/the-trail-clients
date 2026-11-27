@@ -3,6 +3,7 @@ import {localDate,validDate} from './model-utils.js';
 
 export const GROUP_COMPLETION='coach-group-completion';
 export const GROUP_REPORT='coach-group-report';
+export const GROUP_STAFFING='coach-group-staffing';
 export const COACH_CASH='coach-cash';
 export const GROUP_RATE=200000;
 export const CASH_STATUS={pending:'На проверке',returned:'Нужно уточнить',approved:'Подтверждено'};
@@ -29,6 +30,10 @@ export function groupEventReference(event){
   try{ return new URL(event.url).searchParams.get('eid')||event.id; }
   catch{ return event.id; }
 }
+export function groupStaffing(state,event){
+  const ref=groupEventReference(event);
+  return ref&&state.events.find(entry=>entry.type===GROUP_STAFFING&&entry.calendarRef===ref);
+}
 export const coachCash=(state,coachId)=>state.events.filter(e=>e.type===COACH_CASH&&(!coachId||e.clientId===coachId))
   .sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)||a.id.localeCompare(b.id));
 
@@ -37,6 +42,38 @@ function replaceEvent(state,entry){
   if(index<0)state.events.push(entry);
   else state.events[index]=entry;
   return entry;
+}
+
+export function updateGroupStaffing(state,eventKey,event,{action,coachId,requesterId,revision},context,now=new Date()){
+  const calendarRef=groupEventReference(event);
+  if(!key(eventKey)||!calendarRef||!note(calendarRef,1000)||event.kind!=='group'||!timestamp(event.start))
+    throw Error('Групповая тренировка не найдена');
+  if(Date.parse(event.start)<=now.getTime())throw Error('Тренировка уже началась');
+  const previous=groupStaffing(state,event);
+  if((previous?.revision??0)!==revision)throw Error('Назначение изменилось. Открой тренировку снова');
+  const admin=context.role==='superadmin';
+  if(action==='request'){
+    if(context.role!=='coach'||!trainer(staff(state,context.coachId)))throw Error('Запрос может отправить тренер');
+  }else if(!admin)throw Error('Утвердить назначение может только суперадмин');
+  const at=now.toISOString();
+  const entry=previous?{...previous,requests:{...previous.requests}}:
+    {id:eventKey,type:GROUP_STAFFING,calendarRef,at,revision:0,coachId:null,draftCoachId:null,requests:{}};
+  if(action==='decline'){
+    if(!Object.hasOwn(entry.requests,requesterId))throw Error('Запрос уже рассмотрен');
+    delete entry.requests[requesterId];
+  }else{
+    if(!key(coachId)||!trainer(staff(state,coachId)))throw Error('Выбери ответственного тренера');
+    if(action==='draft')entry.draftCoachId=coachId;
+    else if(action==='request')entry.requests[context.coachId]={coachId,at};
+    else if(action==='approve'){
+      const candidate=requesterId?entry.requests[requesterId]?.coachId:entry.draftCoachId;
+      if(coachId!==candidate)throw Error('Предложение изменилось');
+      entry.coachId=coachId;
+      entry.draftCoachId=null;
+      entry.requests={};
+    }else throw Error('Действие с назначением неизвестно');
+  }
+  return replaceEvent(state,{...entry,updatedAt:at,revision:entry.revision+1});
 }
 
 export function saveGroupCompletion(state,eventKey,event,coachId,context,voided=false,now=new Date()){
@@ -115,8 +152,19 @@ export function reviewCoachCash(state,requestId,expectedUpdatedAt,decision,value
 }
 
 export function validateCoachAccounting(state){
-  const seen=new Set();
+  const seen=new Set(),staffed=new Set();
   for(const e of state.events){
+    if(e?.type===GROUP_STAFFING){
+      const knownCoach=id=>key(id)&&Boolean(staff(state,id));
+      if(!key(e.id)||seen.has(e.id)||!e.calendarRef||!note(e.calendarRef,1000)||staffed.has(e.calendarRef)
+        ||!timestamp(e.at)||!timestamp(e.updatedAt)||!Number.isSafeInteger(e.revision)||e.revision<1
+        ||e.coachId!==null&&!knownCoach(e.coachId)||e.draftCoachId!==null&&!knownCoach(e.draftCoachId)
+        ||!e.requests||typeof e.requests!=='object'||Array.isArray(e.requests)
+        ||Object.entries(e.requests).some(([id,r])=>!knownCoach(id)||!knownCoach(r?.coachId)||!timestamp(r.at)))
+        throw Error('Некорректное назначение группового тренера');
+      seen.add(e.id);staffed.add(e.calendarRef);
+      continue;
+    }
     if(!isGroupRecord(e)&&e?.type!==COACH_CASH)continue;
     if(!key(e.id)||seen.has(e.id)||!state.clients[e.clientId]||!timestamp(e.at)||!timestamp(e.updatedAt))
       throw Error('Некорректная запись учёта тренера');

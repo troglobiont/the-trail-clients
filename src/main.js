@@ -24,6 +24,7 @@ import {syncIndicatorState,cloudIcon,settingsWheel} from './sync-indicator.js';
 import {createAdminUI} from './admin-ui.js';
 import {COACH_CASH,isGroupRecord} from './coach-accounting.js';
 import {createCoachAccountingUI} from './coach-accounting-ui.js';
+import {GROUP_STAFFING_ROUTE} from './group-staffing-ui.js';
 import {isTeamMember,sharesTeamProfile,teamRole} from './team.js';
 import {createAthleteUI} from './athlete-ui.js';
 import {createSportLogUI} from './sport-log-ui.js';
@@ -1815,7 +1816,7 @@ function render(){
   const weekRoute=raw===TRAINING_WEEK_ROUTE||raw.startsWith(TRAINING_WEEK_ROUTE+'/');
   const pastOverview=raw===CALENDAR_ARCHIVE_ROUTE||raw.startsWith(CALENDAR_ARCHIVE_ROUTE+'/')&&raw.split('/').length<5;
   if(pastOverview)ui.open.add(CALENDAR_ARCHIVE_SECTION);
-  const hash=pastOverview||weekRoute&&!canReadGroupWeek()?scheduleRoute:previewRoute(raw,roleContext());
+  const hash=pastOverview||(weekRoute||raw===GROUP_STAFFING_ROUTE)&&!canReadGroupWeek()?scheduleRoute:previewRoute(raw,roleContext());
   const athlete=isAthlete(ui.role),person=athlete?ownAthlete():null;
   ui.scheduleDay=hash===scheduleRoute?C.localDate():null;
   if(hash!==raw)history.replaceState(null,'',hash);
@@ -1857,6 +1858,7 @@ function render(){
   }else if(birthdayRoute(hash))root.append(renderTodo('birthdays'));
   else if(hash==='#todo/payments')root.append(renderTodo('payments'));
   else if(hash===scheduleRoute)root.append(renderTodo('schedule'));
+  else if(hash===GROUP_STAFFING_ROUTE)root.append(calendarUI.groupSchedule());
   else if(weekRoute)root.append(trainingWeekUI.page(hash,{canImport:ui.role==='superadmin'}));
   else if(hash.startsWith(CALENDAR_ARCHIVE_ROUTE+'/')){
     const [month,eventId,extra]=hash.slice(CALENDAR_ARCHIVE_ROUTE.length+1).split('/');

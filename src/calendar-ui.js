@@ -2,8 +2,9 @@ import {addDays, localDate, TIMEZONE} from './model-utils.js';
 import {linkCalendarTask, normalizeSearch} from './core.js';
 import {accounting, activeService, clientServices, money, serviceBalance, tariffLabel} from './accounting.js';
 import {createCalendarData} from './calendar-data.js';
-import {assignedCoach,coachContact,groupCoach,OWNER_COACH,previewCoaches,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
+import {assignedCoach,calendarGroupCoach,coachContact,groupCoach,OWNER_COACH,previewCoaches,previewGroupScheduleVisible,previewScheduleVisible} from './role-preview.js';
 import {GROUP_REPORT,groupCompletion,groupEventReference,groupRecords,saveGroupCompletion} from './coach-accounting.js';
+import {createGroupStaffingUI,GROUP_STAFFING_ROUTE} from './group-staffing-ui.js';
 
 const clock = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, hour:'2-digit', minute:'2-digit'});
 const monthFormat = new Intl.DateTimeFormat('ru-RU', {timeZone:TIMEZONE, month:'long', year:'numeric'});
@@ -101,7 +102,7 @@ export function athleteScheduleEntries(state, clientId, events) {
   const client = state.clients[clientId];
   if (client?.role!=='Клиент' || client.mergedInto) return [];
   const groupTariffs = clientServices(state,clientId).filter(service=>service.kind==='belgrade');
-  const coach = {role:'coach',coachId:assignedCoach(state,client)};
+  const coachId = assignedCoach(state,client);
   const own = new Map(personalWeekMeetings(state,clientId,events).map(entry=>[entry.event.id,entry]));
   return events.flatMap(event=>{
     if (event.kind!=='group') {
@@ -109,7 +110,7 @@ export function athleteScheduleEntries(state, clientId, events) {
       return meeting ? [{event,client,day:meeting.day}] : [];
     }
     const day = localDate(new Date(event.start));
-    return groupTariffs.some(tariff=>activeService(tariff,day)) && previewGroupScheduleVisible(event,state,coach)
+    return groupTariffs.some(tariff=>activeService(tariff,day)) && calendarGroupCoach(event,state)===coachId
       ? [{event,day}] : [];
   });
 }
@@ -123,7 +124,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
   const dataSource = createCalendarData({read:readCalendar,saved:()=>state().settings.calendarCache,save:saveCalendar});
   const selectedClients = new Map();
   const aligning = new Set();
-  let archiveView;
+  let archiveView,staffingWeek;
   const load = dataSource.load;
   const timeRange = event => clock.format(new Date(event.start)) + '–' + clock.format(new Date(event.end));
   async function personalWeek(clientId, weekStart) {
@@ -209,10 +210,18 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
         status.textContent = error.message;
       }
     };
+    const staffing=(!kind||kind==='group')&&['coach','superadmin'].includes(context.role)
+      && button('Расписание групповых',()=>{staffingWeek=null;navigate(GROUP_STAFFING_ROUTE);},'subtle');
     append(box,append(el('div',null,'page-title calendar-heading'),el('h2','Тренировки'),
-      button('Обновить',()=>update(true),'subtle')),status,append(el('div'),archive.fold,upcomingSection));
+      button('Обновить',()=>update(true),'subtle')),staffing&&row(staffing),status,append(el('div'),archive.fold,upcomingSection));
     void update(false);
     return box;
+  }
+
+  function groupSchedule(){
+    return createGroupStaffingUI({state,context:roleContext,el,append,text,button,row,field,select,modal,formatDate,timeRange,
+      navigate,commit,message,loadWeek:dataSource.loadWeek,initialWeek:staffingWeek,onWeekChange:day=>{staffingWeek=day;},
+      eventKey:async event=>(await sessionIds('staffing:'+groupEventReference(event))).sessionId});
   }
 
   function pastSchedule(kind, context) {
@@ -399,7 +408,7 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
           event.location&&el('h2',event.location),text('Ответственный · '+(actual?.name||event.coachName||'требует уточнения')),
           entry&&el('span',entry.voided?'Не проведена':entry.type===GROUP_REPORT?'Проведена · отчёт':'Проведена','chip'),
           !athlete&&entry?.source&&text(entry.source),
-          !athlete&&entry&&expectedCoach?.id!==actual?.id&&text('В Google Календаре · '+event.coachName),
+          !athlete&&event.coachName&&calendarGroupCoach(event,state())!==matched&&text('В Google Календаре · '+event.coachName),
           text([formatDate(date),timeRange(event)].join(' · '),'calendar-time'),
           !athlete&&eventLink(event,'Открыть в Google Календаре'),actions?.children?.length&&actions),...(athlete?[]:[groupProtocol(date)]));
         return;
@@ -541,5 +550,5 @@ export function createCalendarUI({state, service, readCalendar, saveCalendar, ro
       !event.cancelled&&eventLink(event,'Календарь'));
   }
 
-  return {schedule, session, book, linked, personalWeek,preload:()=>dataSource.refresh().catch(()=>{})};
+  return {schedule, groupSchedule, session, book, linked, personalWeek,preload:()=>dataSource.refresh().catch(()=>{})};
 }

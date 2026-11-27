@@ -1,5 +1,6 @@
 import {normalizeSearch} from './core.js';
 import {sharesTeamProfile} from './team.js';
+import {groupStaffing} from './coach-accounting.js';
 
 export const ROLES={superadmin:'Суперадмин',coach:'Тренер',accountant:'Бухгалтер',athlete:'Спортсмен'};
 export const OWNER_COACH='owner-coach';
@@ -49,7 +50,7 @@ export function previewScheduleVisible(event,client,task,{role,athleteId,coachId
   return true;
 }
 
-export function groupCoach(event,state){
+export function calendarGroupCoach(event,state){
   const name=normalizeSearch(event.coachName);
   if(!name)return null;
   const candidates=previewCoaches(state);
@@ -57,6 +58,15 @@ export function groupCoach(event,state){
     normalizeSearch(label.split(/\s+/u).reverse().join(' '))===name);
   const matches=exact.length?exact:candidates.filter(([,label])=>label.split(/\s+/u).some(part=>normalizeSearch(part)===name));
   return matches.length===1?matches[0][0]:null;
+}
+
+export function groupCoach(event,state){
+  const approved=groupStaffing(state,event)?.coachId;
+  if(approved){
+    const choice=previewCoaches(state).find(([id])=>coachContact(state,id)?.id===approved);
+    return choice?.[0]??null;
+  }
+  return calendarGroupCoach(event,state);
 }
 
 export function previewGroupScheduleVisible(event,state,{role,coachId=OWNER_COACH}){

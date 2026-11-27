@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createClient,emptyState,mergeState,validateState} from '../src/core.js';
 import {accounting,clientAccountHistory,saveService} from '../src/accounting.js';
-import {GROUP_REPORT,groupCompletion,groupEventReference,saveGroupCompletion,submitCoachCash,reviewCoachCash,coachCash} from '../src/coach-accounting.js';
+import {GROUP_REPORT,groupCompletion,groupEventReference,groupStaffing,saveGroupCompletion,submitCoachCash,reviewCoachCash,coachCash,updateGroupStaffing} from '../src/coach-accounting.js';
 import {groupCoach,OWNER_COACH} from '../src/role-preview.js';
+import {athleteScheduleEntries} from '../src/calendar-ui.js';
 import {saveTeamGroupRate,teamEntries,teamSummary} from '../src/team.js';
 import {beginCloudSync,cloudData,prepareCloudWrite,receiveCloudData,trackCloudChanges} from '../src/cloud-state.js';
 
@@ -117,4 +118,35 @@ test('group reports retain dates without inventing duration or affecting the liv
   assert.equal(teamEntries(state,trainer.id).length,1);
   assert.deepEqual(teamSummary(state,trainer.id,'2026-11').currencies,{});
   validateState(state);
+});
+
+test('staffing requests retain the existing coach until approval and follow a moved calendar event',()=>{
+  const {state,trainer,other,client}=fixture();
+  client.coachId=trainer.id;
+  const occurrence={...group,coachName:'Алексей'};
+  const before=new Date(day+'T14:00:00Z');
+  const coach={role:'coach',coachId:other.id};
+  const edit=(event,values,context,at=before)=>updateGroupStaffing(state,'staffing-1',event,values,context,at);
+  const draft=edit(occurrence,{action:'draft',revision:0,coachId:other.id},admin);
+  assert.equal(groupCoach(occurrence,state),trainer.id);
+  const request=edit(occurrence,{action:'request',revision:draft.revision,coachId:other.id},coach);
+  assert.equal(request.requests[other.id].coachId,other.id);
+  assert.equal(groupCoach(occurrence,state),trainer.id);
+  const decision={action:'approve',revision:request.revision,coachId:other.id,requesterId:other.id};
+  assert.throws(()=>edit(occurrence,decision,coach),/только суперадмин/u);
+  assert.throws(()=>edit(occurrence,{...decision,revision:draft.revision},admin),/изменилось/u);
+  const approved=edit(occurrence,decision,admin);
+  const moved={...occurrence,id:'updated-calendar-id',start:day+'T16:30:00+01:00'};
+  assert.equal(groupStaffing(state,moved),approved);
+  assert.equal(groupCoach(moved,state),other.id);
+  assert.equal(athleteScheduleEntries(state,client.id,[moved]).length,1);
+  assert.equal(teamEntries(state,other.id).length,0);
+  assert.throws(()=>edit(moved,{action:'draft',revision:approved.revision,coachId:trainer.id},admin,now),/началась/u);
+  saveGroupCompletion(state,'recorded-occurrence',moved,other.id,coach,false,now);
+  assert.equal(teamEntries(state,other.id).length,1);
+  validateState(state);
+  const imported=emptyState();
+  beginCloudSync(imported,'10000000-0000-4000-8000-000000000001');
+  receiveCloudData(imported,{revision:1,data:cloudData(state)});
+  assert.equal(groupCoach(moved,imported),other.id);
 });
