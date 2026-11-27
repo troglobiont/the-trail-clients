@@ -915,9 +915,17 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     return summaryFold('Сравнение с бухгалтерией','account-source-totals',[
       text(source.checkedAt ? 'Итоги таблицы считаны '+formatDate(source.checkedAt,true) : 'Загруженный срез от '+formatDate(ledger.asOf)),
       text('Таблица показывает итоги своей вкладки. В приложении поступления идут по фактической дате, а расходы включают записи команды.'),
-      ...comparisons.map(([label,sheet,app])=>line(label,'Таблица · '+totals(sheet||{}),
-        append(el('span',null,'account-value'),el('small','Приложение'),el('span',totals(app||{}))))),
-      link,
+      ...comparisons.map(([label,sheet,app])=>{
+        const differences=A.CURRENCIES.flatMap(currency=>{
+          const change=(app?.[currency]??0)-(sheet?.[currency]??0);
+          return change ? [(change>0?'+':'')+A.money(change,currency)] : [];
+        });
+        return append(el('div',null,'account-comparison-line'),
+          line(label,'Таблица · '+totals(sheet||{}),
+            append(el('span',null,'account-value'),el('small','Приложение'),el('span',totals(app||{})))),
+          sheet&&text(differences.length?'Разница · '+differences.join(' · '):'Совпадает',differences.length?'warning-text small':'muted small'));
+      }),
+      row(link,button('Открыть операции',()=>{tab='operations';operationFilter='all';render();},'subtle')),
       summary.imported.review>0&&text('Строки импорта без подтверждённой оплаты · '+summary.imported.review),
       summary.imported.skippedDuplicates>0&&text('Точные совпадения старого импорта с приложением учтены один раз · '+summary.imported.skippedDuplicates)
     ]);
@@ -1029,7 +1037,7 @@ export function createAccountingUI({ state, el, append, button, row, field, inpu
     for (const {teamEntry:{amount,currency}} of team.cash) paid[currency]=(paid[currency]??0)+amount;
     return summaryFold('Работа и выплаты команды','account-team-finance-'+month,[
       labor.length>0&&el('h3','Проведено и начислено'),...labor,
-      line('Выплачено и потрачено по записям команды','Админ → Команда → карточка участника → «+ Запись»',totals(paid)),
+      line('Выплачено и потрачено по записям команды','Админ → Команда → карточка участника',totals(paid)),
       team.review.length>0&&text('Возможные совпадения выплат в разделе «Операции → Сверка» · '+team.review.length)
     ]);
   }

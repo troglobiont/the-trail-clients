@@ -40,7 +40,7 @@ const catalogViews = { active:'Клиенты', occasional:'Разовые', pau
 const planBasisLabel = basis => basis === 'С нуля' ? 'Вне когорты' : basis;
 const planBasisOptions = C.BASES.map(basis=>[basis,planBasisLabel(basis)]);
 const CATALOG_PAGE_SIZE = 12;
-const CLIENTS_DOUBLE_TAP_MS = 450;
+const NAV_DOUBLE_TAP_MS = 450;
 const paymentFilters = [['all','Оплаты'],['paid','Оплачено'],['pending','К оплате'],['overdue','Просрочено']];
 const defaultFilters=()=>({query:'',format:'all',quick:'all',basis:'all',level:'all',personal:'all',
   packageFilter:'all',tariffCurrency:'all',paymentCurrency:'all',paymentMonth:C.localDate().slice(0,7),paymentStatus:'all'});
@@ -81,7 +81,7 @@ function clientStatus(c) {
 }
 function chips(c){const list=el('span',null,'row');for(const value of c.role==='Клиент'?[clientStatus(c),c.format,'Основа: '+planBasisLabel(c.basis)]:[C.clientRole(c)])list.append(el('span',value,'chip'));if(c.level==='Премиум')list.append(el('span','Премиум','chip emphasis'));if(['gym','outside'].includes(c.personal))list.append(el('span',c.personal==='gym'?'Персональный зал с Сергеем':'Персонально с Сергеем · улица','chip emphasis'));return list;}
 function formatDate(iso,withTime=false){if(!iso)return '';return new Intl.DateTimeFormat('ru-RU',{timeZone:C.TIMEZONE,day:'numeric',month:'short',...(withTime?{hour:'2-digit',minute:'2-digit'}:{})}).format(new Date(iso.length===10?iso+'T12:00:00Z':iso));}
-function section(title,key,children){const d=el('details',null,'fold'),summary=el('summary',title);d.open=ui.open.has(key);d.addEventListener('toggle',()=>{if(d.open)ui.open.add(key);else ui.open.delete(key);});append(d,summary,append(el('div',null,'fold-body stack'),...children));return d;}
+function section(title,key,children){const d=el('details',null,'fold'),summary=el('summary',title);d.dataset.foldKey=key;d.open=ui.open.has(key);d.addEventListener('toggle',()=>{if(d.open)ui.open.add(key);else ui.open.delete(key);});append(d,summary,append(el('div',null,'fold-body stack'),...children));return d;}
 function navigate(hash){location.hash=hash;}
 function openClient(clientId,type,target){ui.returnTo=location.hash.startsWith('#client/')?ui.returnTo:location.hash||'#todo';navigate('#client/'+clientId+(type?'/'+type+(target?'/'+target:''):''));}
 const detailsUI=createClientDetailsUI({state,ui,el,append,button,row,field,input,select,text,section,modal,commit,render,formatDate,openClient,message,focusCard,
@@ -501,21 +501,42 @@ function clearCatalogSearch() {
   }
 }
 
-function bindClientsTab() {
-  const tab = document.querySelector('.app-nav a[href="#clients"]');
-  let previousTap = -Infinity;
+function closePageFolds(folds) {
+  for (const fold of folds) {
+    if (fold.dataset.foldKey) ui.open.delete(fold.dataset.foldKey);
+    fold.open = false;
+  }
+}
+function resetPage(hash) {
+  if (hash === '#clients') clearCatalogSearch();
+  closePageFolds(root.querySelectorAll('details[open]'));
+  window.scrollTo({top:0,behavior:'instant'});
+}
+
+let pendingNavigationReset;
+function bindNavigationTaps() {
+  let previousTap;
   document.addEventListener('click',event=>{
-    if (!tab.contains(event.target) || event.detail === 0 || event.button !== 0 ||
+    const link = event.target.closest?.('.app-nav a, .gear-link');
+    if (!link || link.hidden || event.detail === 0 || event.button !== 0 ||
         event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-      previousTap = -Infinity;
+      previousTap = undefined;
       return;
     }
-    if (event.timeStamp - previousTap > CLIENTS_DOUBLE_TAP_MS) {
-      previousTap = event.timeStamp;
+    const hash = link.hash;
+    if (previousTap?.hash !== hash || event.timeStamp - previousTap.time > NAV_DOUBLE_TAP_MS) {
+      const folds=link.getAttribute('aria-current')==='page' ? root.querySelectorAll('details[open]') : [];
+      previousTap = {hash,time:event.timeStamp,folds};
       return;
     }
-    previousTap = -Infinity;
-    clearCatalogSearch();
+    closePageFolds(previousTap.folds);
+    previousTap = undefined;
+    event.preventDefault();
+    if (hash === location.hash && renderedPage === hash) resetPage(hash);
+    else {
+      pendingNavigationReset = hash;
+      navigate(hash);
+    }
   });
 }
 
@@ -1815,6 +1836,7 @@ function renderSettings(){
   return page;
 }
 function renderUpdate(){const panel=document.getElementById('update-panel');if(!panel)return;panel.textContent='';const u=updater.state(),errors={save:'Не удалось сохранить базу перед обновлением. Повтори после освобождения места.', 'asset-id':'Не удалось прочитать ID архива обновления. Нужен исправленный APK.', 'rate-limit':'GitHub временно ограничил загрузку. Попробуй другую сеть или повтори позже.', forbidden:'GitHub отклонил загрузку. Проверь, открывается ли выпуск в браузере.',storage:'Недостаточно места для обновления. Освободи место и повтори.',timeout:'Сервер обновлений не ответил вовремя. Повтори загрузку.','download-timeout':'Android не закончил подготовку архива. Нажми «Обновить сейчас», чтобы продолжить.',apply:'Новая версия не открылась. Нажми «Обновить сейчас», чтобы повторить запуск.',tls:'Не удалось установить защищённое соединение с сервером обновлений.',native:'Обновление интерфейса доступно в установленном Android-приложении.',manifest:'Не удалось проверить сведения об обновлении. Текущая версия сохранена.','native-required':'Для этой версии нужен новый APK. Установи его поверх приложения.','github-auth':'GitHub отклонил запрос обновления. Проверь доступ к выпуску.','release-missing':'Готовый выпуск не найден или к нему временно нет доступа.',checksum:'Архив не прошёл проверку целостности. Текущая версия сохранена.',network:'Не удалось загрузить обновление. Проверь интернет и повтори.'},labels={idle:'Проверка по нажатию',checking:'Проверяю обновление…',current:'Установлена актуальная версия',available:'Доступна версия '+u.latest,downloading:u.step==='save'?'Сохраняю данные…':'Загружаю · '+Math.round(u.progress)+'%',applying:'Открываю новую версию…',error:errors[u.error]||'Обновление не выполнено'};append(panel,el('h2','Данные и обновления'),text('THE.TRAIL Clients · '+VERSION),text(labels[u.status],u.status==='error'?'danger-text small':'muted small'));if(u.status==='error'&&ui.role==='superadmin')panel.append(text('Этап: '+({save:'сохранение базы',release:'проверка выпуска',compatibility:'совместимость APK',download:'получение архива',apply:'запуск обновления'}[u.step]||'проверка')+' · код '+u.error));const progress=el('progress');progress.max=100;progress.value=u.progress;progress.hidden=u.status!=='downloading'||u.step==='save';panel.append(progress);const update=button('Обновить сейчас',()=>updater.update(),'primary');update.disabled=['checking','downloading','applying'].includes(u.status);panel.append(update);if(ui.role==='superadmin')panel.append(text('Обновление сохраняет базу и черновики. При неудачном запуске возвращается предыдущая рабочая версия. Новые системные возможности могут потребовать нового APK.'));}
+let renderedPage;
 function render(){
   if(!store)return;
   checkGarminConnection=null;
@@ -1898,6 +1920,11 @@ function render(){
     if(ui.focusCloudPanel){ui.focusCloudPanel=false;queueMicrotask(()=>document.getElementById('cloud-panel')?.closest('details')?.scrollIntoView({block:'start'}));}
   }
   else root.append(renderTodo());
+  renderedPage=hash;
+  if(pendingNavigationReset===hash){
+    pendingNavigationReset=undefined;
+    resetPage(hash);
+  }
   void refreshGarmin(garminRouteClient(hash));
 }
 async function migrateSavedServiceOrigin() {
@@ -1931,7 +1958,7 @@ async function start(){
       }
     }});
     if(!location.hash)history.replaceState(null,'','#todo');
-    bindClientsTab();
+    bindNavigationTaps();
     window.addEventListener('hashchange',()=>{render();window.scrollTo({top:0});});
     document.addEventListener('visibilitychange',()=>{
       if(document.hidden)run(()=>saveDrafts());

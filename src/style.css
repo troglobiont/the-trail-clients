@@ -86,7 +86,7 @@ li+li{margin-top:8px}
 .brand-sub{color:var(--muted);margin-left:10px}
 .app-nav{position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:center;gap:8px;padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:var(--panel);border-top:1px solid var(--line);z-index:10}
 .app-nav a{padding:10px 20px;border-radius:10px;text-decoration:none;color:var(--muted);min-height:44px;min-width:0;white-space:nowrap;overflow-wrap:normal;word-break:normal}
-.app-nav a[href="#clients"]{touch-action:manipulation}
+.app-nav a,.gear-link{touch-action:manipulation}
 .app-nav a[aria-current=page]{background:var(--soft);color:var(--ink);font-weight:600}
 main{max-width:920px;margin:0 auto;padding:24px 20px calc(110px + env(safe-area-inset-bottom));overflow-wrap:anywhere}
 .page-title{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
@@ -279,6 +279,8 @@ button.primary.processing{background:#285a80;border-color:#285a80;color:#fff;opa
 .account-payment-filter::before{content:'';position:absolute;left:50%;top:-5px;width:8px;height:8px;translate:-50%;rotate:45deg;border:solid var(--line);border-width:1px 0 0 1px;background:var(--soft)}
 .account-payment-filter label{font-size:13px}
 .account-value>small{display:block;color:var(--muted);font-weight:400}
+.account-comparison-line{padding-bottom:5px}
+.account-comparison-line+.account-comparison-line{border-top:1px solid var(--line)}
 button.account-move-date{padding-inline:0}
 .payment-indicator::before{content:"";display:inline-block;width:.5em;height:.5em;margin-inline-end:.45em;border-radius:50%;background:var(--payment-color,var(--muted));vertical-align:.14em}
 .payment-paid{--payment-color:#357951}

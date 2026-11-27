@@ -1,4 +1,4 @@
-import {id,validDate} from './model-utils.js';
+import {id,localDate,validDate} from './model-utils.js';
 import {CURRENCIES} from './accounting.js';
 import {countsGroupAccrual,groupRecords} from './coach-accounting.js';
 
@@ -8,6 +8,8 @@ const key=value=>typeof value==='string'&&/^[-a-zA-Z0-9_]{1,180}$/.test(value)&&
 const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
 const money=value=>Number.isSafeInteger(value)&&value>0&&value<=1e11;
 const note=value=>typeof value==='string'&&value.length<=2000;
+const validMonth=value=>typeof value==='string'&&/^\d{4}-\d{2}$/u.test(value)&&validDate(value+'-01');
+export const teamEntryPeriod=entry=>entry.payoutPeriod??entry.day.slice(0,7);
 export const isTeamMember=member=>Boolean(member&&!member.mergedInto&&(member.role==='Тренер'||member.teamAdmin?.role==='Тренер'));
 export const sharesTeamProfile=member=>member.teamAdmin?.visible!==false;
 export const teamMembers=(state,{includeHidden=true}={})=>Object.values(state.clients)
@@ -26,6 +28,7 @@ function checkEntry(entry,k){
     ||!Number.isFinite(Date.parse(entry.createdAt))||!Number.isFinite(Date.parse(entry.updatedAt))
     ||entry.kind==='work'&&(!Number.isInteger(entry.minutes)||entry.minutes<1||entry.minutes>1440)
     ||entry.kind!=='work'&&entry.minutes!==null
+    ||entry.payoutPeriod!==undefined&&(entry.kind!=='payout'||!validMonth(entry.payoutPeriod))
     ||entry.amount!==null&&!money(entry.amount)||entry.kind!=='work'&&entry.amount===null
     ||entry.amount===null&&entry.currency!==null||entry.amount!==null&&!CURRENCIES.includes(entry.currency))
     throw Error('Проверь дату, время, сумму и валюту записи команды');
@@ -72,9 +75,11 @@ export function saveTeamEntry(state,memberId,values){
   const member=memberFor(state,memberId),admin=member.teamAdmin||{notes:'',entries:{}};
   const old=values.id&&key(values.id)&&Object.hasOwn(admin.entries,values.id)?admin.entries[values.id]:null;
   if(values.id&&!old)throw Error('Запись не найдена');
+  const payoutPeriod=values.payoutPeriod??old?.payoutPeriod;
   const next={id:old?.id||id('team-entry'),kind:values.kind,day:values.day,note:String(values.note||'').trim(),
     minutes:values.kind==='work'?values.minutes:null,amount:values.amount??null,
-    currency:values.amount==null?null:values.currency,createdAt:old?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()};
+    currency:values.amount==null?null:values.currency,createdAt:old?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString(),
+    ...(values.kind==='payout'&&payoutPeriod!==undefined&&{payoutPeriod})};
   checkEntry(next,next.id);
   if(!old&&Object.keys(admin.entries).length>=10000)throw Error('Достигнут предел записей команды');
   member.teamAdmin={...admin,entries:{...admin.entries,[next.id]:next}};
@@ -85,25 +90,51 @@ export function teamEntries(state,memberId,month=null){
   const calendar=groupRecords(state).filter(e=>e.clientId===memberId&&!e.voided)
     .map(e=>({...e,kind:'work',createdAt:e.at,group:true,historical:!countsGroupAccrual(e)}));
   return [...manual,...calendar]
-    .filter(e=>!month||e.day.slice(0,7)===month)
+    .filter(e=>!month||teamEntryPeriod(e)===month)
     .sort((a,b)=>b.day.localeCompare(a.day)||b.createdAt.localeCompare(a.createdAt)||a.id.localeCompare(b.id));
 }
 export function teamSummary(state,memberId,month){
-  if(!validDate(month+'-01'))throw Error('Выбери месяц');
-  const entries=teamEntries(state,memberId),monthly=entries.filter(e=>e.day.slice(0,7)===month);
+  if(!validMonth(month))throw Error('Выбери месяц');
+  const entries=teamEntries(state,memberId),monthly=entries.filter(e=>teamEntryPeriod(e)===month);
   const currencies={};
   for(const entry of entries){
-    if(entry.day.slice(0,7)>month||entry.amount===null||entry.historical)continue;
+    const period=teamEntryPeriod(entry);
+    if(period>month||entry.amount===null||entry.historical)continue;
     const sums=currencies[entry.currency]??={accrued:0,paid:0,expenses:0,balance:0};
     if(['work','accrual'].includes(entry.kind))sums.balance+=entry.amount;
     if(entry.kind==='payout')sums.balance-=entry.amount;
-    if(entry.day.slice(0,7)!==month)continue;
+    if(period!==month)continue;
     if(['work','accrual'].includes(entry.kind))sums.accrued+=entry.amount;
     if(entry.kind==='payout')sums.paid+=entry.amount;
     if(entry.kind==='expense')sums.expenses+=entry.amount;
   }
   return {minutes:monthly.reduce((sum,e)=>sum+(e.minutes||0),0),entries:monthly.length,
     unpricedWork:monthly.filter(e=>e.kind==='work'&&e.amount===null).length,currencies};
+}
+
+export function teamMonthPayoutDue(state,memberId,period) {
+  const {currencies}=teamSummary(state,memberId,period);
+  return Object.fromEntries(CURRENCIES.flatMap(currency=>{
+    const sums=currencies[currency];
+    const amount=sums&&Math.min(sums.balance,sums.accrued-sums.paid);
+    return amount>0?[[currency,amount]]:[];
+  }));
+}
+
+export function recordTeamPayout(state,memberId,{period,day,note,expected,amount,currency},today=localDate()) {
+  if(!validMonth(period)||period>today.slice(0,7)||!validDate(day)||day>today)throw Error('Проверь месяц и дату выплаты');
+  let parts=[[currency,amount]];
+  if(expected){
+    const due=teamMonthPayoutDue(state,memberId,period);
+    if(CURRENCIES.some(unit=>due[unit]!==expected[unit]))throw Error('Сумма к выплате изменилась. Открой выплату заново');
+    parts=Object.entries(due);
+    if(!parts.length)throw Error('За этот месяц всё выплачено');
+  }
+  const member=memberFor(state,memberId);
+  const draft={...state,clients:{...state.clients,[memberId]:{...member}}};
+  for(const [currency,amount] of parts)
+    saveTeamEntry(draft,memberId,{kind:'payout',day,amount,currency,note,payoutPeriod:period});
+  member.teamAdmin=draft.clients[memberId].teamAdmin;
 }
 
 export function teamMonthFinance(state, month, externalExpenses) {
@@ -132,16 +163,16 @@ export function teamMonthFinance(state, month, externalExpenses) {
   for (const member of Object.values(state.clients)) {
     if (member.mergedInto) continue;
     for (const entry of Object.values(member.teamAdmin?.entries||{})) {
+      if(entry.kind==='payout'&&teamEntryPeriod(entry)===month){
+        const {paid}=trainerFor(member);
+        paid[entry.currency]=(paid[entry.currency]??0)+entry.amount;
+      }
       if (!entry.day.startsWith(month+'-')) continue;
       if (entry.kind === 'work' || entry.kind === 'accrual') {
         const trainer = trainerFor(member);
         trainer.minutes += entry.minutes || 0;
         addAccrued(trainer,entry);
         continue;
-      }
-      if (entry.kind === 'payout') {
-        const {paid} = trainerFor(member);
-        paid[entry.currency] = (paid[entry.currency] ?? 0) + entry.amount;
       }
       const possibleOverlap = externalExpenses.some(({date,operation,row})=>{
         if (operation) return date === entry.day && operation.currency === entry.currency && operation.amount === entry.amount;

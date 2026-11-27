@@ -1,4 +1,4 @@
-import {teamMembers,teamRole,teamParticipation,teamEntries,teamSummary,saveTeamEntry,saveTeamNotes,saveTeamVisibility,saveTeamGroupRate,saveTeamProfile,sharesTeamProfile,TEAM_ENTRY_KINDS,TEAM_PARTICIPATION} from './team.js';
+import {teamMembers,teamRole,teamParticipation,teamEntries,teamEntryPeriod,teamSummary,teamMonthPayoutDue,recordTeamPayout,saveTeamEntry,saveTeamNotes,saveTeamVisibility,saveTeamGroupRate,saveTeamProfile,sharesTeamProfile,TEAM_ENTRY_KINDS,TEAM_PARTICIPATION} from './team.js';
 import {amountMinor,money,CURRENCIES} from './accounting.js';
 import {addDays,localDate,validDate} from './model-utils.js';
 import {coachContact,isOwnerPerson} from './role-preview.js';
@@ -6,6 +6,8 @@ import {GROUP_RATE} from './coach-accounting.js';
 import {inlineSelect} from './inline-select.js';
 
 const duration=minutes=>[Math.floor(minutes/60)?Math.floor(minutes/60)+' ч':'',minutes%60?minutes%60+' мин':''].filter(Boolean).join(' ')||'0 ч';
+const monthCaption=period=>new Intl.DateTimeFormat('ru',{month:'long',year:'numeric',timeZone:'UTC'})
+  .format(new Date(period+'-01T12:00:00Z')).replace(/\s*г\.$/u,'');
 export function createAdminUI({state,ui,el,append,button,row,text,field,input,select,section,modal,commit,navigate,openClient,addCoach,render,formatDate,partnersUI,cashPanel}){
   let month=localDate().slice(0,7),coachMonth=month,weekDay=localDate();
   const adminBack=()=>navigate('#admin');
@@ -45,9 +47,14 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
     });
   }
   function editEntry(member,entry=null){
-    modal(entry?'Изменить запись':'Запись команды',form=>{
-      const kind=select(Object.entries(TEAM_ENTRY_KINDS),entry?.kind||'work');
+    modal(entry?'Изменить запись':'Добавить работу или расход',form=>{
+      const kinds=[['work','Работа вне расписания'],['accrual','Начисление без часов'],['expense','Расход']];
+      if(entry?.kind==='payout')kinds.push(['payout','Выплата']);
+      const kind=select(kinds,entry?.kind||'work');
       const date=input('date',entry?.day||localDate());date.max=localDate();
+      const period=input('month',entry?.kind==='payout'?teamEntryPeriod(entry):month);
+      period.max=localDate().slice(0,7);
+      const periodField=field('За какой месяц',period);
       const hours=input('number',String(Math.floor((entry?.minutes||0)/60)));hours.min=0;hours.max=24;hours.step=1;
       const minutes=input('number',String((entry?.minutes||0)%60));minutes.min=0;minutes.max=59;minutes.step=1;
       const durationFields=row(field('Часы',hours),field('Минуты',minutes));durationFields.classList.add('team-duration');
@@ -59,21 +66,45 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
       const hint=text('');
       const update=()=>{
         durationFields.hidden=kind.value!=='work';
+        periodField.hidden=kind.value!=='payout';
         amountLabel.textContent=kind.value==='work'?'Начислено за работу':kind.value==='accrual'?'Начислено':kind.value==='payout'?'Выплачено':'Потрачено';
-        hint.textContent=kind.value==='work'?'Можно записать только время. Сумму добавь, когда она согласована.':
+        hint.textContent=kind.value==='work'?'Для работы вне расписания. Можно указать только время.':
           kind.value==='payout'?'Запись о фактически выданных деньгах.':kind.value==='expense'?'Дополнительный расход на работу команды. Не уменьшает сумму к выплате.':
           'Начисление без записи часов: например, фиксированная оплата за месяц.';
       };
       kind.addEventListener('change',update);update();
-      append(form,text(member.name,'task-title'),field('Тип записи',kind),field('Дата',date),durationFields,moneyFields,hint,field('За что / комментарий',note));
+      append(form,text(member.name,'task-title'),field('Тип записи',kind),field('Дата',date),periodField,durationFields,moneyFields,hint,field('За что / комментарий',note));
       return ()=>{
         if(!validDate(date.value)||date.value>localDate())throw Error('Проверь дату: запись отражает уже выполненную работу или расчёт');
         const h=hours.value.trim(),m=minutes.value.trim();
         if(kind.value==='work'&&(!/^\d{1,2}$/.test(h)||!/^\d{1,2}$/.test(m)||Number(m)>59))throw Error('Укажи часы и минуты');
+        if(kind.value==='payout'&&(!validDate(period.value+'-01')||period.value>period.max))throw Error('Укажи месяц выплаты');
         return commit(s=>saveTeamEntry(s,member.id,{...(entry?{id:entry.id}:{}),kind:kind.value,day:date.value,
-          minutes:kind.value==='work'?Number(h)*60+Number(m):null,amount:amount.value.trim()?amountMinor(amount.value):null,currency:currency.value,note:note.value}));
+          minutes:kind.value==='work'?Number(h)*60+Number(m):null,amount:amount.value.trim()?amountMinor(amount.value):null,
+          currency:currency.value,note:note.value,...(kind.value==='payout'&&{payoutPeriod:period.value})}));
       };
     });
+  }
+  function payout(member,period){
+    const due=teamMonthPayoutDue(state(),member.id,period),parts=Object.entries(due);
+    modal('Выплатить',form=>{
+      const mode=select([['month','За весь месяц'],['other','Другая сумма']],parts.length?'month':'other');
+      mode.options[0].disabled=!parts.length;
+      const day=input('date',localDate());day.max=localDate();
+      const amount=input('text');amount.inputMode='decimal';
+      const currency=select(CURRENCIES,parts[0]?.[0]??'RSD');
+      const note=el('textarea');note.rows=2;note.maxLength=2000;
+      const moneyFields=row(field('Сумма',amount),field('Валюта',currency));
+      moneyFields.classList.add('team-duration');
+      const hint=text(parts.length?'Остаток за месяц · '+parts.map(([unit,value])=>money(value,unit)).join(' · '):'За этот месяц нет остатка к выплате.');
+      const update=()=>{moneyFields.hidden=mode.value==='month';};
+      mode.addEventListener('change',update);update();
+      append(form,text(member.name+' · '+monthCaption(period),'task-title'),field('Как учесть выплату',mode),hint,
+        moneyFields,field('Дата фактической выплаты',day),field('Комментарий',note),
+        text('Сохраняет запись о выданных деньгах в учёте.'));
+      return ()=>commit(s=>recordTeamPayout(s,member.id,{period,day:day.value,note:note.value,
+        ...(mode.value==='month'?{expected:due}:{amount:amountMinor(amount.value),currency:currency.value})}));
+    },{saveLabel:'Записать выплату'});
   }
   function editRate(member){
     modal('Ставка за групповую',form=>{
@@ -84,6 +115,7 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
   }
   function monthTotals(member,period,entries,manage=false){
     const summary=teamSummary(state(),member.id,period);
+    const due=manage?teamMonthPayoutDue(state(),member.id,period):null;
     const totals=append(el('section',null,'panel stack team-summary'),el('h2','За месяц'));
     if(teamRole(member)==='Тренер'){
       const group=entries.filter(e=>e.group);
@@ -104,11 +136,14 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
         if(manage)lines.push(['Расходы',sums.expenses]);
         for(const [label,value] of lines)
           block.append(append(el('div',null,'row between'),text(label),el('strong',money(value,currency),'money-amount')));
-        block.append(append(el('div',null,'row between'),text(sums.balance>=0?'К выплате':'Выплачено авансом'),el('strong',money(Math.abs(sums.balance),currency),'money-amount')));
+        const balance=manage?(due[currency]??0):sums.balance;
+        block.append(append(el('div',null,'row between'),text(manage?'К выплате за месяц':balance>=0?'К выплате':'Выплачено авансом'),
+          el('strong',money(Math.abs(balance),currency),'money-amount')));
         totals.append(block);
       }
-      if(Object.keys(summary.currencies).length)totals.append(text('К выплате — по внесённым начислениям и выплатам на конец выбранного месяца.'));
     }
+    if(manage)totals.append(row(button('Выплатить',()=>payout(member,period),'primary'),
+      button('+ Работа или расход',()=>editEntry(member),'subtle')));
     return totals;
   }
   function groupRows(entries){
@@ -133,7 +168,7 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
     const entries=teamEntries(state(),member.id),completed=entries.filter(e=>e.group);
     const weekly=completed.filter(e=>e.day>=from&&e.day<=to);
     const archiveWeek=weekly.filter(e=>e.historical),liveWeek=weekly.filter(e=>!e.historical);
-    const monthly=entries.filter(e=>e.day.startsWith(coachMonth+'-'));
+    const monthly=entries.filter(e=>teamEntryPeriod(e)===coachMonth);
     const monthlyGroups=monthly.filter(e=>e.group);
     return append(shell,el('strong',member.name),text('Ставка за групповую · '+money(member.teamAdmin?.groupRate??GROUP_RATE,'RSD')),
       append(el('section',null,'panel stack'),el('h2','За неделю'),field('День нужной недели',dateInput),
@@ -151,38 +186,42 @@ export function createAdminUI({state,ui,el,append,button,row,text,field,input,se
     const member=teamMembers(state()).find(c=>c.id===memberId);
     if(!member)return append(el('div',null,'stack'),button('← Админ',adminBack,'back subtle'),text('Участник команды не найден. Проверь синхронизацию.'));
     ui.open.add('admin-team');
-    const picker=input('month',month);picker.setAttribute('aria-label','Месяц учёта команды');picker.className='team-month';
-    picker.addEventListener('change',()=>{if(validDate(picker.value+'-01')){month=picker.value;render();}});
+    const picker=input('month',month);picker.setAttribute('aria-label','Месяц учёта команды');picker.className='team-month';picker.max=localDate().slice(0,7);
+    picker.addEventListener('change',()=>{if(validDate(picker.value+'-01')&&picker.value<=picker.max){month=picker.value;render();}});
     const visible=sharesTeamProfile(member);
     const visibility=button(visible?'Скрыть от других ролей':'Показывать другим ролям',
       ()=>commit(s=>saveTeamVisibility(s,member.id,!visible)),'subtle');
-    const page=append(el('div',null,'stack-lg team-card'),button('← Админ',adminBack,'back subtle'),
-      append(el('div',null,'page-title'),el('h1',member.name),el('span',teamRole(member),'chip')),
-      teamRole(member)==='Тренер'&&append(el('section',null,'panel stack'),el('h2','Профиль тренера'),
+    const trainer=teamRole(member)==='Тренер';
+    const profile=section(trainer?'Профиль тренера':'Профиль участника','team-profile-'+member.id,[
+      trainer&&append(el('div',null,'stack'),
         append(el('div',null,'row between'),text('Формат участия'),el('strong',TEAM_PARTICIPATION[teamParticipation(member)])),
         append(el('div',null,'row between'),text('Специализация'),el('strong',member.teamAdmin?.specialty||'Не указана')),
-        row(button('Изменить профиль',()=>editCoachProfile(member),'subtle'))),
-      append(el('section',null,'panel stack'),el('h2','Видимость в команде'),
-        text(visible?'Виден тренеру, бухгалтеру и спортсмену.':'Виден только суперадмину.'),row(visibility)),
-      button('Карточка человека',()=>openClient(member.id),'subtle'),
-      row(picker,button('+ Запись',()=>editEntry(member),'primary')));
-    if(teamRole(member)==='Тренер')page.append(row(text('Ставка за групповую · '+money(member.teamAdmin?.groupRate??GROUP_RATE,'RSD')),
-      button('Изменить ставку',()=>editRate(member),'subtle')));
+        button('Изменить профиль',()=>editCoachProfile(member),'subtle')),
+      text(visible?'В команде виден тренеру, бухгалтеру и спортсмену.':'В команде виден только суперадмину.'),
+      row(visibility,button('Карточка человека',()=>openClient(member.id),'subtle'))
+    ]);
     const entries=teamEntries(state(),member.id,month);
-    page.append(monthTotals(member,month,entries,true));
-    const history=append(el('section',null,'stack'),el('h2','История'));
+    const history=el('div',null,'stack');
     if(!entries.length)history.append(text('За этот месяц записей нет.'));
     for(const entry of entries){
       const item=append(entry.group?el('div',null,'team-entry'):button('',()=>editEntry(member,entry),'team-entry'),
         append(el('div',null,'row between'),el('strong',entry.group?'Групповая тренировка':TEAM_ENTRY_KINDS[entry.kind]),text(formatDate(entry.day))),
         append(el('div',null,'row between'),entry.minutes&&text(duration(entry.minutes)),
-          entry.amount!==null&&el('strong',money(entry.amount,entry.currency),'money-amount')),entry.note&&text(entry.note),entry.source&&text(entry.source));
+          entry.amount!==null&&el('strong',money(entry.amount,entry.currency),'money-amount')),
+        entry.payoutPeriod&&text('За '+monthCaption(entry.payoutPeriod)),entry.note&&text(entry.note),entry.source&&text(entry.source));
       item.setAttribute('aria-label',[entry.group?'Групповая тренировка':TEAM_ENTRY_KINDS[entry.kind],formatDate(entry.day),entry.note,entry.source].filter(Boolean).join(' · '));
       history.append(item);
     }
-    page.append(history,section('Договорённости','team-notes-'+member.id,[text(member.teamAdmin?.notes||'Зона ответственности, ставки и условия пока не записаны.'),
-      button('Изменить',()=>editNotes(member),'subtle')]));
-    return page;
+    const agreements=section('Договорённости','team-notes-'+member.id,[
+      trainer&&row(text('Ставка за групповую · '+money(member.teamAdmin?.groupRate??GROUP_RATE,'RSD')),
+        button('Изменить ставку',()=>editRate(member),'subtle')),
+      text(member.teamAdmin?.notes||'Договорённости пока не записаны.'),
+      button('Изменить договорённости',()=>editNotes(member),'subtle')
+    ]);
+    return append(el('div',null,'stack-lg team-card'),button('← Админ',adminBack,'back subtle'),
+      append(el('div',null,'page-title'),el('h1',member.name),el('span',teamRole(member),'chip')),
+      picker,monthTotals(member,month,entries,true),
+      profile,agreements,section('История','team-history-'+member.id,[history]));
   }
   return {page,card,myAccount};
 }

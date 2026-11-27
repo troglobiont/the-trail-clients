@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyState,createClient,validateState,exportState,parseImport,mergeState} from '../src/core.js';
-import {teamMembers,teamRole,teamEntries,teamSummary,saveTeamEntry,saveTeamNotes,saveTeamVisibility} from '../src/team.js';
+import {teamMembers,teamRole,teamEntries,teamSummary,teamMonthFinance,teamMonthPayoutDue,recordTeamPayout,saveTeamEntry,saveTeamNotes,saveTeamVisibility} from '../src/team.js';
 import {previewAthletes,previewCoaches} from '../src/role-preview.js';
 import {beginCloudSync,cloudData,receiveCloudData,trackCloudChanges,prepareCloudWrite} from '../src/cloud-state.js';
 const owner='10000000-0000-4000-8000-000000000001';
@@ -35,6 +35,28 @@ test('monthly work and cash totals preserve currencies, carry unpaid balances, a
   assert.deepEqual(totals.currencies.EUR,{accrued:0,paid:5000,expenses:0,balance:-5000});
   assert.equal(teamEntries(state,member.id,'2026-11').length,4);
   assert.throws(()=>teamSummary(state,member.id,'2026-13'),/месяц/u);
+});
+
+test('a payout closes the selected earned month while remaining a cash expense on the actual date',()=>{
+  const {state,member}=fixture(),period='2026-11',day='2026-12-02';
+  entry(state,member,'accrual','2026-10-31',50000);
+  entry(state,member,'work','2026-11-10',200000,'RSD',120);
+  entry(state,member,'accrual','2026-11-20',4000,'EUR');
+  recordTeamPayout(state,member.id,{period,day,amount:50000,currency:'RSD',note:'Часть'},day);
+  const expected=teamMonthPayoutDue(state,member.id,period);
+  assert.deepEqual(expected,{RSD:150000,EUR:4000});
+  recordTeamPayout(state,member.id,{period,day,expected,note:'Остаток'},day);
+  assert.throws(()=>recordTeamPayout(state,member.id,{period,day,expected},day),/изменилась/u);
+  assert.deepEqual(teamMonthPayoutDue(state,member.id,period),{});
+  assert.equal(teamSummary(state,member.id,period).currencies.RSD.balance,50000);
+  assert.equal(teamSummary(state,member.id,period).currencies.RSD.paid,200000);
+  assert.equal(teamMonthFinance(state,period,[]).cash.length,0);
+  assert.equal(teamMonthFinance(state,'2026-12',[]).cash.length,3);
+  assert.deepEqual(teamMonthFinance(state,period,[]).trainers[0].paid,{RSD:200000,EUR:4000});
+  const payouts=teamEntries(state,member.id,period).filter(item=>item.kind==='payout');
+  assert.equal(payouts.length,3);
+  assert.ok(payouts.every(item=>item.payoutPeriod===period&&item.day===day));
+  validateState(state);
 });
 
 test('team visibility syncs and a coach can keep the same athlete card',()=>{
