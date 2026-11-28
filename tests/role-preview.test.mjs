@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {askCoach,createClient,createTask,emptyState,exportState,parseImport,shareTaskWithAthlete} from '../src/core.js';
+import {answerCoachQuestion,askCoach,athleteQuestions,createClient,createTask,emptyState,exportState,parseImport,shareTaskWithAthlete} from '../src/core.js';
 import {assignedCoach,OWNER_COACH,previewAthlete,previewRoute,previewScheduleVisible,previewTaskVisible} from '../src/role-preview.js';
 
 function fixture(){
@@ -26,10 +26,27 @@ test('role routes do not open hidden pages or another athlete card',()=>{
   assert.equal(previewRoute('#settings',{role:'coach'}),'#settings');
   assert.equal(previewRoute('#settings',{role:'accountant'}),'#settings');
   assert.equal(previewRoute('#assistant',personal),'#todo');
+  assert.equal(previewRoute('#todo/schedule/event',personal),'#calendar');
+  assert.equal(previewRoute('#todo/payments',personal),'#account');
+  assert.equal(previewRoute('#calendar/2026-11-28',personal),'#calendar/2026-11-28');
+  assert.equal(previewRoute('#coach',{role:'coach'}),'#todo');
   assert.equal(previewRoute('#account',{role:'coach'}),'#todo');
   assert.equal(previewRoute('#todo/payments',{role:'coach'}),'#todo');
   assert.equal(previewRoute('#races',{role:'accountant'}),'#todo');
   assert.equal(previewRoute('#races',{role:'superadmin'}),'#races');
+});
+
+test('coach answers close the linked task and stay in the correct athlete history',()=>{
+  const {state,owner,coach,athlete}=fixture();
+  const question=askCoach(state,athlete.id,coach.id,'Как перенести тренировку?');
+  assert.throws(()=>answerCoachQuestion(state,question.id,' '),/Напиши ответ/u);
+  answerCoachQuestion(state,question.id,'До воскресенья можно перенести.');
+  answerCoachQuestion(state,question.id,'До воскресенья можно перенести.');
+  const restored=parseImport(exportState(state));
+  assert.equal(restored.tasks[question.id].phase,'done');
+  assert.equal(athleteQuestions(restored,athlete.id)[0].task.coachAnswer.text,'До воскресенья можно перенести.');
+  assert.deepEqual(athleteQuestions(restored,owner.id),[]);
+  assert.equal(restored.events.filter(event=>event.type==='task-closed'&&event.entityId===question.id).length,1);
 });
 
 test('the existing calendar belongs to the owner and explicit coach assignments remain scoped',()=>{

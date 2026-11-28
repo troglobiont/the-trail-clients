@@ -37,6 +37,9 @@ export function validateState(s){
   for(const [key,c] of Object.entries(s.clients))if(!c||c.id!==key||typeof c.name!=='string'||!c.name.trim()||c.name.length>180||!['Клиент','Тренер'].includes(c.role)||c.role==='Клиент'&&!STATUSES.includes(c.status)||!Array.isArray(c.features)||!Array.isArray(c.rules))throw Error('Некорректная карточка клиента');
   for(const [key,g] of Object.entries(s.goals))if(!g||g.id!==key||!s.clients[g.clientId]||typeof g.title!=='string'||!g.title.trim()||g.title.length>500||!GOAL_STATUSES.includes(g.status))throw Error('Некорректная цель');
   for(const [key,t] of Object.entries(s.tasks))if(!t||t.id!==key||!s.clients[t.clientId]||typeof t.title!=='string'||!t.title.trim()||!['todo','waiting','done'].includes(t.phase)||!['current','discussion'].includes(t.lane)||!Number.isInteger(t.waitDays)||t.waitDays<1||t.waitDays>30||!Number.isInteger(t.outboundCount)||t.outboundCount<0||t.due!==null&&!validDate(t.due)||t.checkOn!==null&&!validDate(t.checkOn))throw Error('Некорректная задача');
+  for(const task of Object.values(s.tasks))if(task.coachAnswer!==undefined&&
+    (task.kind!=='athlete-question'||typeof task.coachAnswer?.text!=='string'||!task.coachAnswer.text.trim()
+      ||task.coachAnswer.text.length>4000||!Number.isFinite(Date.parse(task.coachAnswer.at))))throw Error('Некорректный ответ тренера');
   for(const [key,r] of Object.entries(s.records)){
     if(!r||r.id!==key||!s.clients[r.clientId]||typeof r.text!=='string'||r.text.length>16000)throw Error('Некорректная запись');
     if(r.kind==='journal'&&(!validDate(r.day)||typeof r.title!=='string'||!r.title.trim()||r.title.length>140
@@ -241,6 +244,22 @@ export function askCoach(s,clientId,coachId,question,recordId=id('record')){
   task.coachId=coachId;
   task.kind='athlete-question';
   return task;
+}
+export function answerCoachQuestion(s,taskId,answer){
+  const task=s.tasks[taskId],record=s.records[task?.sourceRecordId];
+  if(task?.kind!=='athlete-question'||record?.kind!=='athlete-question'||record.clientId!==task.clientId||s.clients[task.clientId]?.mergedInto)
+    throw Error('Вопрос спортсмена не найден');
+  const value=typeof answer==='string'?answer.trim():'';
+  if(!value||value.length>4000)throw Error('Напиши ответ · до 4000 символов');
+  if(task.coachAnswer?.text!==value)task.coachAnswer={text:value,at:stamp()};
+  completeTask(s,taskId);
+}
+export function athleteQuestions(s,clientId){
+  return Object.values(s.tasks).filter(task=>task.kind==='athlete-question'&&task.clientId===clientId)
+    .flatMap(task=>{
+      const record=s.records[task.sourceRecordId];
+      return record?.kind==='athlete-question'&&record.clientId===clientId?[{task,record}]:[];
+    }).sort((a,b)=>b.record.createdAt.localeCompare(a.record.createdAt));
 }
 export const pauseTaskId = clientId => 'pause-' + clientId;
 export function clientTasks(s,clientId=null){

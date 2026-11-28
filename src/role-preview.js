@@ -90,10 +90,16 @@ export function previewRoute(hash,{role,athleteId}){
   if(role!=='superadmin'&&hash.startsWith('#admin/team/'))return '#admin';
   if(role==='accountant'&&hash==='#races')return '#todo';
   if(role==='coach'&&(hash==='#account'||hash==='#todo/payments'))return '#todo';
-  if(hash==='#calendar'&&!['coach','athlete'].includes(role))return '#todo';
+  if(hash.startsWith('#calendar/')&&role==='coach')return '#calendar';
+  if((hash==='#calendar'||hash.startsWith('#calendar/'))&&!['coach','athlete'].includes(role))return '#todo';
+  if((hash==='#coach'||hash==='#progress')&&!isAthlete(role))return '#todo';
   if(hash==='#profile'&&!isAthlete(role))return '#clients';
   if(isAthlete(role)){
+    if(hash==='#todo/schedule'||hash.startsWith('#todo/schedule/'))return '#calendar';
+    if(hash==='#todo/payments')return '#account';
+    if(hash==='#todo/birthdays')return '#todo';
     if(hash==='#clients'||hash.startsWith('#clients/')||hash.startsWith('#client/')&&hash.split('/')[1]!==athleteId)return '#profile';
+    if(hash==='#client/'+athleteId+'/training-plan')return '#calendar';
     if(hash.startsWith('#admin/')||/^#partners\/[^/]+\//u.test(hash))return '#admin';
   }
   return hash;

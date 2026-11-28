@@ -16,7 +16,7 @@ import {birthdayGreeting,birthdayReminders,pingActivity,profileTelegramUsername,
 import {cloudConfig} from './cloud-config.js';
 import {athleteScheduleKinds,CALENDAR_ARCHIVE_ROUTE,CALENDAR_ARCHIVE_SECTION,CALENDAR_UPCOMING_SECTION,createCalendarUI,isSchedulingTask,TRAINING_KIND_LABELS} from './calendar-ui.js';
 import {createTrainingWeekUI,TRAINING_WEEK_ROUTE} from './training-week-ui.js';
-import {createTrainingCalendarUI} from './training-calendar-ui.js';
+import {athleteWeekStart,createTrainingCalendarUI} from './training-calendar-ui.js';
 import {todoPeriodEntries} from './todo-period.js';
 import {createPartnersUI} from './partners-ui.js';
 import {partnerTasks} from './partners.js';
@@ -96,7 +96,7 @@ const accountingUI=createAccountingUI({state,el,append,button,row,field,input,se
 });
 const scheduleRoute='#todo/schedule';
 const trainingCalendarUI=createTrainingCalendarUI({state,el,append,text,button,row,section,formatDate,modal,navigate,message,save:fn=>commit(fn),
-  readPersonalWeek:(clientId,weekStart)=>calendarUI.personalWeek(clientId,weekStart),
+  readAthleteMeetings:(clientId,weekStart)=>calendarUI.athleteMeetings(clientId,weekStart),
   readGroupWeek:day=>trainingWeekUI.onlineWeek(day),
   readWeek:async(clientId,prepared,weekStart)=>{
     await cloudReady;
@@ -212,7 +212,7 @@ function renderRoleSwitch(){
       ui.role=key;ui.returnTo=isAthlete(key)?'#profile':'#clients';
       ui.filters=defaultFilters();ui.focusRoute=null;ui.catalogLimit=CATALOG_PAGE_SIZE;
       notice.hidden=true;
-      const next=['athlete','coach'].includes(key)?'#calendar':'#todo';
+      const next=key==='coach'?'#calendar':'#todo';
       if(location.hash===next)render();else navigate(next);
     },'role-choice');
     control.setAttribute('aria-pressed',String(ui.role===key));
@@ -234,7 +234,7 @@ function renderRoleSwitch(){
       if(!athlete.value)return;
       ui.previewAthleteId=athlete.value;ui.returnTo='#profile';switcher.open=false;
       switcher.querySelector('summary').focus();
-      if(['#profile','#calendar'].includes(location.hash))render();else navigate('#calendar');
+      if(location.hash==='#todo')render();else navigate('#todo');
     });
     person=athlete.field;
   }
@@ -245,9 +245,10 @@ function renderRoleSwitch(){
     link.hidden=(
       link.hash==='#clients'&&isAthlete(ui.role)||link.hash==='#profile'&&!isAthlete(ui.role)||
       link.hash==='#account'&&!hasFinance(ui.role)||link.hash==='#calendar'&&!['coach','athlete'].includes(ui.role)||
+      link.hash==='#coach'&&!isAthlete(ui.role)||link.hash==='#admin'&&isAthlete(ui.role)||
       link.hash==='#races'&&ui.role==='accountant'
     );
-    if(link.hash==='#admin')link.textContent=isAthlete(ui.role)?'Ещё':'Админ';
+    if(link.hash==='#todo')link.textContent=isAthlete(ui.role)?'Сегодня':'ToDo';
   }
 }
 function cloudLogin(){
@@ -949,6 +950,9 @@ function task(t){
   const question=t.kind==='athlete-question'&&state().records[t.sourceRecordId]?.text;
   if(isAthlete(ui.role))return append(wrap,el('div',t.title,'task-title'),question&&el('div',question,'feature-copy'),
     t.due&&text(formatDate(t.due)));
+  if(question)return append(wrap,el('div','Вопрос спортсмена','task-title'),el('div',question,'feature-copy'),
+    t.coachAnswer&&text(t.coachAnswer.text,'feature-copy'),
+    row(button(t.coachAnswer?'Изменить ответ':'Ответить спортсмену',()=>replyToAthlete(t),'subtle')));
   if(t.phase==='done'){
     wrap.classList.add('task-completed');
     return append(wrap,el('div',t.title,'task-title'),question&&el('div',question,'feature-copy'),calendarUI.linked(t),row(el('span','Выполнено','chip'),
@@ -1137,6 +1141,18 @@ function contactCoach(client){
   ]);
 }
 const questionDrafts=new Map();
+function replyToAthlete(task){
+  modal('Ответ спортсмену',form=>{
+    const reply=el('textarea');reply.rows=4;reply.maxLength=4000;reply.value=task.coachAnswer?.text||'';
+    append(form,text(state().records[task.sourceRecordId]?.text,'feature-copy'),field('Ответ',reply));
+    return ()=>commit(s=>{
+      const current=s.tasks[task.id];
+      if(!['coach','superadmin'].includes(ui.role)||!current||!visibleTask(current))throw Error('Ответ доступен назначенному тренеру');
+      if(current.coachAnswer?.at!==task.coachAnswer?.at)throw Error('Ответ уже изменился. Открой вопрос ещё раз.');
+      C.answerCoachQuestion(s,task.id,reply.value);
+    });
+  },{saveLabel:'Сохранить ответ',onSaved:()=>message('Ответ доступен спортсмену')});
+}
 function athleteQuestion(client){
   let draft=questionDrafts.get(client.id)||{text:'',id:C.id('record')};
   const form=el('form',null,'compose'),note=el('textarea');
@@ -1147,7 +1163,75 @@ function athleteQuestion(client){
     questionDrafts.delete(client.id);render();message('Вопрос отправлен тренеру');
   },'primary');
   form.addEventListener('submit',event=>{event.preventDefault();send.click();});
-  return append(form,el('h2','Разобрать вопрос'),field('Вопрос тренеру',note),send);
+  return append(form,field('Вопрос тренеру',note),send);
+}
+
+function athleteLink(title,description,route){
+  return append(button('',()=>navigate(route),'athlete-shortcut'),
+    append(el('span',null,'stack'),el('strong',title),description&&text(description)),el('span','›','athlete-shortcut-chevron'));
+}
+function athleteCoachPage(client){
+  const questions=C.athleteQuestions(state(),client.id);
+  return append(el('div',null,'stack-lg'),el('h1','Тренер'),athleteQuestion(client),
+    ...(questions.length?[append(el('section',null,'stack'),el('h2','Мои вопросы'),
+      ...questions.map(({task,record})=>section(record.text.length>90?record.text.slice(0,89)+'…':record.text,'athlete-question-'+task.id,[
+        text(record.text,'feature-copy'),text(formatDate(record.createdAt,true)),
+        task.coachAnswer?append(el('div',null,'stack'),el('strong','Ответ тренера'),text(task.coachAnswer.text,'feature-copy'),
+          text(formatDate(task.coachAnswer.at,true))):text(task.phase==='done'?'Закрыт без ответа в приложении':'Ожидает ответа')
+      ])))]:[]),contactCoach(client));
+}
+function athleteToday(client){
+  const today=C.localDate(),start=athleteWeekStart(today);
+  const dayFormat=new Intl.DateTimeFormat('ru-RU',{timeZone:C.TIMEZONE,weekday:'long',day:'numeric',month:'long'});
+  const workouts=el('section',null,'stack'),page=append(el('div',null,'stack-lg'),
+    append(el('header',null,'stack'),el('h1','Сегодня'),text(dayFormat.format(new Date(today+'T12:00:00Z')))),workouts);
+  const status=text('Загружаю календарь…');
+  workouts.append(status);
+  function workoutCard(item){
+    return append(button('',()=>navigate('#calendar/'+item.day),'panel athlete-today-workout'),
+      text([item.day!==today&&formatDate(item.day),item.subtitle].filter(Boolean).join(' · ')),
+      el('strong',item.title),text('Открыть в календаре'));
+  }
+  async function showWorkouts(){
+    const week=await trainingCalendarUI.readAthleteWeek(client,start);
+    if(!page.isConnected)return;
+    const entries=week.sessions.filter(item=>item.kind!=='weekly-report');
+    const planned=entries.filter(item=>item.day===today);
+    const next=entries.find(item=>item.day>today);
+    const stale=week.planUnavailable||week.meetingsUnavailable||week.savedMeetings;
+    workouts.replaceChildren(...(planned.length?planned.map(workoutCard):
+      [text(stale?'Расписание за сегодня могло не обновиться.':'На сегодня занятий в календаре нет.'),
+       next&&el('h2','Ближайшая тренировка'),next&&workoutCard(next)].filter(Boolean)),
+      ...[stale&&planned.length&&text('Часть расписания может быть устаревшей.'),
+        athleteLink('Календарь',null,'#calendar')].filter(Boolean));
+  }
+  void showWorkouts().catch(()=>{status.textContent='Не удалось загрузить календарь.';});
+  const tasks=C.clientTasks(state(),client.id).filter(visibleTask).filter(t=>!t.due||t.due<=today);
+  const payments=accountingUI.todoItems(undefined,{clientId:client.id,reminderDays:paymentReminderDays(paymentReminderKey(client))})
+    .sort((a,b)=>a.due.localeCompare(b.due));
+  if(tasks.length)page.append(section('Задачи от тренера · '+tasks.length,client.id+'-today-tasks',tasks.map(task)));
+  const answered=C.athleteQuestions(state(),client.id).find(({task})=>task.coachAnswer)?.task.coachAnswer;
+  if(answered)page.append(athleteLink('Ответ тренера',formatDate(answered.at,true),'#coach'));
+  for(const item of payments.slice(0,1))page.append(athleteLink(item.title,formatDate(item.due)+' · '+item.next,'#account'));
+  return append(page,athleteLink('Прогресс','Нагрузка, восстановление и тренировочные данные','#progress'));
+}
+function athleteProfile(client){
+  return append(el('div',null,'stack-lg'),
+    append(el('header',null,'stack'),el('h1','Профиль'),el('strong',client.name),text(clientStatus(client))),
+    athleteLink('Оплаты','Тариф, следующий платёж и история','#account'),
+    section('Личные данные',client.id+'-profile',detailsUI.profile(client)),
+    isOwnerPerson(client)&&athleteLink('Источники данных',null,'#client/'+client.id+'/sources'),
+    athleteLink('Клуб','Команда и партнёры','#admin'),
+    athleteLink('Настройки',null,'#settings'));
+}
+function athleteProgress(client){
+  return append(el('div',null,'stack-lg'),el('h1','Прогресс'),
+    athleteUI.summary(client,detailsUI.goals(client,undefined,{compact:true,readOnly:true})),
+    section('Тренировочные данные',client.id+'-zones',[
+      client.athlete&&athleteUI.details(client),...detailsUI.training(client,{showZones:false})
+    ]),detailsUI.journal(client,{readOnly:true,allowTask:visibleTask}),
+    client.camps?.length&&section('Кемпы и история участия',client.id+'-camps',
+      client.camps.map(camp=>text(camp.name+' · '+camp.status))));
 }
 
 function renderClient(clientId,targetType,targetId){
@@ -1155,13 +1239,28 @@ function renderClient(clientId,targetType,targetId){
   if(!c||c.mergedInto){navigate('#clients');return el('div');}
   const page=el('div',null,'stack-lg client-page');
   const athlete=isAthlete(ui.role),coach=ui.role==='coach';
+  if(athlete){
+    if(targetType==='task'){
+      const item=state().tasks[targetId];
+      if(item?.clientId===c.id&&visibleTask(item))return append(page,
+        button('← Сегодня',()=>navigate('#todo'),'back subtle'),el('h1','Задача от тренера'),task(item));
+    }
+    if(['training','goal'].includes(targetType)||targetType==='task'){
+      if(targetType==='training')ui.open.add(c.id+'-zones');
+      if(targetType==='goal')ui.open.add(c.id+'-goals');
+      const entry=ui.athleteReturnEntry;delete ui.athleteReturnEntry;
+      if(entry)focusCard('athlete-row',entry);
+      else if(targetType==='goal'&&targetId)focusCard('goal',targetId);
+      return athleteProgress(c);
+    }
+    return athleteProfile(c);
+  }
   const backLabel=ui.returnTo.startsWith('#admin/team/')?'← К работе и выплатам':ui.returnTo.startsWith(scheduleRoute+'/')?'← К тренировке':
     {'#todo':'← К ToDo','#account':'← К учёту','#races':'← К стартам','#todo/birthdays':'← К дням рождения'}[ui.returnTo]||'← К списку клиентов';
-  if(!athlete||targetType)page.append(button(athlete?'← К ToDo':backLabel,()=>navigate(athlete?'#todo':ui.returnTo),'back subtle'));
+  page.append(button(backLabel,()=>navigate(ui.returnTo),'back subtle'));
   const header=el('header',null,'stack client-header');
   append(header,append(el('div',null,'page-title'),el('h1',c.name),hasFinance(ui.role)&&button('Изменить',()=>editClient(c.id),'subtle')),chips(c),
-    !athlete&&text(contactSummary(c)),
-    athlete&&isOwnerPerson(c)&&button('Источники данных',()=>openClient(c.id,'sources'),'back subtle'));
+    text(contactSummary(c)));
   const followUp=hasFinance(ui.role)&&pauseDetails(c);
   append(page,header,followUp);
   const sport=hasAthleteCard(c);
@@ -1174,29 +1273,28 @@ function renderClient(clientId,targetType,targetId){
     form.scrollIntoView({behavior:'smooth',block:'start'});
     document.getElementById('client-note').focus({preventScroll:true});
     saveDraftSoon();
-  },{compact:sport,readOnly:athlete});
+  },{compact:sport});
   if(sport)page.append(athleteUI.summary(c,goals,previewTrainingVisible(state(),c,roleContext())
     &&button('Детали тренировок',()=>openClient(c.id,'training-plan'),'back subtle calendar-link')));
   if(ui.role==='superadmin'&&isTeamMember(c))page.append(button('Работа и выплаты',()=>navigate('#admin/team/'+c.id),'subtle'));
   const tasks=[...C.clientTasks(state(),clientId),...Array.from(ui.recentlyCompleted,id=>state().tasks[id])
     .filter(t=>t?.clientId===clientId&&t.phase==='done')].filter(visibleTask);
-  if(tasks.length)page.append(append(el('section',null,'panel action-panel'),el('h2',athlete?'Задачи от тренера':'Действия по клиенту','block-heading'),...tasks.map(task)));
+  if(tasks.length)page.append(append(el('section',null,'panel action-panel'),el('h2','Действия по клиенту','block-heading'),...tasks.map(task)));
   if(!sport)page.append(renderFeatures(c));
   if(c.role==='Клиент'&&hasFinance(ui.role))page.append(accountingUI.clientPanel(c));
   if(c.role==='Клиент'&&coach)page.append(button('Принять оплату',()=>coachAccountingUI.submit(c.id),'primary account-main-action'));
   const reference=el('div',null,'reference-sections');
-  const telegram=athlete?contactCoach(c):section('Сообщения в Telegram',c.id+'-telegram',[telegramPanel(c)]);
+  const telegram=section('Сообщения в Telegram',c.id+'-telegram',[telegramPanel(c)]);
   telegram.id='telegram-client-panel';telegram.tabIndex=-1;
-  const profile=section(athlete?'О себе':'О клиенте',c.id+'-profile',[...detailsUI.profile(c,{coach}),
-    athlete&&button('Оплаты',()=>navigate('#account'),'subtle')]);
+  const profile=section('О клиенте',c.id+'-profile',detailsUI.profile(c,{coach}));
   profile.id='profile-client-panel';profile.tabIndex=-1;
   const training=section('Тренировочные данные',c.id+'-zones',[c.athlete&&athleteUI.details(c),...detailsUI.training(c,{showZones:!sport})]);
   training.id='training-client-panel';training.tabIndex=-1;training.classList.add('client-training');
-  reference.append(telegram,profile,detailsUI.journal(c,{readOnly:athlete,allowTask:visibleTask}),training);
+  reference.append(telegram,profile,detailsUI.journal(c,{allowTask:visibleTask}),training);
   if(!sport)reference.append(goals);
   if(!coach)reference.append(section('Кемпы и история участия',c.id+'-camps',c.camps?.length?c.camps.map(camp=>text(camp.name+' · '+camp.status,' ')):[text('История участия пока не восстановлена')]));
   reference.append(section('История записей',c.id+'-history',[renderHistory(c)]));
-  page.append(reference,athlete?athleteQuestion(c):compose(c));
+  page.append(reference,compose(c));
   if(targetType&&ui.focusRoute!==location.hash){
     ui.focusRoute=location.hash;
     if(targetType==='goal'){
@@ -1785,7 +1883,8 @@ function renderSettings(){
     if(key){
       const days=input('number',paymentReminderDays(key));days.min=0;days.max=30;
       sections.append(section('Напоминания об оплате','settings-role-payment',[
-        field('За сколько дней до оплаты показывать напоминание в ToDo',days),text('0 — в день оплаты.'),
+        field(isAthlete(ui.role)?'За сколько дней до оплаты показывать напоминание в «Сегодня»':'За сколько дней до оплаты показывать напоминание в ToDo',days),
+        text('0 — в день оплаты.'),
         row(button('Сохранить напоминание',async()=>{
           const value=Number(days.value);
           if(days.value===''||!Number.isInteger(value)||value<0||value>30)throw Error('Укажи от 0 до 30 дней');
@@ -1842,11 +1941,12 @@ function render(){
   checkGarminConnection=null;
   applyAppearance();renderRoleSwitch();
   const raw=location.hash||'#todo';
+  const athlete=isAthlete(ui.role),person=athlete?ownAthlete():null;
   const weekRoute=raw===TRAINING_WEEK_ROUTE||raw.startsWith(TRAINING_WEEK_ROUTE+'/');
   const pastOverview=raw===CALENDAR_ARCHIVE_ROUTE||raw.startsWith(CALENDAR_ARCHIVE_ROUTE+'/')&&raw.split('/').length<5;
   if(pastOverview)ui.open.add(CALENDAR_ARCHIVE_SECTION);
-  const hash=pastOverview||(weekRoute||raw===GROUP_STAFFING_ROUTE)&&!canReadGroupWeek()?scheduleRoute:previewRoute(raw,roleContext());
-  const athlete=isAthlete(ui.role),person=athlete?ownAthlete():null;
+  const hash=!athlete&&(pastOverview||(weekRoute||raw===GROUP_STAFFING_ROUTE)&&!canReadGroupWeek())
+    ?scheduleRoute:previewRoute(raw,roleContext());
   ui.scheduleDay=hash===scheduleRoute?C.localDate():null;
   if(hash!==raw)history.replaceState(null,'',hash);
   if(ui.focusRoute!==hash)ui.focusRoute=null;
@@ -1854,12 +1954,20 @@ function render(){
   if(ui.openCard!==openCard){ui.recentlyCompleted.clear();ui.openCard=openCard;}
   const birthdayRoute=route=>['#todo/birthdays','#clients/birthdays'].includes(route);
   const sectionTab=route=>birthdayRoute(route)||route.startsWith('#todo/')||route==='#assistant'?'#todo':route==='#partners'||route.startsWith('#partners/')||route.startsWith('#admin/')?'#admin':route.startsWith('#clients/')?'#clients':route;
-  const activeTab=sectionTab(
-    athlete&&hash==='#account'?'#profile':hash.startsWith('#client/')?(athlete?'#profile':ui.returnTo):hash
-  );
+  let activeTab=sectionTab(hash.startsWith('#client/')?ui.returnTo:hash);
+  if(athlete){
+    if(hash.startsWith('#calendar/'))activeTab='#calendar';
+    else if(hash==='#progress')activeTab='#todo';
+    else if(hash.startsWith('#client/'))activeTab=hash.split('/')[2]==='sources'?'#profile':'#todo';
+    else if(['#admin','#account','#partners'].includes(hash)||hash.startsWith('#partners/'))activeTab='#profile';
+  }
   root.replaceChildren();
   document.querySelectorAll('.app-nav a, .gear-link').forEach(a=>a.setAttribute('aria-current',a.hash===activeTab?'page':'false'));
-  if(hash==='#profile')root.append(person?renderClient(person.id):text('Выбери карточку спортсмена в меню под логотипом.'));
+  const chooseAthlete=()=>text('Выбери карточку спортсмена в меню под логотипом.');
+  if(athlete&&hash==='#todo')root.append(person?athleteToday(person):chooseAthlete());
+  else if(hash==='#coach')root.append(person?athleteCoachPage(person):chooseAthlete());
+  else if(hash==='#progress')root.append(person?athleteProgress(person):chooseAthlete());
+  else if(hash==='#profile')root.append(person?athleteProfile(person):chooseAthlete());
   else if(hash.startsWith('#client/')){
     const [,id,type,target]=hash.split('/');
     if(type==='goal'&&ui.focusRoute!==hash&&ui.goalFilters)ui.goalFilters[id]='';
@@ -1901,13 +2009,15 @@ function render(){
   }
   else if(hash==='#clients'||hash.startsWith('#clients/')){
     const view=hash.split('/')[1];root.append(renderCatalog(Object.hasOwn(catalogViews,view)?view:'active'));renderCatalogResults();
-  }else if(hash==='#calendar'){
-    if(athlete)root.append(person?trainingCalendarUI.page(person,{calendar:true}):text('Выбери карточку спортсмена в меню под логотипом.'));
+  }else if(hash==='#calendar'||athlete&&hash.startsWith('#calendar/')){
+    const day=hash.slice('#calendar/'.length);
+    if(athlete)root.append(person?trainingCalendarUI.page(person,{calendar:true,selectedDay:C.validDate(day)?day:undefined}):chooseAthlete());
     else root.append(canReadGroupWeek()?trainingWeekUI.page(TRAINING_WEEK_ROUTE,{canImport:false,calendar:true}):
       append(el('div',null,'stack'),el('h1','Календарь'),text('У этого тренера пока нет загруженной недели группы.')));
   }
-  else if(hash==='#account')root.append(athlete?(person?accountingUI.clientPanel(person,{readOnly:true})
-    :text('Выбери карточку спортсмена в меню под логотипом.')):accountingUI.page());
+  else if(hash==='#account')root.append(athlete?(person?append(el('div',null,'stack-lg'),
+    button('← К профилю',()=>navigate('#profile'),'back subtle'),el('h1','Оплаты'),accountingUI.clientPanel(person,{readOnly:true}))
+    :chooseAthlete()):accountingUI.page());
   else if(hash==='#races')root.append(detailsUI.races(athlete?{participantId:person?.id||null}:undefined));
   else if(hash==='#admin')root.append(adminUI.page({athlete,person}));
   else if(hash==='#admin/my-account')root.append(adminUI.myAccount());

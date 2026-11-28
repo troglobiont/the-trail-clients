@@ -5,7 +5,7 @@ import * as A from '../src/accounting.js';
 import {localDate} from '../src/model-utils.js';
 import {athleteScheduleEntries, athleteScheduleKinds, calendarClient, calendarPlace, cancellationRecipients, isSchedulingTask, matchesScheduleKind, personalWeekMeetings, taskCalendarChoices} from '../src/calendar-ui.js';
 import {cancellationText,notifyCancellation} from '../src/schedule-cancellation-ui.js';
-import {athletePlanSessions} from '../src/training-calendar-ui.js';
+import {athletePlanSessions,combineAthleteWeek} from '../src/training-calendar-ui.js';
 import {calendarEvent} from '../server/calendar-edge.js';
 import {OWNER_COACH,previewGroupScheduleVisible} from '../src/role-preview.js';
 
@@ -67,6 +67,21 @@ test('schedule filters keep group meetings separate from personal gym and outdoo
   assert.deepEqual(events.filter(event=>matchesScheduleKind(event,null)),events);
   assert.deepEqual(events.filter(event=>matchesScheduleKind(event,'group')),[group]);
   assert.deepEqual(events.filter(event=>matchesScheduleKind(event,'gym')),[gym]);
+});
+
+test('the athlete calendar combines only an explicit same-day event link and keeps other sessions on that day',()=>{
+  const day='2026-11-28',club={id:'calendar:club',calendarEventId:'club',start:day+'T10:00:00+01:00',
+    title:'Групповая тренировка',kind:'group',day,subtitle:'10:00 · Парк'};
+  const gym={...club,id:'calendar:gym',calendarEventId:'gym',kind:'gym',start:day+'T13:00:00+01:00'};
+  const exact={id:'100',calendarEventId:'club',title:'Лёгкий бег',description:'Усилие на подъёмах',day};
+  const unlinked={id:'101',title:club.title,day,kind:'group'};
+  const moved={id:'102',calendarEventId:'moved',title:'ОФП',day};
+  const report={id:'103',title:'Отчёт',day,kind:'weekly-report'};
+  const meetings=[club,gym,{...club,id:'calendar:moved',calendarEventId:'moved',day:'2026-11-29'}];
+  const items=combineAthleteWeek([exact,unlinked,moved,report],meetings);
+  assert.deepEqual(items.map(item=>item.id),['calendar:club','calendar:gym','101','102','103','calendar:moved']);
+  assert.deepEqual(items[0],{...club,title:exact.title,description:exact.description});
+  assert.deepEqual(combineAthleteWeek([exact,{...exact,id:'104'}],[club]).map(item=>item.id),['calendar:club','100','104']);
 });
 
 test('cancellation includes the calendar roster and only an unambiguous personal client',()=>{

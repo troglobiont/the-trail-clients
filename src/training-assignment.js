@@ -29,15 +29,17 @@ function normalizeAssignment(value){
   const workouts=sessions.map(session=>{
     if(!numericId(session?.id)||ids.has(session.id))throw Error('Проверь идентификаторы тренировок. Каждый должен быть уникальным.');
     if(!validDate(session.day)||session.day<weekStart||session.day>end)throw Error('Дата тренировки выходит за границы недели.');
-    const {kind}=session;
+    const {kind,calendarEventId}=session;
     if(kind!==undefined&&!textCardKinds.has(kind))throw Error('Неизвестный тип карточки тренировочной недели.');
     if(kind==='weekly-report'){
       if(hasWeeklyReport||session.day!==end)throw Error('В конце недели может быть один недельный отчёт.');
       hasWeeklyReport=true;
     }
+    if(calendarEventId!==undefined&&(kind||typeof calendarEventId!=='string'||!/^[A-Za-z0-9_-]{1,300}$/u.test(calendarEventId)))
+      throw Error('Проверь идентификатор встречи в календаре.');
     ids.add(session.id);
     return {id:session.id,day:session.day,title:workoutText(session.title,180,true),description:workoutText(session.description,10000),
-      ...(kind&&{kind})};
+      ...(kind&&{kind}),...(calendarEventId&&{calendarEventId})};
   }).sort(compareTrainingSessions);
   return {format:FORMAT,schemaVersion:1,athleteId,weekStart,checkedAt:new Date(checkedAt).toISOString(),sessions:workouts};
 }

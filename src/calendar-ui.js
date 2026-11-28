@@ -154,13 +154,17 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
   const timeRange = event => clock.format(new Date(event.start)) + '–' + clock.format(new Date(event.end));
   const cancelTraining=createScheduleCancellation({state,service,roleContext,el,append,text,button,field,input,modal,formatDate,timeRange,message,
     recipientsFor:event=>cancellationRecipients(state(),event,selectedClients.get(event.id))});
-  async function personalWeek(clientId, weekStart) {
-    if (!clientServices(state(),clientId).some(service=>service.kind==='personal')) return {sessions:[]};
+  async function athleteMeetings(clientId, weekStart) {
+    const services=clientServices(state(),clientId);
+    if (!services.some(service=>['personal','belgrade'].includes(service.kind)&&
+        Array.from({length:7},(_,i)=>addDays(weekStart,i)).some(day=>activeService(service,day)))) return {sessions:[]};
     const data = await dataSource.loadWeek(weekStart);
-    const sessions = personalWeekMeetings(state(),clientId,data.events).map(({event,day,place})=>({
-      id:'calendar:'+event.id, day, kind:personalKind(place), title:'Персональная · '+place,
-      subtitle:[timeRange(event),event.location].filter(Boolean).join(' · ')
-    }));
+    const sessions = athleteScheduleEntries(state(),clientId,data.events).map(({event,day})=>{
+      const kind=calendarKind(event);
+      return {id:'calendar:'+event.id,calendarEventId:event.id,day,kind,start:event.start,
+        title:kind==='group'?'Групповая тренировка':'Персональная · '+TRAINING_KIND_LABELS[kind],
+        subtitle:[timeRange(event),event.location].filter(Boolean).join(' · ')};
+    });
     return {sessions, saved:data.mode==='saved'};
   }
   const eventLink = (event, label) => {
@@ -594,5 +598,5 @@ export function createCalendarUI({state, service, readCalendar, writeGroupCalend
       !event.cancelled&&eventLink(event,'Календарь'));
   }
 
-  return {schedule, groupSchedule, session, book, linked, personalWeek,preload:()=>dataSource.refresh().catch(()=>{})};
+  return {schedule, groupSchedule, session, book, linked, athleteMeetings,preload:()=>dataSource.refresh().catch(()=>{})};
 }

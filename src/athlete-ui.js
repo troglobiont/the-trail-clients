@@ -36,6 +36,7 @@ function shortValue(entry){
 export function createAthleteUI({ui,el,append,button,text,section,navigate,renderRestrictions,logUI,garminData}){
   let trail=[],origin=null;
   const clientRoute=c=>'#client/'+c.id;
+  const summaryRoute=c=>ui.role==='athlete'?'#progress':clientRoute(c);
   const route=(c,id)=>'#client/'+c.id+'/training/'+id;
   const fromSleep=(c,item)=>item.metric==='restHr'&&item.references.some(ref=>c.athlete.entries[ref]?.kind==='observation'
     &&c.athlete.entries[ref].metrics?.sleepMin!=null);
@@ -56,7 +57,7 @@ export function createAthleteUI({ui,el,append,button,text,section,navigate,rende
       navigate(clientRoute(c)+'/recovery');return;
     }
     if(origin==='summary'||Object.values(c.athlete.current).includes(entry.id)&&entry.metric!=='maxHr'){
-      navigate(clientRoute(c));return;
+      navigate(summaryRoute(c));return;
     }
     ui.open.add(c.id+'-zones');ui.open.add(c.id+'-athlete-'+groupFor(entry));
     ui.athleteReturnEntry=entry.id;navigate('#client/'+c.id+'/training');
